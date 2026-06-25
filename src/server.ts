@@ -450,7 +450,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const projectPath = args.projectPath as string || '';
         const connectionString = args.connectionString as string;
 
-        // Script block
+        // Lasal2.exe is a GUI-subsystem app: its embedded-Python `print` output
+        // is discarded (no console is attached), so results MUST be written to a
+        // file and read back rather than parsed from stdout.
+        const resultPath = getTempFilePath('read-plc-state', '.txt');
+
         let scriptContent = '';
         if (projectPath) {
           scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
@@ -459,8 +463,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         scriptContent += `state = batch.GetPlcState(prj, to_mbcs(${pyUnicode(connectionString)}))\n`;
         scriptContent += `arch = batch.GetProcessorArch(to_mbcs(${pyUnicode(connectionString)}))\n`;
-        scriptContent += `print "PLC_STATE:%s" % state\n`;
-        scriptContent += `print "PLC_ARCH:%s" % arch\n`;
+        scriptContent += `__rf = open(to_mbcs(${pyUnicode(resultPath)}), "w")\n`;
+        scriptContent += `__rf.write("PLC_STATE:%s\\n" % state)\n`;
+        scriptContent += `__rf.write("PLC_ARCH:%s\\n" % arch)\n`;
+        scriptContent += `__rf.close()\n`;
 
         const logPath = getTempFilePath('read-plc-state', '.log');
         const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
@@ -472,17 +478,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await runExclusive(() =>
           runProcess('class2', exe, [`/script:${scriptPath}`], { timeoutMs: 15000 })
         );
-        
+
+        let resultText = '';
+        try { resultText = fs.readFileSync(resultPath, 'latin1'); } catch {}
+
         // Clean up scripts
         try { fs.unlinkSync(scriptPath); } catch {}
         try { fs.unlinkSync(logPath); } catch {}
+        try { fs.unlinkSync(resultPath); } catch {}
 
         if (!result.ok) {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [result.stderr || 'Failed to connect to PLC'] }) }] };
         }
 
-        const stateMatch = result.stdout.match(/PLC_STATE:(.*)/);
-        const archMatch = result.stdout.match(/PLC_ARCH:(.*)/);
+        const stateMatch = resultText.match(/PLC_STATE:(.*)/);
+        const archMatch = resultText.match(/PLC_ARCH:(.*)/);
         const stateStr = stateMatch ? stateMatch[1].trim() : 'Unknown';
         const archStr = archMatch ? archMatch[1].trim() : 'Unknown';
 
@@ -503,13 +513,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const connectionString = args.connectionString as string;
         const name = args.name as string;
 
+        // Results are written to a file and read back: Lasal2.exe (GUI app)
+        // discards embedded-Python stdout, so `print` markers never reach us.
+        const resultPath = getTempFilePath('read-plc-val', '.txt');
+
         let scriptContent = '';
         scriptContent += `batch.OpenPlcConnection(None, to_mbcs(${pyUnicode(connectionString)}))\n`;
         scriptContent += `dic = {}\n`;
         scriptContent += `batch.ReadPlcValue(to_mbcs(${pyUnicode(name)}), dic)\n`;
-        scriptContent += `print "PLC_VALUE:%s" % dic.get('value', '')\n`;
-        scriptContent += `print "PLC_VALUE_DICT:%r" % dic\n`;
         scriptContent += `batch.ClosePlcConnection()\n`;
+        scriptContent += `__v = dic.get('value', '')\n`;
+        scriptContent += `__rf = open(to_mbcs(${pyUnicode(resultPath)}), "w")\n`;
+        scriptContent += `__rf.write("PLC_VALUE:%s\\n" % __v)\n`;
+        scriptContent += `__rf.write("PLC_VALUE_DICT:%r" % (dic,))\n`;
+        scriptContent += `__rf.close()\n`;
 
         const logPath = getTempFilePath('read-plc-val', '.log');
         const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
@@ -520,16 +537,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await runExclusive(() =>
           runProcess('class2', exe, [`/script:${scriptPath}`], { timeoutMs: 15000 })
         );
-        
+
+        let resultText = '';
+        try { resultText = fs.readFileSync(resultPath, 'latin1'); } catch {}
+
         try { fs.unlinkSync(scriptPath); } catch {}
         try { fs.unlinkSync(logPath); } catch {}
+        try { fs.unlinkSync(resultPath); } catch {}
 
         if (!result.ok) {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [result.stderr || 'Failed to read value'] }) }] };
         }
 
-        const valueMatch = result.stdout.match(/PLC_VALUE:(.*)/);
-        const dictMatch = result.stdout.match(/PLC_VALUE_DICT:(.*)/);
+        const valueMatch = resultText.match(/PLC_VALUE:(.*)/);
+        const dictMatch = resultText.match(/PLC_VALUE_DICT:(.*)/);
         const value = valueMatch ? valueMatch[1].trim() : '';
         // The exact dict key from batch.ReadPlcValue is unverified; expose the raw
         // repr so the caller sees the real keys regardless of our 'value' guess.
