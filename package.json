@@ -10,10 +10,11 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/server.js",
-    "dev": "ts-node src/server.ts"
+    "dev": "ts-node src/server.ts",
+    "test": "tsc && node build/verify.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "fast-xml-parser": "^4.4.0",
     "uuid": "^9.0.1"
   },

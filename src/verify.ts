@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { discoverToolchain } from './toolchain.js';
 import { parseSolution, parseStation, updateStationConnection, readLatin1File } from './xmlHelper.js';
-import { generateClass2Script, generateVisuScript, generateLutc } from './scriptGenerator.js';
+import { generateClass2Script, generateVisuScript, generateLutc, pyStr, pyUnicode } from './scriptGenerator.js';
 import { getTempFilePath, cleanTempFolder } from './jobRegistry.js';
 
 async function runTests() {
@@ -150,6 +150,47 @@ async function runTests() {
   if (!lutcXml.includes('<DwnLdLC2 TargetId="0">')) {
     throw new Error('Test 3 Failed: LUTC XML instructions generation failed.');
   }
+
+  // Test 4: Injection-safe escaping (the fix for untrusted values in generated scripts)
+  console.log('\n[Test 4] Injection-safe Python / XML escaping...');
+
+  // A malicious value attempting to break out of the u"..." literal and inject code.
+  const evil = 'x"); import os; os.system("calc")\n#';
+  const lit = pyUnicode(evil);
+  // The literal must be single-line (newline encoded) and contain no UN-escaped quote
+  // that would terminate the string early.
+  if (lit.includes('\n')) {
+    throw new Error('Test 4 Failed: newline was not escaped in Python literal.');
+  }
+  // Strip the leading u" and trailing " then ensure no bare (unescaped) double-quote remains.
+  const inner = lit.slice(2, -1);
+  if (/(^|[^\\])"/.test(inner)) {
+    throw new Error('Test 4 Failed: unescaped quote can break out of the Python string.');
+  }
+  // The injected payload must never surface as a runnable top-level statement.
+  const c2 = generateClass2Script({ logPath: 'C:\\tmp\\t.log', scriptBody: `batch.WritePlcValue(to_mbcs(${lit}))` });
+  if (/^\s*import os/m.test(c2)) {
+    throw new Error('Test 4 Failed: injected statement reached script top-level.');
+  }
+  console.log('Python literal is injection-safe:', lit);
+
+  // Non-ASCII must be emitted as \u escapes so it survives a latin1-encoded .py file.
+  if (pyStr('café').includes('\\u00e9') === false) {
+    throw new Error('Test 4 Failed: non-ASCII not escaped to \\uXXXX.');
+  }
+
+  // LUTC XML must escape special characters in paths / station names.
+  const evilLutc = generateLutc(
+    [{ stationName: 'A&B', ip: '10.0.0.1', port: 1954, useTls: false }],
+    [{ type: 'DwnLdFile', targetId: 0, params: ['C:\\a & b\\<x>.lcp'] }]
+  );
+  if (evilLutc.includes('A&B"') || evilLutc.includes('<x>.lcp')) {
+    throw new Error('Test 4 Failed: LUTC XML special characters were not escaped.');
+  }
+  if (!evilLutc.includes('Station="A&amp;B"') || !evilLutc.includes('&lt;x&gt;.lcp')) {
+    throw new Error('Test 4 Failed: LUTC XML escaping produced unexpected output.');
+  }
+  console.log('LUTC XML escaping verified for &, <, > in attributes.');
 
   // Clean temp folder
   cleanTempFolder();

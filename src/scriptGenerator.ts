@@ -1,10 +1,48 @@
-import * as path from 'path';
-
 /**
- * Escapes Windows paths for use in Python string literals.
+ * Encodes an arbitrary string into the body of a Python string literal, using
+ * only ASCII so it survives being written to a latin1-encoded .py file. Handles
+ * quotes, backslashes, newlines and any control/non-ASCII character — preventing
+ * both syntax breakage and code injection when interpolating untrusted values
+ * (paths, channel names, values) into generated scripts.
+ *
+ * The escape syntax (\n \r \t \xNN \uNNNN \UNNNNNNNN) is valid for both the
+ * Python 2.7 (`batch`) and Python 3.12 (`lvd`) hosts.
  */
-function escapePath(p: string): string {
-  return p.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+function toPyLiteralBody(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const code = ch.codePointAt(0)!;
+    if (ch === '"') out += '\\"';
+    else if (ch === '\\') out += '\\\\';
+    else if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (ch === '\t') out += '\\t';
+    else if (code < 0x20) out += '\\x' + code.toString(16).padStart(2, '0');
+    else if (code < 0x7f) out += ch;
+    else if (code <= 0xffff) out += '\\u' + code.toString(16).padStart(4, '0');
+    else out += '\\U' + code.toString(16).padStart(8, '0');
+  }
+  return out;
+}
+
+/** Safe Python `str` literal: `"..."`. Use for VISUDesigner (Python 3.12). */
+export function pyStr(s: string): string {
+  return '"' + toPyLiteralBody(s) + '"';
+}
+
+/** Safe Python `unicode` literal: `u"..."`. Use for CLASS 2 (Python 2.7). */
+export function pyUnicode(s: string): string {
+  return 'u"' + toPyLiteralBody(s) + '"';
+}
+
+/** Escapes a value for safe inclusion in an XML attribute or text node. */
+function xmlEscape(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 /**
@@ -27,7 +65,7 @@ export function generateClass2Script(options: {
   lines.push('');
   
   // Set up logging
-  lines.push(`batch.OpenLogfile(to_mbcs(u"${escapePath(options.logPath)}"), "[%d{%H:%M:%S} (%p) %c] %m%n", False)`);
+  lines.push(`batch.OpenLogfile(to_mbcs(${pyUnicode(options.logPath)}), "[%d{%H:%M:%S} (%p) %c] %m%n", False)`);
   lines.push('batch.SetExceptionOnError(True)');
   lines.push('');
   
@@ -105,9 +143,10 @@ export function generateLutc(targets: LutcTarget[], instructions: LutcInstructio
   lines.push('\t<Targets>');
   targets.forEach((t, index) => {
     const tlsVal = t.useTls ? '1' : '0';
-    lines.push(`\t\t<Target Station="${t.stationName}">`);
+    const station = xmlEscape(t.stationName);
+    lines.push(`\t\t<Target Station="${station}">`);
     lines.push('\t\t\t<PC>');
-    lines.push(`\t\t\t\t<TCPIP ConfigName="MM_${t.stationName}" BUS="3" Password="" IP="${t.ip}" PORT="${t.port.toString()}" SomeFlags="0" PLCID="" Repeater="0" SSLTLS="${tlsVal}" Favorite="0"/>`);
+    lines.push(`\t\t\t\t<TCPIP ConfigName="MM_${station}" BUS="3" Password="" IP="${xmlEscape(t.ip)}" PORT="${t.port.toString()}" SomeFlags="0" PLCID="" Repeater="0" SSLTLS="${tlsVal}" Favorite="0"/>`);
     lines.push('\t\t\t</PC>');
     lines.push('\t\t</Target>');
   });
@@ -120,18 +159,18 @@ export function generateLutc(targets: LutcTarget[], instructions: LutcInstructio
     if (inst.type === 'DwnLdLC2') {
       const savePrj = inst.attributes?.savePrj ?? 'true';
       const platform = inst.attributes?.platform;
-      lines.push(`\t\t\t<Param Val="${inst.params[0]}"/>`);
+      lines.push(`\t\t\t<Param Val="${xmlEscape(inst.params[0])}"/>`);
       if (platform) {
-        lines.push(`\t\t\t<Param SavePrj="${savePrj}" Platform="${platform}"/>`);
+        lines.push(`\t\t\t<Param SavePrj="${savePrj}" Platform="${xmlEscape(platform)}"/>`);
       } else {
         lines.push(`\t\t\t<Param SavePrj="${savePrj}"/>`);
       }
     } else if (inst.type === 'DwnLdLVD') {
-      lines.push(`\t\t\t<Param Val="${inst.params[0]}"/>`);
+      lines.push(`\t\t\t<Param Val="${xmlEscape(inst.params[0])}"/>`);
       lines.push('\t\t\t<Param/>');
     } else {
       inst.params.forEach(p => {
-        lines.push(`\t\t\t<Param Val="${p}"/>`);
+        lines.push(`\t\t\t<Param Val="${xmlEscape(p)}"/>`);
       });
     }
     lines.push(`\t\t</${inst.type}>`);

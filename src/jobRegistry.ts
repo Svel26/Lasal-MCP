@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { runProcess, ProcessResult } from './processRunner.js';
+import { runProcess, ProcessResult, teardownEngine, killActiveIDE } from './processRunner.js';
 
 export interface JobState {
   ok: boolean;
@@ -124,6 +124,10 @@ export function kickoffJob(
     logPath?: string;
     logFolderToScan?: string; // Used for MachineManager to scan for newest log
     dataExtractor?: (result: ProcessResult) => any;
+    // Which processes to terminate BEFORE running, to free file locks. Runs
+    // inside the serialized queue so it can never kill a still-running prior job.
+    // 'ide' kills both IDEs (Lasal2 + VISUDesigner) ahead of a MachineManager run.
+    teardownBefore?: 'class2' | 'visudesigner' | 'ide';
   } = {}
 ): void {
   // Queue the execution so it runs in order
@@ -131,6 +135,16 @@ export function kickoffJob(
     updateJob(jobId, { status: 'pending' });
 
     try {
+      // Teardown MUST happen here (serialized), not in the dispatch handler:
+      // doing it at dispatch time would taskkill a previously-queued job that
+      // is still executing on this same queue.
+      if (options.teardownBefore === 'ide') {
+        await killActiveIDE();
+      } else if (options.teardownBefore) {
+        await teardownEngine(options.teardownBefore);
+      }
+
+      const runStartedAt = Date.now();
       const result = await runProcess(engine, exePath, cliArgs, {
         cwd: options.cwd,
         timeoutMs: options.timeoutMs
@@ -171,19 +185,23 @@ export function kickoffJob(
       if (engine === 'machinemanager' && options.logFolderToScan && fs.existsSync(options.logFolderToScan)) {
         try {
           const files = fs.readdirSync(options.logFolderToScan);
-          // Find the newest file
+          // Find the newest file written DURING this run. Anything older is a
+          // stale log from a previous run and must not be parsed as our result.
+          // (1s skew tolerance for clock/filesystem granularity.)
           let newestFile: string | null = null;
           let newestMtime = 0;
           for (const file of files) {
             const fullPath = path.join(options.logFolderToScan, file);
             const stat = fs.statSync(fullPath);
-            if (stat.isFile() && stat.mtimeMs > newestMtime) {
+            if (stat.isFile() && stat.mtimeMs >= runStartedAt - 1000 && stat.mtimeMs > newestMtime) {
               newestMtime = stat.mtimeMs;
               newestFile = fullPath;
             }
           }
 
-          if (newestFile) {
+          if (!newestFile) {
+            warnings.push('No MachineManager log was produced for this run; result is based on exit code only.');
+          } else {
             const logContent = fs.readFileSync(newestFile, 'latin1');
             // Parse MM log for status lines.
             // Example failure lines: "HOLD ON ERROR" or aborts, or non-100% states.

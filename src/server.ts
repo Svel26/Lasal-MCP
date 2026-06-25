@@ -7,23 +7,23 @@ import {
   McpError
 } from '@modelcontextprotocol/sdk/types.js';
 import * as fs from 'fs';
-import * as path from 'path';
 import { discoverToolchain, ToolchainInfo } from './toolchain.js';
 import {
   parseSolution,
   parseStation,
   updateStationConnection,
-  readLatin1File,
   writeLatin1File
 } from './xmlHelper.js';
 import {
   generateClass2Script,
   generateVisuScript,
   generateLutc,
+  pyStr,
+  pyUnicode,
   LutcTarget,
   LutcInstruction
 } from './scriptGenerator.js';
-import { killActiveIDE, teardownEngine, runProcess } from './processRunner.js';
+import { teardownEngine, runProcess } from './processRunner.js';
 import {
   createJob,
   getJob,
@@ -35,6 +35,16 @@ import {
 
 // Global toolchain info resolved at startup
 let toolchain: ToolchainInfo;
+
+// Process-watchdog timeouts (ms). For operations that embed a device-side
+// timeout (OS download, reboot), the watchdog is derived from it at the call
+// site so we never force-kill the engine mid-operation.
+const TIMEOUT = {
+  short: 120000,     // run-state change, set connection
+  medium: 600000,    // bootdisk, deploy, analyze, file transfer, user scripts
+  compile: 1800000,  // RebuildAll on large projects
+  publish: 900000    // VISUDesigner publish / deploy
+};
 
 const server = new Server(
   {
@@ -415,16 +425,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Station LSS file not found: ${stationLssPath}`] }) }] };
         }
 
-        // Break the lock the Class 2 IDE / solution holds on the .lss before editing it.
-        await teardownEngine('class2');
-
-        updateStationConnection(stationLssPath, {
-          ip: args.ip as string,
-          port: args.port as number,
-          useTls: args.useTls as boolean,
-          password: args.password as string,
-          configName: args.configName as string,
-          updateRuntimeStationsTxt: args.updateRuntimeStationsTxt as boolean
+        // Run on the serialized queue so breaking the IDE's lock cannot kill a
+        // job that is mid-flight, then edit the .lss while the lock is clear.
+        await runExclusive(async () => {
+          await teardownEngine('class2');
+          updateStationConnection(stationLssPath, {
+            ip: args.ip as string,
+            port: args.port as number,
+            useTls: args.useTls as boolean,
+            password: args.password as string,
+            configName: args.configName as string,
+            updateRuntimeStationsTxt: args.updateRuntimeStationsTxt as boolean
+          });
         });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, engine: 'fs' }) }] };
@@ -441,12 +453,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Script block
         let scriptContent = '';
         if (projectPath) {
-          scriptContent += `prj = batch.LoadProject(to_mbcs(u"${escapePath(projectPath)}"))\n`;
+          scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
         } else {
           scriptContent += `prj = None\n`;
         }
-        scriptContent += `state = batch.GetPlcState(prj, to_mbcs(u"${escapePath(connectionString)}"))\n`;
-        scriptContent += `arch = batch.GetProcessorArch(to_mbcs(u"${escapePath(connectionString)}"))\n`;
+        scriptContent += `state = batch.GetPlcState(prj, to_mbcs(${pyUnicode(connectionString)}))\n`;
+        scriptContent += `arch = batch.GetProcessorArch(to_mbcs(${pyUnicode(connectionString)}))\n`;
         scriptContent += `print "PLC_STATE:%s" % state\n`;
         scriptContent += `print "PLC_ARCH:%s" % arch\n`;
 
@@ -492,9 +504,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const name = args.name as string;
 
         let scriptContent = '';
-        scriptContent += `batch.OpenPlcConnection(None, to_mbcs(u"${escapePath(connectionString)}"))\n`;
+        scriptContent += `batch.OpenPlcConnection(None, to_mbcs(${pyUnicode(connectionString)}))\n`;
         scriptContent += `dic = {}\n`;
-        scriptContent += `batch.ReadPlcValue(to_mbcs(u"${escapePath(name)}"), dic)\n`;
+        scriptContent += `batch.ReadPlcValue(to_mbcs(${pyUnicode(name)}), dic)\n`;
         scriptContent += `print "PLC_VALUE:%s" % dic.get('value', '')\n`;
         scriptContent += `print "PLC_VALUE_DICT:%r" % dic\n`;
         scriptContent += `batch.ClosePlcConnection()\n`;
@@ -542,8 +554,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const value = args.value as string;
 
         let scriptContent = '';
-        scriptContent += `batch.OpenPlcConnection(None, to_mbcs(u"${escapePath(connectionString)}"))\n`;
-        scriptContent += `batch.WritePlcValue(to_mbcs(u"${escapePath(name)}"), to_mbcs(u"${escapePath(value)}"))\n`;
+        scriptContent += `batch.OpenPlcConnection(None, to_mbcs(${pyUnicode(connectionString)}))\n`;
+        scriptContent += `batch.WritePlcValue(to_mbcs(${pyUnicode(name)}), to_mbcs(${pyUnicode(value)}))\n`;
         scriptContent += `batch.ClosePlcConnection()\n`;
 
         const logPath = getTempFilePath('write-plc-val', '.log');
@@ -585,7 +597,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         let scriptContent = '';
-        scriptContent += `prj = batch.LoadProject(to_mbcs(u"${escapePath(projectPath)}"))\n`;
+        scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
         scriptContent += `batch.Compile(prj, ${optString})\n`;
         scriptContent += `batch.Save(prj)\n`;
         scriptContent += `batch.CloseProject(prj)\n`;
@@ -595,11 +607,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('compile', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        // Safety close open IDE
-        await teardownEngine('class2');
-
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.compile });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -624,10 +633,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         else if (platform === 'X86') platNum = 2;
 
         let scriptContent = '';
-        scriptContent += `prj = batch.LoadProject(to_mbcs(u"${escapePath(projectPath)}"))\n`;
-        
+        scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+
         // Use bootdisk manager
-        scriptContent += `batch.CreateBootdiskMngr(prj, to_mbcs(u"${escapePath(outputPath)}"), ${overwrite ? 'True' : 'False'}, False, 1, True, "", to_mbcs(u"${escapePath(includeOs)}"), "", True, ${platNum}, True, to_mbcs(u"${escapePath(visuPublishFolder)}"), True)\n`;
+        scriptContent += `batch.CreateBootdiskMngr(prj, to_mbcs(${pyUnicode(outputPath)}), ${overwrite ? 'True' : 'False'}, False, 1, True, "", to_mbcs(${pyUnicode(includeOs)}), "", True, ${platNum}, True, to_mbcs(${pyUnicode(visuPublishFolder)}), True)\n`;
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('bootdisk', '.log');
@@ -635,10 +644,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('bootdisk', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('class2');
-
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -654,10 +661,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const startAfter = args.startAfter as boolean;
 
         let scriptContent = '';
-        scriptContent += `prj = batch.LoadProject(to_mbcs(u"${escapePath(projectPath)}"))\n`;
-        scriptContent += `batch.Download(prj, to_mbcs(u"${escapePath(connectionString)}"), ${addLoaderAnyway ? 'True' : 'False'})\n`;
+        scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.Download(prj, to_mbcs(${pyUnicode(connectionString)}), ${addLoaderAnyway ? 'True' : 'False'})\n`;
         if (startAfter) {
-          scriptContent += `batch.Start(prj, to_mbcs(u"${escapePath(connectionString)}"))\n`;
+          scriptContent += `batch.Start(prj, to_mbcs(${pyUnicode(connectionString)}))\n`;
         }
         scriptContent += `batch.CloseProject(prj)\n`;
 
@@ -666,10 +673,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('deploy-c2', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('class2');
-
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -685,15 +690,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         let scriptContent = '';
         if (projectPath) {
-          scriptContent += `prj = batch.LoadProject(to_mbcs(u"${escapePath(projectPath)}"))\n`;
+          scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
         } else {
           scriptContent += `prj = None\n`;
         }
 
         if (action === 'start') {
-          scriptContent += `batch.Start(prj, to_mbcs(u"${escapePath(connectionString)}"))\n`;
+          scriptContent += `batch.Start(prj, to_mbcs(${pyUnicode(connectionString)}))\n`;
         } else {
-          scriptContent += `batch.Stop(prj, to_mbcs(u"${escapePath(connectionString)}"))\n`;
+          scriptContent += `batch.Stop(prj, to_mbcs(${pyUnicode(connectionString)}))\n`;
         }
 
         if (projectPath) {
@@ -705,10 +710,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('runstate', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('class2');
-
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.short });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -723,11 +726,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const sourceFile = args.sourceFile as string || '';
 
         let scriptContent = '';
-        scriptContent += `prj = batch.LoadProject(to_mbcs(u"${escapePath(projectPath)}"))\n`;
+        scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
         if (sourceFile) {
-          scriptContent += `batch.DoCodeAnalysisOnFile(prj, to_mbcs(u"${escapePath(sourceFile)}"), to_mbcs(u"${escapePath(resultFile)}"))\n`;
+          scriptContent += `batch.DoCodeAnalysisOnFile(prj, to_mbcs(${pyUnicode(sourceFile)}), to_mbcs(${pyUnicode(resultFile)}))\n`;
         } else {
-          scriptContent += `batch.DoCodeAnalysisOnProjekt(prj, to_mbcs(u"${escapePath(resultFile)}"))\n`;
+          scriptContent += `batch.DoCodeAnalysisOnProjekt(prj, to_mbcs(${pyUnicode(resultFile)}))\n`;
         }
         scriptContent += `batch.CloseProject(prj)\n`;
 
@@ -736,10 +739,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('analysis', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('class2');
-
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -757,10 +758,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('user-c2', '.py');
         writeLatin1File(scriptPath, scriptContent);
 
-        await teardownEngine('class2');
-
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`, ...scriptArgs], { logPath });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`, ...scriptArgs], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -775,7 +774,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const debugPublish = args.debugPublish as boolean;
 
         let scriptContent = '';
-        scriptContent += `prj = lvd.LoadProject("${escapePath(projectPath)}")\n`;
+        scriptContent += `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
         scriptContent += `lvd.PublishProject(prj, ${debugPublish ? 'True' : 'False'})\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
@@ -783,10 +782,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('publish', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('visudesigner');
-
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath]);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -808,18 +805,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         else if (mode === 'publish_and_changes') uiFlags = 2;
 
         let scriptContent = '';
-        scriptContent += `prj = lvd.LoadProject("${escapePath(projectPath)}")\n`;
-        scriptContent += `lvd.DownloadProject(prj, "${escapePath(connectionString)}", ${uiFlags}, ${addRuntime ? 'True' : 'False'})\n`;
+        scriptContent += `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        scriptContent += `lvd.DownloadProject(prj, ${pyStr(connectionString)}, ${uiFlags}, ${addRuntime ? 'True' : 'False'})\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
         const scriptBody = generateVisuScript({ scriptBody: scriptContent });
         const scriptPath = getTempFilePath('deploy-visu', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('visudesigner');
-
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath]);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -834,8 +829,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const connSetting = args.connSetting as string;
 
         let scriptContent = '';
-        scriptContent += `prj = lvd.LoadProject("${escapePath(projectPath)}")\n`;
-        scriptContent += `lvd.SetStationProperties(prj, lvd.Station.ConnectionSet(${stationNr}, "${escapePath(connSetting)}"))\n`;
+        scriptContent += `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        scriptContent += `lvd.SetStationProperties(prj, lvd.Station.ConnectionSet(${stationNr}, ${pyStr(connSetting)}))\n`;
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
@@ -843,10 +838,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('visu-conn', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
-        await teardownEngine('visudesigner');
-
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath]);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.short });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -863,10 +856,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptPath = getTempFilePath('user-visu', '.py');
         writeLatin1File(scriptPath, scriptContent);
 
-        await teardownEngine('visudesigner');
-
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath, ...scriptArgs]);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath, ...scriptArgs], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.medium });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -946,11 +937,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const lutcPath = getTempFilePath('deploy-sol', '.lutc');
         writeLatin1File(lutcPath, lutcXml);
 
-        await killActiveIDE();
+        // Allow generous wall time: downloads plus any per-station reboot waits.
+        const deployTimeout = TIMEOUT.compile + (rebootAfter ? 300000 * inputStations.length : 0);
 
         const jobId = createJob('machinemanager', `MachineManager.exe /update:${lutcPath}`);
         kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`], {
-          logFolderToScan: logFolder
+          logFolderToScan: logFolder,
+          teardownBefore: 'ide',
+          timeoutMs: deployTimeout
         });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
@@ -987,10 +981,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const lutcPath = getTempFilePath('download-os', '.lutc');
         writeLatin1File(lutcPath, lutcXml);
 
-        await killActiveIDE();
-
         const jobId = createJob('machinemanager', `MachineManager.exe /update:${lutcPath}`);
-        kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`]);
+        kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`], {
+          teardownBefore: 'ide',
+          timeoutMs: rebootTimeoutMs + 300000 // flash + reboot must finish before the watchdog fires
+        });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1040,10 +1035,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const lutcPath = getTempFilePath('file-transfer', '.lutc');
         writeLatin1File(lutcPath, lutcXml);
 
-        await killActiveIDE();
-
         const jobId = createJob('machinemanager', `MachineManager.exe /update:${lutcPath}`);
-        kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`]);
+        kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`], {
+          teardownBefore: 'ide',
+          timeoutMs: TIMEOUT.medium
+        });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1077,10 +1073,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const lutcPath = getTempFilePath('reboot', '.lutc');
         writeLatin1File(lutcPath, lutcXml);
 
-        await killActiveIDE();
-
         const jobId = createJob('machinemanager', `MachineManager.exe /update:${lutcPath}`);
-        kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`]);
+        kickoffJob(jobId, 'machinemanager', toolchain.machinemanager.path, [`/update:${lutcPath}`], {
+          teardownBefore: 'ide',
+          timeoutMs: timeoutMs + 120000 // reboot wait must finish before the watchdog fires
+        });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1108,10 +1105,6 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Sigmatek LASAL MCP Server successfully started via Stdio Transport.');
-}
-
-function escapePath(p: string): string {
-  return p.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 main().catch(err => {
