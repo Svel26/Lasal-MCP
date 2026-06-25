@@ -228,13 +228,17 @@ port `1954`** (optionally **TLS** when `SSLTLS=1`, via the bundled
                 └──────┴──────────────────────────────────────────────────────────────────┘
 ```
 
-Implementation notes:
-- Host language is free (Node/TS or Python). The server **emits** Python 2.7
-  (`batch`) and Python 3.12 (`lvd`) scripts and `.lutc` files; it does not import
-  them. Scripts are written to the scratch dir and passed by path.
-- Long operations (compile/publish/download) run async; expose a job id + poll.
-- Discover engine paths once at startup (§2) and expose via `get_toolchain_info`.
-- Treat compile/deploy as **serialized per project** (the IDE host is single-instance).
+Implementation notes & Architectural Gaps resolved:
+- **Host Language**: TypeScript (Node.js) project. The server **emits** Python 2.7 (`batch`) and Python 3.12 (`lvd`) scripts and `.lutc` files; it does not import them. Scripts are written to the scratch dir and passed by path.
+- **Process Ghosting & File Locks Teardown**: An untrapped exception in CLASS 2 yields exit code `102`. In practice, when `Lasal2.exe` or `VISUDesigner.exe` fails headlessly, they frequently leave zombie background processes running, which maintain active file locks on `.lsm`, `.lss`, or `.lcp` files. To prevent file access violations:
+  - The MCP server must include a strict teardown routine. If a process exceeds a timeout or exits with `102` or any other error, the server must execute `taskkill /F /IM Lasal2.exe /T` and `taskkill /F /IM VISUDesigner.exe /T` (or the respective engine) before returning the `ok: false` envelope.
+- **Project Editing Locks (Closing Active Projects)**: Before modifying solution/station/project files (e.g., using `set_target_ip`), or before starting a headless save, compile, or download operation, the server must ensure that any open projects in the IDE are closed. Since the IDE holds locks or can overwrite disk files on exit/save, the server must terminate any active `Lasal2.exe` or `VISUDesigner.exe` processes (via `taskkill /F /IM Lasal2.exe /T` and `taskkill /F /IM VISUDesigner.exe /T`) *before* applying the edits or starting the operation.
+- **MCP Protocol Synchronicity vs. Async Execution**: Long operations (compile/publish/download/deploy) run asynchronously to avoid timing out the LLM client request-response loop.
+  - Long-running tools must immediately initiate the task in the background, register a `jobId`, and return a response with `"status": "pending"` and `"jobId": "<id>"`.
+  - A polling tool `check_job_status` must be exposed to query the job state.
+- **Python 2.7 Character Encoding Boundary**: For Python 2.7 scripts written for `Lasal2.exe`, the script generator must inject `# -*- coding: utf-8 -*-` at the top of every generated `.py` file. Any Windows file paths or strings received in UTF-8 from the MCP client must be generated as unicode literals (e.g., `u"path"`) and explicitly converted to byte-strings in the local Windows active code page (e.g., `u"path".encode('mbcs')`) before passing them to the Sigmatek automation API (such as `batch.LoadProject()`).
+- **Path Discovery**: Discover engine paths once at startup (§2) and expose via `get_toolchain_info`.
+- **Serialization**: Treat compile/deploy as **serialized per project** (the IDE host is single-instance). Only one headless process per engine can run at a time to prevent conflicts.
 
 ### 5.2 Tool catalogue
 
@@ -244,6 +248,18 @@ Implementation notes:
 ```json
 { "type": "object", "properties": {}, "additionalProperties": false }
 ```
+
+**`check_job_status`** — poll the status of an asynchronous operation.
+```json
+{
+  "type": "object",
+  "properties": {
+    "jobId": { "type": "string", "description": "The unique ID of the background job." }
+  },
+  "required": ["jobId"], "additionalProperties": false
+}
+```
+
 
 **`list_solution`** — parse `.lsm`/`.lss` into a structured tree.
 ```json
@@ -540,11 +556,24 @@ optional `Start(prj, conn)` → `GetPlcState` for confirmation.
 ```
 
 ### 5.3 Standard tool result envelope
+
+For asynchronous operations (kickoff response):
+```json
+{
+  "ok": true,
+  "status": "pending",
+  "jobId": "unique-uuid-string"
+}
+```
+
+For synchronous operations or completed/failed job status results:
 ```json
 {
   "type": "object",
   "properties": {
     "ok": { "type": "boolean" },
+    "status": { "type": "string", "enum": ["pending", "completed", "failed"] },
+    "jobId": { "type": "string" },
     "engine": { "type": "string", "enum": ["class2","visudesigner","machinemanager","fs"] },
     "exitCode": { "type": "integer", "description": "0 ok; 102 = CLASS 2 untrapped exception" },
     "durationMs": { "type": "integer" },
