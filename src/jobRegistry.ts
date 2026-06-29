@@ -128,6 +128,13 @@ export function kickoffJob(
     // inside the serialized queue so it can never kill a still-running prior job.
     // 'ide' kills both IDEs (Lasal2 + VISUDesigner) ahead of a MachineManager run.
     teardownBefore?: 'class2' | 'visudesigner' | 'ide';
+    // Path to a file where the VD Python script writes exception tracebacks.
+    // VISUDesigner is a GUI app; stderr is not reliably captured, so errors
+    // must be read back from this file after the process exits.
+    visuErrorPath?: string;
+    // Path to a file where the Class 2 script writes exception tracebacks.
+    // Lasal2.exe is also a GUI-subsystem app; same capture problem as above.
+    class2ErrorPath?: string;
   } = {}
 ): void {
   // Queue the execution so it runs in order
@@ -165,6 +172,30 @@ export function kickoffJob(
           .map(l => l.trim())
           .filter(l => l.length > 0 && !chromiumNoise.test(l));
         errors.push(...errLines);
+      }
+
+      // Read VISUDesigner error file if provided (GUI app, stderr not captured)
+      if (options.visuErrorPath && fs.existsSync(options.visuErrorPath)) {
+        try {
+          const errText = fs.readFileSync(options.visuErrorPath, 'utf8').trim();
+          if (errText) {
+            errors.push(...errText.split('\n').map(l => l.trim()).filter(l => l.length > 0));
+            ok = false;
+          }
+          fs.unlinkSync(options.visuErrorPath);
+        } catch { /* ignore cleanup errors */ }
+      }
+
+      // Read Class 2 error file if provided (Lasal2.exe is also a GUI app)
+      if (options.class2ErrorPath && fs.existsSync(options.class2ErrorPath)) {
+        try {
+          const errText = fs.readFileSync(options.class2ErrorPath, 'latin1').trim();
+          if (errText) {
+            errors.push(...errText.split('\n').map(l => l.trim()).filter(l => l.length > 0));
+            ok = false;
+          }
+          fs.unlinkSync(options.class2ErrorPath);
+        } catch { /* ignore cleanup errors */ }
       }
 
       // Check log file if we have one (Class 2)

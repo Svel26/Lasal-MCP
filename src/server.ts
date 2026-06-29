@@ -291,8 +291,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             projectPath: { type: 'string', description: 'Absolute path to the HMI .lvp file' },
-            stationNr: { type: 'integer', description: 'Unique ID of the station to update' },
-            connSetting: { type: 'string', description: "HMI connection setting (e.g. 'TCPIP:10.195.0.10')" }
+            stationNr: { type: 'integer', description: "Numeric station ID — use list_visu_stations to find it. 'Station0' has stationNr=0, 'Station1' has stationNr=1, etc." },
+            connSetting: { type: 'string', description: "Station connection: 'INTERN', 'LOCAL', 'GLOBAL', or a bare IP address like '10.195.0.51'. Do NOT use 'TCPIP:' prefix." }
           },
           required: ['projectPath', 'stationNr', 'connSetting'],
           additionalProperties: false
@@ -419,7 +419,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'list_class2_connections',
-        description: 'Get client-to-server channel connections defined within a Class 2 network (Asynchronous).',
+        description: 'Get client-to-server channel connections defined within a Class 2 network (Offline / Synchronous).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -591,16 +591,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
-            stationNr: { type: 'integer', description: 'Station ID number' },
+            stationNr: { type: 'integer', description: "Numeric station ID — use list_visu_stations to find it. 'Station0' has stationNr=0, 'Station1' has stationNr=1, etc." },
             properties: {
               type: 'object',
               properties: {
                 name: { type: 'string', description: 'HMI station name' },
-                connection: { type: 'string', description: 'Target setting, e.g. INTERN, LOCAL, GLOBAL, or IP' },
+                connection: { type: 'string', description: "Station connection: 'INTERN', 'LOCAL', 'GLOBAL', or a bare IP like '10.195.0.51'. Do NOT use 'TCPIP:' prefix." },
                 importFilePath: { type: 'string', description: 'Relative path to MaeExp.xml' },
                 observe: { type: 'boolean', description: 'Observe online status' },
                 retry: { type: 'string', enum: ['High', 'Medium', 'Standard', 'Low', 'None'] },
-                label: { type: 'string', description: 'Display label' },
+                label: { type: 'string', description: 'Display label (set to empty string to clear)' },
                 revision: { type: 'string', description: 'Revision value' },
                 isActive: { type: 'boolean', description: 'Whether the station is active' },
                 isRequired: { type: 'boolean', description: 'Whether the station is required' }
@@ -895,7 +895,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `__rf.close()\n`;
 
         const logPath = getTempFilePath('read-plc-state', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('read-plc-state-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('read-plc-state', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
@@ -908,13 +909,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let resultText = '';
         try { resultText = fs.readFileSync(resultPath, 'latin1'); } catch {}
 
+        let c2ErrText = '';
+        try { c2ErrText = fs.readFileSync(errFilePath, 'latin1').trim(); } catch {}
+
         // Clean up scripts
         try { fs.unlinkSync(scriptPath); } catch {}
         try { fs.unlinkSync(logPath); } catch {}
         try { fs.unlinkSync(resultPath); } catch {}
+        try { fs.unlinkSync(errFilePath); } catch {}
 
         if (!result.ok) {
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [result.stderr || 'Failed to connect to PLC'] }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [c2ErrText || result.stderr || 'Failed to connect to PLC'] }) }] };
         }
 
         const stateMatch = resultText.match(/PLC_STATE:(.*)/);
@@ -955,7 +960,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `__rf.close()\n`;
 
         const logPath = getTempFilePath('read-plc-val', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('read-plc-val-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('read-plc-val', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
@@ -967,12 +973,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let resultText = '';
         try { resultText = fs.readFileSync(resultPath, 'latin1'); } catch {}
 
+        let c2ErrText = '';
+        try { c2ErrText = fs.readFileSync(errFilePath, 'latin1').trim(); } catch {}
+
         try { fs.unlinkSync(scriptPath); } catch {}
         try { fs.unlinkSync(logPath); } catch {}
         try { fs.unlinkSync(resultPath); } catch {}
+        try { fs.unlinkSync(errFilePath); } catch {}
 
         if (!result.ok) {
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [result.stderr || 'Failed to read value'] }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [c2ErrText || result.stderr || 'Failed to read value'] }) }] };
         }
 
         const valueMatch = resultText.match(/PLC_VALUE:(.*)/);
@@ -1006,7 +1016,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.ClosePlcConnection()\n`;
 
         const logPath = getTempFilePath('write-plc-val', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('write-plc-val-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('write-plc-val', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
@@ -1014,12 +1025,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await runExclusive(() =>
           runProcess('class2', exe, [`/script:${scriptPath}`], { timeoutMs: 15000 })
         );
-        
+
+        let c2ErrText = '';
+        try { c2ErrText = fs.readFileSync(errFilePath, 'latin1').trim(); } catch {}
+
         try { fs.unlinkSync(scriptPath); } catch {}
         try { fs.unlinkSync(logPath); } catch {}
+        try { fs.unlinkSync(errFilePath); } catch {}
 
         if (!result.ok) {
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [result.stderr || 'Failed to write value'] }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [c2ErrText || result.stderr || 'Failed to write value'] }) }] };
         }
 
         return {
@@ -1050,12 +1065,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('compile', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('compile-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('compile', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.compile });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.compile, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1087,12 +1103,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('bootdisk', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('bootdisk-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('bootdisk', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1116,12 +1133,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('deploy-c2', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('deploy-c2-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('deploy-c2', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1153,12 +1171,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const logPath = getTempFilePath('runstate', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('runstate-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('runstate', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.short });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.short, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1192,7 +1211,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `        batch.CloseProject(__prj)\n`;
 
         const logPath = getTempFilePath('analysis', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const c2ErrFilePath = getTempFilePath('analysis-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath: c2ErrFilePath });
         const scriptPath = getTempFilePath('analysis', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
@@ -1206,7 +1226,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, dataExtractor: analysisDataExtractor });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, dataExtractor: analysisDataExtractor, class2ErrorPath: c2ErrFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1220,12 +1240,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptArgs = (args.args as string[]) || [];
 
         const logPath = getTempFilePath('user-c2', '.log');
-        const scriptContent = generateClass2Script({ logPath, scriptBody });
+        const errFilePath = getTempFilePath('user-c2-err', '.txt');
+        const scriptContent = generateClass2Script({ logPath, scriptBody, errFilePath });
         const scriptPath = getTempFilePath('user-c2', '.py');
         writeLatin1File(scriptPath, scriptContent);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`, ...scriptArgs], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`, ...scriptArgs], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1244,12 +1265,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.PublishProject(prj, ${debugPublish ? 'True' : 'False'})\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('publish-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('publish', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1275,12 +1297,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.DownloadProject(prj, ${pyStr(connectionString)}, ${uiFlags}, ${addRuntime ? 'True' : 'False'})\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('deploy-visu-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('deploy-visu', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1300,12 +1323,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('visu-conn-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('visu-conn', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.short });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.short, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1318,12 +1342,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const scriptBody = args.scriptBody as string;
         const scriptArgs = (args.args as string[]) || [];
 
-        const scriptContent = generateVisuScript({ scriptBody });
+        const visuErrorPath = getTempFilePath('user-visu-err', '.txt');
+        const scriptContent = generateVisuScript({ scriptBody, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('user-visu', '.py');
         writeLatin1File(scriptPath, scriptContent);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath, ...scriptArgs], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath, ...scriptArgs], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.medium, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1583,128 +1608,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_class2_connections': {
-        if (!toolchain.class2.installed || !toolchain.class2.path) {
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
-        }
-
+        // Fully offline — reads directly from the .lcn XML file.
+        // Previously this called batch.GetClientConnection via Lasal2.exe, but
+        // that C++ API crashes Lasal2 on large projects (known engine bug).
         const projectPath = args.projectPath as string;
         const networkName = args.networkName as string;
         if (!fs.existsSync(projectPath)) {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file not found: ${projectPath}`] }) }] };
         }
-
         try {
           const networkPath = resolveNetworkPath(projectPath, networkName);
-          const lcnInfo = parseLcnFile(networkPath);
-
-          // Collect all client channels, mapping inherited channels from base classes (_base) to the top-level objects,
-          // and excluding nested composed objects to prevent GetClientConnection C++ reflection engine crashes.
-          const queryMap = new Map<string, Set<string>>();
-          for (const obj of lcnInfo.objects) {
-            const parts = obj.path.split('.');
-            const topLevelName = parts[0];
-            const isBase = parts.slice(1).every(part => part === '_base');
-            if (isBase) {
-              if (!queryMap.has(topLevelName)) {
-                queryMap.set(topLevelName, new Set<string>());
-              }
-              const clientSet = queryMap.get(topLevelName)!;
-              for (const clt of obj.channels.clients) {
-                clientSet.add(clt.name);
-              }
-            }
-          }
-
-          const queries: { objPath: string; clientName: string }[] = [];
-          for (const [topLevelName, clients] of queryMap.entries()) {
-            for (const clientName of clients) {
-              queries.push({
-                objPath: topLevelName,
-                clientName
-              });
-            }
-          }
-
-          if (queries.length === 0) {
-            return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: [] }) }] };
-          }
-
-          const inputJsonPath = getTempFilePath('queries-in', '.json');
-          const outputJsonPath = getTempFilePath('queries-out', '.json');
-          fs.writeFileSync(inputJsonPath, JSON.stringify(queries), 'utf8');
-
-          let scriptContent = '';
-          scriptContent += `import json\n`;
-          scriptContent += `import traceback\n`;
-          scriptContent += `input_path = to_mbcs(${pyUnicode(inputJsonPath)})\n`;
-          scriptContent += `output_path = to_mbcs(${pyUnicode(outputJsonPath)})\n`;
-          scriptContent += `project_path = to_mbcs(${pyUnicode(projectPath)})\n`;
-          scriptContent += `network_name = to_mbcs(${pyUnicode(networkName)})\n`;
-          scriptContent += `try:\n`;
-          scriptContent += `    with open(input_path, 'r') as f:\n`;
-          scriptContent += `        queries = json.load(f)\n`;
-          scriptContent += `    prj = batch.LoadProject(project_path)\n`;
-          scriptContent += `    results = []\n`;
-          scriptContent += `    for q in queries:\n`;
-          scriptContent += `        obj_path = to_mbcs(q['objPath'])\n`;
-          scriptContent += `        client_name = to_mbcs(q['clientName'])\n`;
-          scriptContent += `        try:\n`;
-          scriptContent += `            conn = batch.GetClientConnection(prj, obj_path, client_name, network_name)\n`;
-          scriptContent += `            if conn:\n`;
-          scriptContent += `                src_path = obj_path.replace('\\\\', '.') + '.' + client_name\n`;
-          scriptContent += `                dest_path = conn.replace('\\\\', '.')\n`;
-          scriptContent += `                results.append({'source': src_path, 'destination': dest_path})\n`;
-          scriptContent += `        except Exception as inner_e:\n`;
-          scriptContent += `            pass\n`;
-          scriptContent += `    batch.CloseProject(prj)\n`;
-          scriptContent += `    with open(output_path, 'w') as f:\n`;
-          scriptContent += `        json.dump(results, f)\n`;
-          scriptContent += `except Exception as e:\n`;
-          scriptContent += `    with open(output_path + '.err', 'w') as f:\n`;
-          scriptContent += `        traceback.print_exc(file=f)\n`;
-
-          const logPath = getTempFilePath('list-conn', '.log');
-          const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
-          const scriptPath = getTempFilePath('list-conn', '.py');
-          writeLatin1File(scriptPath, scriptBody);
-
-          const dataExtractor = (result: any) => {
-            try {
-              const errPath = outputJsonPath + '.err';
-              if (fs.existsSync(errPath)) {
-                const errMsg = fs.readFileSync(errPath, 'utf8');
-                try { fs.unlinkSync(errPath); } catch {}
-                try { fs.unlinkSync(inputJsonPath); } catch {}
-                throw new Error(`Python execution error:\n${errMsg}`);
-              }
-              if (fs.existsSync(outputJsonPath)) {
-                const content = fs.readFileSync(outputJsonPath, 'utf8');
-                const parsed = JSON.parse(content);
-                // clean up
-                if (fs.existsSync(inputJsonPath)) fs.unlinkSync(inputJsonPath);
-                if (fs.existsSync(outputJsonPath)) fs.unlinkSync(outputJsonPath);
-                return parsed;
-              }
-            } catch (e: any) {
-              console.error('Failed to read connections query output:', e);
-              throw e;
-            } finally {
-              if (fs.existsSync(inputJsonPath)) {
-                try { fs.unlinkSync(inputJsonPath); } catch {}
-              }
-            }
-            return [];
-          };
-
-          const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-          kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], {
-            logPath,
-            teardownBefore: 'class2',
-            timeoutMs: TIMEOUT.medium,
-            dataExtractor
-          });
-
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+          const result = parseLcnFile(networkPath);
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: result.connections }) }] };
         } catch (e: any) {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [e.message] }) }] };
         }
@@ -1729,12 +1644,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('create-obj', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('create-obj-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('create-obj', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1754,12 +1670,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('delete-obj', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('delete-obj-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('delete-obj', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1782,12 +1699,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('create-conn', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('create-conn-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('create-conn', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1807,12 +1725,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('delete-conn', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('delete-conn-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('delete-conn', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1833,12 +1752,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('init-val', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('init-val-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('init-val', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1859,12 +1779,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('param-val', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('param-val-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('param-val', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1886,12 +1807,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('create-label', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('create-label-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('create-label', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1911,12 +1833,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `batch.CloseProject(prj)\n`;
 
         const logPath = getTempFilePath('change-label', '.log');
-        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const errFilePath = getTempFilePath('change-label-err', '.txt');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent, errFilePath });
         const scriptPath = getTempFilePath('change-label', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, class2ErrorPath: errFilePath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -1935,7 +1858,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
           const content = fs.readFileSync(stationsJsonPath, 'latin1');
           const data = JSON.parse(content);
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: data.stations || [] }) }] };
+          // Annotate each station with its numeric stationNr (derived from name suffix or array index)
+          // so callers always know the correct value to pass to set_visu_station_* tools.
+          const stations = (data.stations || []).map((st: any, idx: number) => {
+            const suffix = st.name?.match(/(\d+)$/)?.[1];
+            return { ...st, stationNr: suffix !== undefined ? parseInt(suffix, 10) : idx };
+          });
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: stations }) }] };
         } catch (e: any) {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [e.message] }) }] };
         }
@@ -1987,12 +1916,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('set-visu-prop-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('set-visu-prop', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2016,12 +1946,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('add-alarm-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('add-alarm', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2038,12 +1969,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('rem-alarm-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('rem-alarm', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2068,12 +2000,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('add-txt-list-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('add-txt-list', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2090,12 +2023,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('rem-txt-list-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('rem-txt-list', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2115,12 +2049,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.CsvExportTextLists(prj, ${pyStr(filePath)}, ${tLists}, ${lList})\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('csv-exp-visu-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('csv-exp-visu', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2142,12 +2077,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('csv-imp-visu-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('csv-imp-visu', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2173,12 +2109,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('add-lang-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('add-lang', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2195,12 +2132,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         scriptContent += `lvd.SaveProject(prj)\n`;
         scriptContent += `lvd.CloseProject(prj)\n`;
 
-        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const visuErrorPath = getTempFilePath('rem-lang-err', '.txt');
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent, errorFilePath: visuErrorPath });
         const scriptPath = getTempFilePath('rem-lang', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
         const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
-        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish, visuErrorPath });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2244,7 +2182,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const proc = spawn(toolchain.class2.path, cliArgs, {
           detached: true,
           stdio: 'ignore',
-          windowsHide: false
+          windowsHide: false,
+          cwd: path.dirname(toolchain.class2.path)
         });
         proc.unref();
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, pid: proc.pid }) }] };
@@ -2259,12 +2198,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
           return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
         }
-        const projectPath = args.projectPath as string | undefined;
-        const cliArgs = projectPath ? [projectPath] : [];
-        const proc = spawn(toolchain.visudesigner.path, cliArgs, {
+        // VISUDesigner is a Chromium/CEF app; it must be started from its own
+        // directory to locate its DLLs. The project path is intentionally omitted
+        // because VISUDesigner does not accept a positional path argument in GUI
+        // mode — the user opens the project via the IDE's File menu instead.
+        const proc = spawn(toolchain.visudesigner.path, [], {
           detached: true,
           stdio: 'ignore',
-          windowsHide: false
+          windowsHide: false,
+          cwd: path.dirname(toolchain.visudesigner.path)
         });
         proc.unref();
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, pid: proc.pid }) }] };

@@ -49,38 +49,57 @@ function xmlEscape(s: string): string {
 /**
  * Generates a Python 2.7 script for Lasal2.exe.
  * Uses unicode literals and encodes them to 'mbcs' for Windows API compatibility.
+ *
+ * When errFilePath is provided the entire script body is wrapped in try/except:
+ * any unhandled exception is written to that file and the process exits with 102.
+ * Without it the body runs unwrapped (legacy behaviour, error visible only via log).
  */
 export function generateClass2Script(options: {
   logPath: string;
   scriptBody: string;
+  errFilePath?: string;
 }): string {
   const lines: string[] = [];
   lines.push('# -*- coding: utf-8 -*-');
   lines.push('import sigmatek.lasal.batch as batch');
   lines.push('import sys');
+  lines.push('import traceback');
   lines.push('');
   lines.push('def to_mbcs(s):');
   lines.push('    if isinstance(s, unicode):');
   lines.push("        return s.encode('mbcs')");
   lines.push('    return s');
   lines.push('');
-  
-  // Set up logging
+
   lines.push(`batch.OpenLogfile(to_mbcs(${pyUnicode(options.logPath)}), "[%d{%H:%M:%S} (%p) %c] %m%n", False)`);
   lines.push('batch.SetExceptionOnError(True)');
   lines.push('');
-  
-  // User or generated script body
-  lines.push(options.scriptBody);
-  
+
+  if (options.errFilePath) {
+    lines.push('try:');
+    for (const bodyLine of options.scriptBody.split('\n')) {
+      lines.push(bodyLine.length > 0 ? '    ' + bodyLine : '');
+    }
+    lines.push('except Exception as __e:');
+    lines.push(`    __ef = open(to_mbcs(${pyUnicode(options.errFilePath)}), 'w')`);
+    lines.push('    traceback.print_exc(file=__ef)');
+    lines.push('    __ef.close()');
+    lines.push('    sys.exit(102)');
+  } else {
+    lines.push(options.scriptBody);
+  }
+
   return lines.join('\n');
 }
 
 /**
  * Generates a Python 3.12 script for VISUDesigner.exe.
+ * If errorFilePath is provided, exceptions are written to that file instead of
+ * stderr (VISUDesigner is a GUI-subsystem process; stderr is not reliably captured).
  */
 export function generateVisuScript(options: {
   scriptBody: string;
+  errorFilePath?: string;
 }): string {
   const lines: string[] = [];
   lines.push('import sigmatek.lasal.lvd as lvd');
@@ -90,15 +109,17 @@ export function generateVisuScript(options: {
   lines.push('lvd.SetExceptionOnError(True)');
   lines.push('');
 
-  // Wrap the body so any uncaught failure exits with a non-zero code.
-  // That is how the process runner detects failure for VISUDesigner
-  // (its exit-code-on-exception behaviour is not documented like CLASS 2's 102).
   lines.push('try:');
   for (const bodyLine of options.scriptBody.split('\n')) {
     lines.push(bodyLine.length > 0 ? '    ' + bodyLine : '');
   }
   lines.push('except Exception:');
-  lines.push('    traceback.print_exc()');
+  if (options.errorFilePath) {
+    lines.push(`    with open(${pyStr(options.errorFilePath)}, 'w', encoding='utf-8') as __ef:`);
+    lines.push('        traceback.print_exc(file=__ef)');
+  } else {
+    lines.push('    traceback.print_exc()');
+  }
   lines.push('    sys.exit(1)');
 
   return lines.join('\n');
