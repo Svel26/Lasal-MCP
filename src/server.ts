@@ -11,6 +11,8 @@ import {
   closeClass2Schema,
   closeClass2Handler,
 } from "./tools/lasalApps.js";
+import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
+import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
@@ -50,6 +52,20 @@ server.tool(
   "Close LASAL CLASS 2 (kills the process).",
   closeClass2Schema,
   closeClass2Handler
+);
+
+server.tool(
+  "inspect_project",
+  "Parse a LASAL CLASS 2 project (.lcp) and return a complete structural inventory: all classes with their Server/Client channels, all networks with their objects and connections. Use this before making any changes to understand what exists and how things are connected.",
+  inspectProjectSchema,
+  inspectProjectHandler
+);
+
+server.tool(
+  "apply_project_changes",
+  "Apply structural changes to a LASAL CLASS 2 project. Channel operations (add/remove/rename_server, add/remove/rename_client) edit .st files directly and cascade to all .lcn network files automatically. Network operations (create/delete/rename_network, add/remove/rename_object, create/delete_connection, set_init_value, delete_class) run via Lasal2.exe batch script. The IDE is killed before any changes are made.",
+  applyProjectChangesSchema,
+  applyProjectChangesHandler
 );
 
 const transport = new StdioServerTransport();
