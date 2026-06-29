@@ -32,6 +32,7 @@ export function pyStr(s: string): string {
 
 /** Safe Python `unicode` literal: `u"..."`. Use for CLASS 2 (Python 2.7). */
 export function pyUnicode(s: string): string {
+  if (!s) return 'u""';
   return 'u"' + toPyLiteralBody(s) + '"';
 }
 

@@ -289,3 +289,191 @@ function updateRuntimeStations(stationsTxtPath: string, stationName: string, ip:
     console.error(`Failed to update runtime Stations.txt at ${stationsTxtPath}:`, e);
   }
 }
+
+export interface LcpFileInfo {
+  classes: { name: string; relativePath: string; path: string }[];
+  networks: { name: string; relativePath: string; path: string }[];
+}
+
+export function parseLcpFile(lcpPath: string): LcpFileInfo {
+  const content = readLatin1File(lcpPath);
+  const data = parser.parse(content);
+  const projectNode = data.Project;
+  if (!projectNode) {
+    throw new Error(`Invalid LCP file format in: ${lcpPath}`);
+  }
+  const lcpDir = path.dirname(lcpPath);
+
+  const resolveList = (node: any) => {
+    if (!node || !node.File) return [];
+    let list = node.File;
+    if (!Array.isArray(list)) list = [list];
+    return list.map((f: any) => {
+      const relPath = f['@_Path'] || f['@_path'] || '';
+      const name = path.basename(relPath, path.extname(relPath));
+      const absPath = path.resolve(lcpDir, relPath);
+      return { name, relativePath: relPath, path: absPath };
+    }).filter((f: any) => f.relativePath);
+  };
+
+  return {
+    classes: resolveList(projectNode.ClassFiles),
+    networks: resolveList(projectNode.NetworkFiles)
+  };
+}
+
+export interface LcnObjectInfo {
+  name: string;
+  path: string;
+  class: string;
+  position?: string;
+  visualized?: boolean;
+  cyclicTime?: string;
+  backgroundTime?: string;
+  channels: {
+    servers: { name: string; value?: string }[];
+    clients: { name: string; value?: string }[];
+  };
+}
+
+export interface LcnConnectionInfo {
+  source: string;
+  destination: string;
+  vertices?: string;
+  ioObject?: string;
+}
+
+export interface LcnFileInfo {
+  name: string;
+  objects: LcnObjectInfo[];
+  connections: LcnConnectionInfo[];
+}
+
+function collectObjectsRecursive(componentsNode: any, parentPath = ''): LcnObjectInfo[] {
+  if (!componentsNode || !componentsNode.Object) return [];
+  let objects = componentsNode.Object;
+  if (!Array.isArray(objects)) objects = [objects];
+
+  const result: LcnObjectInfo[] = [];
+
+  for (const obj of objects) {
+    const name = obj['@_Name'] || obj['@_name'] || '';
+    if (!name) continue;
+
+    const currentPath = parentPath ? `${parentPath}.${name}` : name;
+    
+    const servers: { name: string; value?: string }[] = [];
+    const clients: { name: string; value?: string }[] = [];
+
+    if (obj.Channels) {
+      if (obj.Channels.Server) {
+        let serverList = obj.Channels.Server;
+        if (!Array.isArray(serverList)) serverList = [serverList];
+        for (const s of serverList) {
+          const sName = s['@_Name'] || s['@_name'] || '';
+          if (sName) {
+            servers.push({
+              name: sName,
+              value: s['@_Value'] || s['@_value']
+            });
+          }
+        }
+      }
+
+      if (obj.Channels.Client) {
+        let clientList = obj.Channels.Client;
+        if (!Array.isArray(clientList)) clientList = [clientList];
+        for (const c of clientList) {
+          const cName = c['@_Name'] || c['@_name'] || '';
+          if (cName) {
+            clients.push({
+              name: cName,
+              value: c['@_Value'] || c['@_value']
+            });
+          }
+        }
+      }
+    }
+
+    result.push({
+      name,
+      path: currentPath,
+      class: obj['@_Class'] || obj['@_class'] || '',
+      position: obj['@_Position'] || obj['@_position'],
+      visualized: obj['@_Visualized'] === 'true' || obj['@_visualized'] === 'true',
+      cyclicTime: obj['@_CyclicTime'] || obj['@_cyclictime'],
+      backgroundTime: obj['@_BackgroundTime'] || obj['@_backgroundtime'],
+      channels: { servers, clients }
+    });
+
+    if (obj.Networks && obj.Networks.Network) {
+      let networks = obj.Networks.Network;
+      if (!Array.isArray(networks)) networks = [networks];
+      for (const net of networks) {
+        if (net.Components) {
+          result.push(...collectObjectsRecursive(net.Components, currentPath));
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+function collectConnectionsRecursive(networkNode: any, parentPath = ''): LcnConnectionInfo[] {
+  const result: LcnConnectionInfo[] = [];
+
+  if (networkNode.Connections && networkNode.Connections.Connection) {
+    let connections = networkNode.Connections.Connection;
+    if (!Array.isArray(connections)) connections = [connections];
+    for (const c of connections) {
+      const source = c['@_Source'] || c['@_source'] || '';
+      const dest = c['@_Destination'] || c['@_destination'] || '';
+      if (source || dest) {
+        result.push({
+          source: parentPath ? `${parentPath}.${source}` : source,
+          destination: parentPath ? `${parentPath}.${dest}` : dest,
+          vertices: c['@_Vertices'] || c['@_vertices'],
+          ioObject: c['@_IOObject'] || c['@_ioobject']
+        });
+      }
+    }
+  }
+
+  if (networkNode.Components && networkNode.Components.Object) {
+    let objects = networkNode.Components.Object;
+    if (!Array.isArray(objects)) objects = [objects];
+    for (const obj of objects) {
+      const name = obj['@_Name'] || obj['@_name'] || '';
+      if (name && obj.Networks && obj.Networks.Network) {
+        const currentPath = parentPath ? `${parentPath}.${name}` : name;
+        let networks = obj.Networks.Network;
+        if (!Array.isArray(networks)) networks = [networks];
+        for (const net of networks) {
+          result.push(...collectConnectionsRecursive(net, currentPath));
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+export function parseLcnFile(lcnPath: string): LcnFileInfo {
+  const content = readLatin1File(lcnPath);
+  const data = parser.parse(content);
+  const networkNode = data.Network;
+  if (!networkNode) {
+    throw new Error(`Invalid LCN file format in: ${lcnPath}`);
+  }
+
+  const name = networkNode['@_Name'] || networkNode['@_name'] || '';
+  const objects = collectObjectsRecursive(networkNode.Components || {});
+  const connections = collectConnectionsRecursive(networkNode);
+
+  return {
+    name,
+    objects,
+    connections
+  };
+}

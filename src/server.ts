@@ -7,12 +7,15 @@ import {
   McpError
 } from '@modelcontextprotocol/sdk/types.js';
 import * as fs from 'fs';
+import * as path from 'path';
 import { discoverToolchain, ToolchainInfo } from './toolchain.js';
 import {
   parseSolution,
   parseStation,
   updateStationConnection,
-  writeLatin1File
+  writeLatin1File,
+  parseLcpFile,
+  parseLcnFile
 } from './xmlHelper.js';
 import {
   generateClass2Script,
@@ -373,6 +376,375 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             timeoutMs: { type: 'integer', default: 300000 }
           },
           required: ['connectionString'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'list_class2_networks',
+        description: 'Get a list of all networks defined in a LASAL Class 2 project (Offline / Synchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' }
+          },
+          required: ['projectPath'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'list_class2_classes',
+        description: 'Get a list of all classes referenced in a LASAL Class 2 project (Offline / Synchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' }
+          },
+          required: ['projectPath'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'list_class2_objects',
+        description: 'Get all objects, their coordinates, visualized status, and channels within a Class 2 network (Offline / Synchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', description: 'Name of the network or absolute path to its .lcn file' }
+          },
+          required: ['projectPath', 'networkName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'list_class2_connections',
+        description: 'Get client-to-server channel connections defined within a Class 2 network (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', description: 'Name of the network or absolute path to its .lcn file' }
+          },
+          required: ['projectPath', 'networkName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'create_class2_object',
+        description: 'Instantiate a class object into a Class 2 network at a specific position (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', description: 'Name of the destination network' },
+            className: { type: 'string', description: 'Name of the class to instantiate' },
+            objectName: { type: 'string', description: 'Name of the new object' },
+            xPos: { type: 'integer', description: 'X-coordinate in network graphic view' },
+            yPos: { type: 'integer', description: 'Y-coordinate in network graphic view' },
+            isVisualized: { type: 'boolean', default: false, description: 'Visualized status flag' }
+          },
+          required: ['projectPath', 'networkName', 'className', 'objectName', 'xPos', 'yPos'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'delete_class2_object',
+        description: 'Delete an object from a Class 2 network (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', description: 'Name of the network' },
+            objectName: { type: 'string', description: 'Name of the object to delete' },
+            deleteConnection: { type: 'boolean', default: true, description: 'Whether to delete its connected lines' }
+          },
+          required: ['projectPath', 'networkName', 'objectName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'create_class2_connection',
+        description: 'Connect a client channel to a server channel in a Class 2 project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            sourceNetwork: { type: 'string', default: '', description: 'Source client network (empty for global search)' },
+            sourceObject: { type: 'string', description: 'Source object name containing the client' },
+            sourceClient: { type: 'string', description: 'Source client channel name' },
+            targetNetwork: { type: 'string', default: '', description: 'Destination server network (empty for global search)' },
+            targetObject: { type: 'string', description: 'Destination object name containing the server' },
+            targetServer: { type: 'string', description: 'Destination server channel name' }
+          },
+          required: ['projectPath', 'sourceObject', 'sourceClient', 'targetObject', 'targetServer'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'delete_class2_connection',
+        description: 'Disconnect a client channel in a Class 2 project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', default: '', description: 'Network containing the object' },
+            objectName: { type: 'string', description: 'Object name containing the client' },
+            clientName: { type: 'string', description: 'Client channel to disconnect' }
+          },
+          required: ['projectPath', 'objectName', 'clientName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'set_class2_init_value',
+        description: 'Set the initial value of an object channel in a Class 2 project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', default: '', description: 'Optional network containing the object' },
+            objectName: { type: 'string', description: 'Name of the object' },
+            channelName: { type: 'string', description: 'Name of the channel' },
+            value: { type: 'string', description: 'Initial value representation' }
+          },
+          required: ['projectPath', 'objectName', 'channelName', 'value'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'set_class2_parameter_value',
+        description: 'Set the parameter value of an object in a Class 2 project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            networkName: { type: 'string', description: 'Name of the network' },
+            objectName: { type: 'string', description: 'Name of the object' },
+            parameterName: { type: 'string', description: 'Name of the parameter' },
+            value: { type: 'string', description: 'New parameter value' }
+          },
+          required: ['projectPath', 'networkName', 'objectName', 'parameterName', 'value'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'create_class2_io_label',
+        description: 'Create an IO label / connection manager element in a Class 2 project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            ioName: { type: 'string', description: 'Name of the IO label' },
+            svrObject: { type: 'string', default: '', description: 'Server object name' },
+            svrChannel: { type: 'string', default: '', description: 'Server channel name' },
+            cltObject: { type: 'string', default: '', description: 'Client object name' },
+            cltChannel: { type: 'string', default: '', description: 'Client channel name' }
+          },
+          required: ['projectPath', 'ioName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'change_class2_io_server',
+        description: 'Change the server connection of matching IO labels in a Class 2 project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp project file' },
+            ioName: { type: 'string', description: 'Name of the IO label' },
+            svrObject: { type: 'string', default: '', description: 'New server object name' },
+            svrChannel: { type: 'string', default: '', description: 'New server channel name' }
+          },
+          required: ['projectPath', 'ioName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'list_visu_stations',
+        description: 'List HMI stations defined in a VISUDesigner HMI project (Offline / Synchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file or VISUDesigner project folder' }
+          },
+          required: ['projectPath'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'list_visu_alarms',
+        description: 'List HMI alarms configured in a VISUDesigner HMI project (Offline / Synchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file or VISUDesigner project folder' }
+          },
+          required: ['projectPath'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'set_visu_station_properties',
+        description: 'Modify settings and connections for HMI stations (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            stationNr: { type: 'integer', description: 'Station ID number' },
+            properties: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'HMI station name' },
+                connection: { type: 'string', description: 'Target setting, e.g. INTERN, LOCAL, GLOBAL, or IP' },
+                importFilePath: { type: 'string', description: 'Relative path to MaeExp.xml' },
+                observe: { type: 'boolean', description: 'Observe online status' },
+                retry: { type: 'string', enum: ['High', 'Medium', 'Standard', 'Low', 'None'] },
+                label: { type: 'string', description: 'Display label' },
+                revision: { type: 'string', description: 'Revision value' },
+                isActive: { type: 'boolean', description: 'Whether the station is active' },
+                isRequired: { type: 'boolean', description: 'Whether the station is required' }
+              },
+              additionalProperties: false,
+              description: 'Key-value properties to update'
+            }
+          },
+          required: ['projectPath', 'stationNr', 'properties'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'add_visu_alarm',
+        description: 'Add an alarm configuration to a VISUDesigner HMI project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            alarmName: { type: 'string', description: 'Unique name of the alarm' },
+            serverOrGroup: { type: 'string', description: 'Alarm server name or group number' },
+            revision: { type: 'string', description: 'Revision string' }
+          },
+          required: ['projectPath', 'alarmName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'remove_visu_alarm',
+        description: 'Remove an alarm from a VISUDesigner HMI project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            alarmName: { type: 'string', description: 'Name of the alarm to remove' }
+          },
+          required: ['projectPath', 'alarmName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'add_visu_text_list',
+        description: 'Add a text list and its text translations to a VISUDesigner HMI project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            textListName: { type: 'string', description: 'Name of the text list to add' },
+            textElements: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', description: 'Text element ID' },
+                  language: { type: 'string', description: 'Optional language code' },
+                  text: { type: 'string', description: 'Optional translation text' }
+                },
+                required: ['name']
+              },
+              description: 'Array of translations'
+            },
+            revision: { type: 'string', description: 'Revision string' }
+          },
+          required: ['projectPath', 'textListName', 'textElements'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'remove_visu_text_list',
+        description: 'Remove a text list from a VISUDesigner HMI project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            textListName: { type: 'string', description: 'Name of the text list to remove' }
+          },
+          required: ['projectPath', 'textListName'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'csv_export_visu_texts',
+        description: 'Export HMI text lists to a CSV file (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            filePath: { type: 'string', description: 'Path to export the CSV file' },
+            textLists: { type: 'array', items: { type: 'string' }, description: 'Optional list of text list names' },
+            languages: { type: 'array', items: { type: 'string' }, description: 'Optional list of language names' }
+          },
+          required: ['projectPath', 'filePath'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'csv_import_visu_texts',
+        description: 'Import HMI text lists from CSV files (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            filePaths: { type: 'array', items: { type: 'string' }, description: 'List of CSV file paths to import' },
+            textLists: { type: 'array', items: { type: 'string' }, description: 'Optional list of text list names' },
+            languages: { type: 'array', items: { type: 'string' }, description: 'Optional list of language names' }
+          },
+          required: ['projectPath', 'filePaths'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'add_visu_languages',
+        description: 'Configure and add languages to a VISUDesigner HMI project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            languages: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  langCode: { type: 'string', description: 'Language code' },
+                  property: { type: 'string', description: 'Optional property name' },
+                  value: { type: 'string', description: 'Optional value' }
+                },
+                required: ['langCode']
+              },
+              description: 'Array of language objects'
+            }
+          },
+          required: ['projectPath', 'languages'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'remove_visu_languages',
+        description: 'Remove languages from a VISUDesigner HMI project (Asynchronous).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lvp file' },
+            languages: { type: 'array', items: { type: 'string' }, description: 'List of language codes to remove' }
+          },
+          required: ['projectPath', 'languages'],
           additionalProperties: false
         }
       }
@@ -1103,6 +1475,663 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
 
+      // OFFLINE Class 2 Query Tools
+      case 'list_class2_networks': {
+        const projectPath = args.projectPath as string;
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file not found: ${projectPath}`] }) }] };
+        }
+        const result = parseLcpFile(projectPath);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: result.networks }) }] };
+      }
+
+      case 'list_class2_classes': {
+        const projectPath = args.projectPath as string;
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file not found: ${projectPath}`] }) }] };
+        }
+        const result = parseLcpFile(projectPath);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: result.classes }) }] };
+      }
+
+      case 'list_class2_objects': {
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string;
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file not found: ${projectPath}`] }) }] };
+        }
+        try {
+          const networkPath = resolveNetworkPath(projectPath, networkName);
+          const result = parseLcnFile(networkPath);
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: result.objects }) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [e.message] }) }] };
+        }
+      }
+
+      case 'list_class2_connections': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string;
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file not found: ${projectPath}`] }) }] };
+        }
+
+        try {
+          const networkPath = resolveNetworkPath(projectPath, networkName);
+          const lcnInfo = parseLcnFile(networkPath);
+
+          // Collect all client channels, mapping inherited channels from base classes (_base) to the top-level objects,
+          // and excluding nested composed objects to prevent GetClientConnection C++ reflection engine crashes.
+          const queryMap = new Map<string, Set<string>>();
+          for (const obj of lcnInfo.objects) {
+            const parts = obj.path.split('.');
+            const topLevelName = parts[0];
+            const isBase = parts.slice(1).every(part => part === '_base');
+            if (isBase) {
+              if (!queryMap.has(topLevelName)) {
+                queryMap.set(topLevelName, new Set<string>());
+              }
+              const clientSet = queryMap.get(topLevelName)!;
+              for (const clt of obj.channels.clients) {
+                clientSet.add(clt.name);
+              }
+            }
+          }
+
+          const queries: { objPath: string; clientName: string }[] = [];
+          for (const [topLevelName, clients] of queryMap.entries()) {
+            for (const clientName of clients) {
+              queries.push({
+                objPath: topLevelName,
+                clientName
+              });
+            }
+          }
+
+          if (queries.length === 0) {
+            return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: [] }) }] };
+          }
+
+          const inputJsonPath = getTempFilePath('queries-in', '.json');
+          const outputJsonPath = getTempFilePath('queries-out', '.json');
+          fs.writeFileSync(inputJsonPath, JSON.stringify(queries), 'utf8');
+
+          let scriptContent = '';
+          scriptContent += `import json\n`;
+          scriptContent += `import traceback\n`;
+          scriptContent += `input_path = to_mbcs(${pyUnicode(inputJsonPath)})\n`;
+          scriptContent += `output_path = to_mbcs(${pyUnicode(outputJsonPath)})\n`;
+          scriptContent += `project_path = to_mbcs(${pyUnicode(projectPath)})\n`;
+          scriptContent += `network_name = to_mbcs(${pyUnicode(networkName)})\n`;
+          scriptContent += `try:\n`;
+          scriptContent += `    with open(input_path, 'r') as f:\n`;
+          scriptContent += `        queries = json.load(f)\n`;
+          scriptContent += `    prj = batch.LoadProject(project_path)\n`;
+          scriptContent += `    results = []\n`;
+          scriptContent += `    for q in queries:\n`;
+          scriptContent += `        obj_path = to_mbcs(q['objPath'])\n`;
+          scriptContent += `        client_name = to_mbcs(q['clientName'])\n`;
+          scriptContent += `        try:\n`;
+          scriptContent += `            conn = batch.GetClientConnection(prj, obj_path, client_name, network_name)\n`;
+          scriptContent += `            if conn:\n`;
+          scriptContent += `                src_path = obj_path.replace('\\\\', '.') + '.' + client_name\n`;
+          scriptContent += `                dest_path = conn.replace('\\\\', '.')\n`;
+          scriptContent += `                results.append({'source': src_path, 'destination': dest_path})\n`;
+          scriptContent += `        except Exception as inner_e:\n`;
+          scriptContent += `            pass\n`;
+          scriptContent += `    batch.CloseProject(prj)\n`;
+          scriptContent += `    with open(output_path, 'w') as f:\n`;
+          scriptContent += `        json.dump(results, f)\n`;
+          scriptContent += `except Exception as e:\n`;
+          scriptContent += `    with open(output_path + '.err', 'w') as f:\n`;
+          scriptContent += `        traceback.print_exc(file=f)\n`;
+
+          const logPath = getTempFilePath('list-conn', '.log');
+          const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+          const scriptPath = getTempFilePath('list-conn', '.py');
+          writeLatin1File(scriptPath, scriptBody);
+
+          const dataExtractor = (result: any) => {
+            try {
+              const errPath = outputJsonPath + '.err';
+              if (fs.existsSync(errPath)) {
+                const errMsg = fs.readFileSync(errPath, 'utf8');
+                try { fs.unlinkSync(errPath); } catch {}
+                try { fs.unlinkSync(inputJsonPath); } catch {}
+                throw new Error(`Python execution error:\n${errMsg}`);
+              }
+              if (fs.existsSync(outputJsonPath)) {
+                const content = fs.readFileSync(outputJsonPath, 'utf8');
+                const parsed = JSON.parse(content);
+                // clean up
+                if (fs.existsSync(inputJsonPath)) fs.unlinkSync(inputJsonPath);
+                if (fs.existsSync(outputJsonPath)) fs.unlinkSync(outputJsonPath);
+                return parsed;
+              }
+            } catch (e: any) {
+              console.error('Failed to read connections query output:', e);
+              throw e;
+            } finally {
+              if (fs.existsSync(inputJsonPath)) {
+                try { fs.unlinkSync(inputJsonPath); } catch {}
+              }
+            }
+            return [];
+          };
+
+          const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+          kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], {
+            logPath,
+            teardownBefore: 'class2',
+            timeoutMs: TIMEOUT.medium,
+            dataExtractor
+          });
+
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [e.message] }) }] };
+        }
+      }
+
+      // ASYNC Class 2 Modification Tools
+      case 'create_class2_object': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string;
+        const className = args.className as string;
+        const objectName = args.objectName as string;
+        const xPos = args.xPos as number;
+        const yPos = args.yPos as number;
+        const isVisualized = args.isVisualized as boolean || false;
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.CreateObject(prj, to_mbcs(${pyUnicode(networkName)}), to_mbcs(${pyUnicode(className)}), to_mbcs(${pyUnicode(objectName)}), ${xPos}, ${yPos}, ${isVisualized ? 'True' : 'False'})\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('create-obj', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('create-obj', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'delete_class2_object': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string;
+        const objectName = args.objectName as string;
+        const deleteConnection = args.deleteConnection !== undefined ? (args.deleteConnection as boolean) : true;
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.DeleteObject(prj, to_mbcs(${pyUnicode(networkName)}), to_mbcs(${pyUnicode(objectName)}), ${deleteConnection ? 'True' : 'False'})\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('delete-obj', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('delete-obj', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'create_class2_connection': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const sourceNetwork = args.sourceNetwork as string || '';
+        const sourceObject = args.sourceObject as string;
+        const sourceClient = args.sourceClient as string;
+        const targetNetwork = args.targetNetwork as string || '';
+        const targetObject = args.targetObject as string;
+        const targetServer = args.targetServer as string;
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.CreateConnection(prj, to_mbcs(${pyUnicode(sourceNetwork)}), to_mbcs(${pyUnicode(sourceObject)}), to_mbcs(${pyUnicode(sourceClient)}), to_mbcs(${pyUnicode(targetNetwork)}), to_mbcs(${pyUnicode(targetObject)}), to_mbcs(${pyUnicode(targetServer)}))\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('create-conn', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('create-conn', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'delete_class2_connection': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string || '';
+        const objectName = args.objectName as string;
+        const clientName = args.clientName as string;
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.DeleteConnection(prj, to_mbcs(${pyUnicode(networkName)}), to_mbcs(${pyUnicode(objectName)}), to_mbcs(${pyUnicode(clientName)}))\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('delete-conn', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('delete-conn', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'set_class2_init_value': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string || '';
+        const objectName = args.objectName as string;
+        const channelName = args.channelName as string;
+        const value = args.value as string;
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.SetInitValue(prj, to_mbcs(${pyUnicode(networkName)}), to_mbcs(${pyUnicode(objectName)}), to_mbcs(${pyUnicode(channelName)}), to_mbcs(${pyUnicode(value)}))\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('init-val', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('init-val', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'set_class2_parameter_value': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const networkName = args.networkName as string;
+        const objectName = args.objectName as string;
+        const parameterName = args.parameterName as string;
+        const value = args.value as string;
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.SetParameterValue(prj, to_mbcs(${pyUnicode(networkName)}), to_mbcs(${pyUnicode(objectName)}), to_mbcs(${pyUnicode(parameterName)}), to_mbcs(${pyUnicode(value)}))\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('param-val', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('param-val', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'create_class2_io_label': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const ioName = args.ioName as string;
+        const svrObject = args.svrObject as string || '';
+        const svrChannel = args.svrChannel as string || '';
+        const cltObject = args.cltObject as string || '';
+        const cltChannel = args.cltChannel as string || '';
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.CreateLabel(prj, to_mbcs(${pyUnicode(ioName)}), to_mbcs(${pyUnicode(svrObject)}), to_mbcs(${pyUnicode(svrChannel)}), to_mbcs(${pyUnicode(cltObject)}), to_mbcs(${pyUnicode(cltChannel)}))\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('create-label', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('create-label', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'change_class2_io_server': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const ioName = args.ioName as string;
+        const svrObject = args.svrObject as string || '';
+        const svrChannel = args.svrChannel as string || '';
+
+        let scriptContent = `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `batch.ChangeIOServer(prj, to_mbcs(${pyUnicode(ioName)}), to_mbcs(${pyUnicode(svrObject)}), to_mbcs(${pyUnicode(svrChannel)}))\n`;
+        scriptContent += `batch.Save(prj)\n`;
+        scriptContent += `batch.CloseProject(prj)\n`;
+
+        const logPath = getTempFilePath('change-label', '.log');
+        const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('change-label', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      // OFFLINE VISUDesigner Query Tools
+      case 'list_visu_stations': {
+        const projectPath = args.projectPath as string;
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file/folder not found: ${projectPath}`] }) }] };
+        }
+        try {
+          const dir = getVisuProjectDir(projectPath);
+          const stationsJsonPath = path.join(dir, 'Stations', 'Stations.json');
+          if (!fs.existsSync(stationsJsonPath)) {
+            return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: [] }) }] };
+          }
+          const content = fs.readFileSync(stationsJsonPath, 'latin1');
+          const data = JSON.parse(content);
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: data.stations || [] }) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [e.message] }) }] };
+        }
+      }
+
+      case 'list_visu_alarms': {
+        const projectPath = args.projectPath as string;
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Project file/folder not found: ${projectPath}`] }) }] };
+        }
+        try {
+          const dir = getVisuProjectDir(projectPath);
+          const alarmJsonPath = path.join(dir, 'Alarms', 'Alarm.json');
+          if (!fs.existsSync(alarmJsonPath)) {
+            return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: [] }) }] };
+          }
+          const content = fs.readFileSync(alarmJsonPath, 'latin1');
+          const data = JSON.parse(content);
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, data: data }) }] };
+        } catch (e: any) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [e.message] }) }] };
+        }
+      }
+
+      // ASYNC VISUDesigner Modification Tools
+      case 'set_visu_station_properties': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const stationNr = args.stationNr as number;
+        const properties = args.properties as any;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        const propSets: string[] = [];
+        if (properties.name !== undefined) propSets.push(`lvd.Station.NameSet(${stationNr}, ${pyStr(properties.name)})`);
+        if (properties.connection !== undefined) propSets.push(`lvd.Station.ConnectionSet(${stationNr}, ${pyStr(properties.connection)})`);
+        if (properties.importFilePath !== undefined) propSets.push(`lvd.Station.ImportPathSet(${stationNr}, ${pyStr(properties.importFilePath)})`);
+        if (properties.observe !== undefined) propSets.push(`lvd.Station.ObserveSet(${stationNr}, ${properties.observe ? 'True' : 'False'})`);
+        if (properties.retry !== undefined) propSets.push(`lvd.Station.RetrySet(${stationNr}, ${pyStr(properties.retry)})`);
+        if (properties.label !== undefined) propSets.push(`lvd.Station.LabelSet(${stationNr}, ${pyStr(properties.label)})`);
+        if (properties.revision !== undefined) propSets.push(`lvd.Station.RevisionSet(${stationNr}, ${pyStr(properties.revision)})`);
+        if (properties.isActive !== undefined) propSets.push(`lvd.Station.ActiveSet(${stationNr}, ${properties.isActive ? 'True' : 'False'})`);
+        if (properties.isRequired !== undefined) propSets.push(`lvd.Station.RequiredSet(${stationNr}, ${properties.isRequired ? 'True' : 'False'})`);
+
+        if (propSets.length > 0) {
+          scriptContent += `lvd.SetStationProperties(prj, [${propSets.join(', ')}])\n`;
+          scriptContent += `lvd.SaveProject(prj)\n`;
+        }
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('set-visu-prop', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'add_visu_alarm': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const alarmName = args.alarmName as string;
+        const serverOrGroup = args.serverOrGroup as string | number | undefined;
+        const revision = args.revision as string | undefined;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        let groupVal = 'None';
+        if (serverOrGroup !== undefined) {
+          groupVal = typeof serverOrGroup === 'number' ? `${serverOrGroup}` : pyStr(serverOrGroup);
+        }
+        const revVal = revision !== undefined ? pyStr(revision) : 'None';
+        scriptContent += `lvd.AddAlarms(prj, lvd.Alarm(${pyStr(alarmName)}, ${groupVal}, ${revVal}))\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('add-alarm', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'remove_visu_alarm': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const alarmName = args.alarmName as string;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        scriptContent += `lvd.RemoveAlarms(prj, ${pyStr(alarmName)})\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('rem-alarm', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'add_visu_text_list': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const textListName = args.textListName as string;
+        const textElements = args.textElements as any[];
+        const revision = args.revision as string | undefined;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        const elList = textElements.map((el: any) => {
+          const lang = el.language !== undefined ? pyStr(el.language) : 'None';
+          const text = el.text !== undefined ? pyStr(el.text) : 'None';
+          return `lvd.TextElement(${pyStr(el.name)}, ${lang}, ${text})`;
+        });
+        const rev = revision !== undefined ? pyStr(revision) : 'None';
+        scriptContent += `lvd.AddTextLists(prj, lvd.TextList(${pyStr(textListName)}, [${elList.join(', ')}], ${rev}))\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('add-txt-list', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'remove_visu_text_list': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const textListName = args.textListName as string;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        scriptContent += `lvd.RemoveTextLists(prj, ${pyStr(textListName)})\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('rem-txt-list', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'csv_export_visu_texts': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const filePath = args.filePath as string;
+        const textLists = args.textLists as string[] | undefined;
+        const languages = args.languages as string[] | undefined;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        const tLists = textLists !== undefined ? `[${textLists.map(pyStr).join(', ')}]` : 'None';
+        const lList = languages !== undefined ? `[${languages.map(pyStr).join(', ')}]` : 'None';
+        scriptContent += `lvd.CsvExportTextLists(prj, ${pyStr(filePath)}, ${tLists}, ${lList})\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('csv-exp-visu', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'csv_import_visu_texts': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const filePaths = args.filePaths as any;
+        const textLists = args.textLists as string[] | undefined;
+        const languages = args.languages as string[] | undefined;
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        const fList = Array.isArray(filePaths) ? `[${filePaths.map(pyStr).join(', ')}]` : pyStr(filePaths);
+        const tLists = textLists !== undefined ? `[${textLists.map(pyStr).join(', ')}]` : 'None';
+        const lList = languages !== undefined ? `[${languages.map(pyStr).join(', ')}]` : 'None';
+        scriptContent += `lvd.CsvImportTextLists(prj, ${fList}, ${tLists}, ${lList})\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('csv-imp-visu', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'add_visu_languages': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const languages = args.languages as any[];
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        const langArgs = languages.map((l: any) => {
+          if (typeof l === 'string') {
+            return pyStr(l);
+          } else {
+            const prop = l.property !== undefined ? pyStr(l.property) : 'None';
+            const val = l.value !== undefined ? pyStr(l.value) : 'None';
+            return `lvd.Language(${pyStr(l.langCode)}, ${prop}, ${val})`;
+          }
+        });
+        scriptContent += `lvd.AddLanguages(prj, [${langArgs.join(', ')}])\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('add-lang', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'remove_visu_languages': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string;
+        const languages = args.languages as string[];
+
+        let scriptContent = `prj = lvd.LoadProject(${pyStr(projectPath)})\n`;
+        scriptContent += `lvd.RemoveLanguages(prj, [${languages.map(pyStr).join(', ')}])\n`;
+        scriptContent += `lvd.SaveProject(prj)\n`;
+        scriptContent += `lvd.CloseProject(prj)\n`;
+
+        const scriptBody = generateVisuScript({ scriptBody: scriptContent });
+        const scriptPath = getTempFilePath('rem-lang', '.py');
+        writeLatin1File(scriptPath, scriptBody);
+
+        const jobId = createJob('visudesigner', `VISUDesigner.exe --script ${scriptPath}`);
+        kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
       default:
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
@@ -1113,6 +2142,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
+
+function resolveNetworkPath(projectPath: string, networkName: string): string {
+  if (fs.existsSync(networkName) && networkName.toLowerCase().endsWith('.lcn')) {
+    return networkName;
+  }
+  const lcpInfo = parseLcpFile(projectPath);
+  const matched = lcpInfo.networks.find(
+    n => n.name.toLowerCase() === networkName.toLowerCase() ||
+         n.relativePath.toLowerCase().includes(networkName.toLowerCase())
+  );
+  if (!matched) {
+    throw new Error(`Network '${networkName}' not found in project: ${projectPath}`);
+  }
+  return matched.path;
+}
+
+function getVisuProjectDir(projectPath: string): string {
+  if (fs.statSync(projectPath).isDirectory()) {
+    return projectPath;
+  }
+  return path.dirname(projectPath);
+}
 
 // Main startup function
 async function main() {
