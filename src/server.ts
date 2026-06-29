@@ -20,6 +20,10 @@ import {
   readPlcValuesSchema, readPlcValuesHandler,
   writePlcValuesSchema, writePlcValuesHandler,
 } from "./tools/plcControl.js";
+import {
+  applyVisuChangesSchema, applyVisuChangesHandler,
+  downloadVisuProjectSchema, downloadVisuProjectHandler,
+} from "./tools/visuControl.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
@@ -108,6 +112,25 @@ server.tool(
   "Write values to channels on a running PLC. Opens a connection, writes all values, then closes the connection. Each channel is specified as 'ObjectName.ChannelName'.",
   writePlcValuesSchema,
   writePlcValuesHandler
+);
+
+server.tool(
+  "apply_visu_changes",
+  "Apply changes to a VISUDesigner (.lvp) project using the headless VISUDesigner API. " +
+    "Kills any running VISUDesigner first, runs the operations as a Python 3.12 script, then saves and closes. " +
+    "Supports: update_all_stations, text list/text management (add/remove/change), CSV import/export for translations, " +
+    "datapoint/datatype property editing, scheme management (add/remove/configure entries), " +
+    "media items (images, video, audio, docs, fonts), code modules, and HMI download. " +
+    "The 'update_all_stations' operation should be run after CLASS 2 channel changes to sync datapoints into the VISUDesigner project.",
+  applyVisuChangesSchema,
+  applyVisuChangesHandler
+);
+
+server.tool(
+  "download_visu_project",
+  "Download a VISUDesigner (.lvp) project to an HMI device. Does not save the project — use apply_visu_changes with a 'download' operation if you need to make changes and deploy in one step.",
+  downloadVisuProjectSchema,
+  downloadVisuProjectHandler
 );
 
 const transport = new StdioServerTransport();
