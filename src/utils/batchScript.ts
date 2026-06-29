@@ -47,12 +47,12 @@ function killClass2() {
 }
 
 function emitPy27String(s: string): string {
-  // Produce a Python 2.7 unicode literal safe for mbcs encoding
-  return `u"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  // Produce a Python 2.7 string expression encoded with mbcs to match C++ ATL::CStringT expectations
+  return `u"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}".encode('mbcs')`;
 }
 
 function emitPath(p: string): string {
-  return `${emitPy27String(p)}.encode('mbcs')`;
+  return emitPy27String(p);
 }
 
 /** Build the body of a batch.py Python 2.7 script from a list of operations. */
