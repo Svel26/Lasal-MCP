@@ -167,6 +167,97 @@ const DeleteClassOp = z.object({
   force: z.boolean().optional().default(false),
 });
 
+const CompileOp = z.object({
+  type: z.literal("compile"),
+  options: z.enum(["RebuildAll", "BuildChanges", "UserClassesOnly", "NoDebugInfo"])
+    .optional().default("RebuildAll")
+    .describe("Compile mode. RebuildAll is safest. BuildChanges is faster for incremental work."),
+});
+
+const DownloadOp = z.object({
+  type: z.literal("download"),
+  connection: z.string().optional()
+    .describe("Connection string (e.g. 'TCPIP:192.168.1.100') or address-book name. Omit to use the project's saved connection."),
+  add_loader_anyway: z.boolean().optional().default(false),
+});
+
+const SetTaskOrderOp = z.object({
+  type: z.literal("set_task_order"),
+  network: z.string(),
+  objectName: z.string(),
+  task: z.enum(["realtime", "cyclicwork", "background"]),
+  position: z.number().int().describe("New task execution position (1-based)."),
+});
+
+const SetTaskTimeOp = z.object({
+  type: z.literal("set_task_time"),
+  network: z.string(),
+  objectName: z.string(),
+  task: z.enum(["realtime", "cyclicwork", "background"]),
+  time: z.string().describe("Task cycle time as a string, e.g. '10ms', '1s'."),
+});
+
+const SetTaskCpuCoreOp = z.object({
+  type: z.literal("set_task_cpu_core"),
+  network: z.string(),
+  objectName: z.string(),
+  task: z.enum(["realtime", "cyclicwork"]),
+  core: z.number().int().describe("CPU core index (0-based)."),
+});
+
+const SetMultiCpuCoreOp = z.object({
+  type: z.literal("set_multi_cpu_core"),
+  multiCore: z.boolean().describe("Enable or disable multi-core CPU usage for the project."),
+});
+
+const SetVisualizedFlagOp = z.object({
+  type: z.literal("set_visualized_flag"),
+  network: z.string(),
+  objectName: z.string(),
+  isVisualized: z.boolean(),
+});
+
+const SetCommentNetworkOp = z.object({
+  type: z.literal("set_comment_network"),
+  network: z.string(),
+  comment: z.string(),
+});
+
+const SetCommentObjectOp = z.object({
+  type: z.literal("set_comment_object"),
+  network: z.string(),
+  objectName: z.string(),
+  comment: z.string(),
+});
+
+const SetNetworkOptionsOp = z.object({
+  type: z.literal("set_network_options"),
+  network: z.string(),
+  optionNames: z.array(z.string()).describe("Option names to enable on the network."),
+  resetAllOthers: z.boolean().optional().default(false)
+    .describe("If true, disable all options not listed in optionNames."),
+});
+
+const ResetNetworkOptionsOp = z.object({
+  type: z.literal("reset_network_options"),
+  network: z.string(),
+  optionNames: z.array(z.string()).describe("Option names to disable on the network."),
+});
+
+const MoveNetworkToFolderOp = z.object({
+  type: z.literal("move_network_to_folder"),
+  network: z.string(),
+  folder: z.string().describe("Folder path, e.g. 'Group/SubGroup'. Created automatically if it does not exist."),
+});
+
+const SetParameterValueOp = z.object({
+  type: z.literal("set_parameter_value"),
+  network: z.string(),
+  objectName: z.string(),
+  parameterName: z.string(),
+  value: z.string(),
+});
+
 const AddVariableOp = z.object({
   type: z.literal("add_variable"),
   className: z.string(),
@@ -228,6 +319,13 @@ const OperationSchema = z.discriminatedUnion("type", [
   AddObjectOp, RemoveObjectOp, RenameObjectOp, ChangeObjectClassOp,
   CreateConnectionOp, DeleteConnectionOp, SetInitValueOp,
   DeleteClassOp,
+  CompileOp, DownloadOp,
+  SetTaskOrderOp, SetTaskTimeOp, SetTaskCpuCoreOp, SetMultiCpuCoreOp,
+  SetVisualizedFlagOp,
+  SetCommentNetworkOp, SetCommentObjectOp,
+  SetNetworkOptionsOp, ResetNetworkOptionsOp,
+  MoveNetworkToFolderOp,
+  SetParameterValueOp,
 ]);
 
 type Operation = z.infer<typeof OperationSchema>;
@@ -564,6 +662,71 @@ export async function applyProjectChangesHandler(args: {
         case "delete_class":
           batchOps.push({ type: "delete_class", className: op.className, force: op.force });
           results.push({ op: `delete_class(${op.className})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "compile":
+          batchOps.push({ type: "compile", optionName: op.options });
+          results.push({ op: `compile(${op.options})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "download":
+          batchOps.push({ type: "download", connection: op.connection ?? "", addLoaderAnyway: op.add_loader_anyway });
+          results.push({ op: `download(${op.connection ?? "project connection"})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_task_order":
+          batchOps.push({ type: "set_task_order", network: op.network, objectName: op.objectName, task: op.task, position: op.position });
+          results.push({ op: `set_task_order(${op.objectName}.${op.task}=${op.position})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_task_time":
+          batchOps.push({ type: "set_task_time", network: op.network, objectName: op.objectName, task: op.task, time: op.time });
+          results.push({ op: `set_task_time(${op.objectName}.${op.task}=${op.time})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_task_cpu_core":
+          batchOps.push({ type: "set_task_cpu_core", network: op.network, objectName: op.objectName, task: op.task, core: op.core });
+          results.push({ op: `set_task_cpu_core(${op.objectName}.${op.task}=core${op.core})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_multi_cpu_core":
+          batchOps.push({ type: "set_multi_cpu_core", multiCore: op.multiCore });
+          results.push({ op: `set_multi_cpu_core(${op.multiCore})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_visualized_flag":
+          batchOps.push({ type: "set_visualized_flag", network: op.network, objectName: op.objectName, isVisualized: op.isVisualized });
+          results.push({ op: `set_visualized_flag(${op.objectName}=${op.isVisualized})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_comment_network":
+          batchOps.push({ type: "set_comment_network", network: op.network, comment: op.comment });
+          results.push({ op: `set_comment_network(${op.network})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_comment_object":
+          batchOps.push({ type: "set_comment_object", network: op.network, objectName: op.objectName, comment: op.comment });
+          results.push({ op: `set_comment_object(${op.objectName})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_network_options":
+          batchOps.push({ type: "set_network_options", network: op.network, optionNames: op.optionNames, resetAllOthers: op.resetAllOthers });
+          results.push({ op: `set_network_options(${op.network}, [${op.optionNames.join(",")}])`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "reset_network_options":
+          batchOps.push({ type: "reset_network_options", network: op.network, optionNames: op.optionNames });
+          results.push({ op: `reset_network_options(${op.network}, [${op.optionNames.join(",")}])`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "move_network_to_folder":
+          batchOps.push({ type: "move_network_to_folder", network: op.network, folder: op.folder });
+          results.push({ op: `move_network_to_folder(${op.network} → ${op.folder})`, ok: true, message: "Queued for batch" });
+          break;
+
+        case "set_parameter_value":
+          batchOps.push({ type: "set_parameter_value", network: op.network, objectName: op.objectName, parameterName: op.parameterName, value: op.value });
+          results.push({ op: `set_parameter_value(${op.objectName}.${op.parameterName}=${op.value})`, ok: true, message: "Queued for batch" });
           break;
       }
     } catch (e: any) {

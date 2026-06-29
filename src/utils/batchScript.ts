@@ -33,6 +33,19 @@ export interface BatchOp {
     | "delete_connection"
     | "set_init_value"
     | "delete_class"
+    | "compile"
+    | "download"
+    | "set_task_order"
+    | "set_task_time"
+    | "set_task_cpu_core"
+    | "set_multi_cpu_core"
+    | "set_visualized_flag"
+    | "set_comment_network"
+    | "set_comment_object"
+    | "set_network_options"
+    | "reset_network_options"
+    | "move_network_to_folder"
+    | "set_parameter_value"
     | "save";
   // per-op params (typed loosely, validated by the tool layer)
   [key: string]: unknown;
@@ -46,13 +59,17 @@ function killClass2() {
   try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* not running */ }
 }
 
-function emitPy27String(s: string): string {
+export function emitPy27String(s: string): string {
   // Produce a Python 2.7 string expression encoded with mbcs to match C++ ATL::CStringT expectations
   return `u"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}".encode('mbcs')`;
 }
 
-function emitPath(p: string): string {
+export function emitPath(p: string): string {
   return emitPy27String(p);
+}
+
+function emitPy27StringList(arr: string[]): string {
+  return `[${arr.map(emitPy27String).join(", ")}]`;
 }
 
 /** Build the body of a batch.py Python 2.7 script from a list of operations. */
@@ -150,6 +167,83 @@ export function buildBatchScript(lcpPath: string, ops: BatchOp[], logPath: strin
           `batch.DeleteClass(prj, ${emitPy27String(op.className as string)}, ${op.force ? "True" : "False"})`
         );
         break;
+
+      case "compile": {
+        const optName = (op.optionName as string | undefined) ?? "RebuildAll";
+        lines.push(`batch.Compile(prj, batch.CompileOptions.${optName})`);
+        break;
+      }
+
+      case "download":
+        lines.push(
+          `batch.Download(prj, ${emitPy27String((op.connection as string | undefined) ?? "")}, ${op.addLoaderAnyway ? "True" : "False"}, False)`
+        );
+        break;
+
+      case "set_task_order":
+        lines.push(
+          `batch.SetTaskOrder(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.task as string)}, ${emitPy27String(String(op.position))})`
+        );
+        break;
+
+      case "set_task_time":
+        lines.push(
+          `batch.SetTaskTime(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.task as string)}, ${emitPy27String(op.time as string)})`
+        );
+        break;
+
+      case "set_task_cpu_core":
+        lines.push(
+          `batch.SetTaskCPUCore(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.task as string)}, ${Number(op.core)})`
+        );
+        break;
+
+      case "set_multi_cpu_core":
+        lines.push(`batch.SetMultiCPUCore(prj, ${op.multiCore ? "True" : "False"})`);
+        break;
+
+      case "set_visualized_flag":
+        lines.push(
+          `batch.SetVisualizedFlag(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${op.isVisualized ? "True" : "False"})`
+        );
+        break;
+
+      case "set_comment_network":
+        lines.push(
+          `batch.SetCommentNetwork(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.comment as string)})`
+        );
+        break;
+
+      case "set_comment_object":
+        lines.push(
+          `batch.SetCommentObject(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.comment as string)})`
+        );
+        break;
+
+      case "set_network_options":
+        lines.push(
+          `batch.SetNetworkOptions(prj, ${emitPy27String(op.network as string)}, ${emitPy27StringList(op.optionNames as string[])}, ${op.resetAllOthers ? "True" : "False"})`
+        );
+        break;
+
+      case "reset_network_options":
+        lines.push(
+          `batch.ResetNetworkOptions(prj, ${emitPy27String(op.network as string)}, ${emitPy27StringList(op.optionNames as string[])})`
+        );
+        break;
+
+      case "move_network_to_folder":
+        lines.push(
+          `batch.MoveNetworkToFolder(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.folder as string)})`
+        );
+        break;
+
+      case "set_parameter_value":
+        lines.push(
+          `batch.SetParameterValue(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.parameterName as string)}, ${emitPy27String(op.value as string)})`
+        );
+        break;
+
       case "save":
         // explicit save
         break;
@@ -158,6 +252,51 @@ export function buildBatchScript(lcpPath: string, ops: BatchOp[], logPath: strin
 
   lines.push("", "batch.Save(prj)", "batch.CloseProject(prj)");
   return lines.join("\n") + "\n";
+}
+
+/** Run an arbitrary pre-built Python 2.7 script against Lasal2.exe without killing the IDE first. */
+export function runScript(
+  script: string,
+  logPath: string,
+  timeoutMs = 120_000
+): BatchResult {
+  ensureScratch();
+  const id = randomUUID();
+  const scriptPath = join(SCRATCH, `${id}.py`);
+  writeFileSync(scriptPath, script, "utf-8");
+
+  const command = `"${CLASS2_EXE}" /script:"${scriptPath}"`;
+  const start = Date.now();
+  let exitCode = 0;
+
+  try {
+    execFileSync(CLASS2_EXE, [`/script:${scriptPath}`], {
+      timeout: timeoutMs,
+      stdio: "pipe",
+      windowsHide: true,
+    });
+  } catch (e: any) {
+    exitCode = e.status ?? 1;
+    try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* ignore */ }
+  }
+
+  const durationMs = Date.now() - start;
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (existsSync(logPath)) {
+    const log = readFileSync(logPath, "utf-8");
+    for (const line of log.split("\n")) {
+      if (line.includes("(ERROR)") || line.includes("(FATAL)")) errors.push(line.trim());
+      else if (line.includes("(WARN)")) warnings.push(line.trim());
+    }
+  }
+
+  if (exitCode !== 0 && errors.length === 0) {
+    errors.push(`Lasal2.exe exited with code ${exitCode}`);
+  }
+
+  return { ok: exitCode === 0 && errors.length === 0, exitCode, logPath, errors, warnings, durationMs, command };
 }
 
 export function runBatchOps(

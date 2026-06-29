@@ -13,6 +13,13 @@ import {
 } from "./tools/lasalApps.js";
 import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
+import {
+  compileProjSchema, compileProjHandler,
+  downloadProjSchema, downloadProjHandler,
+  getPlcStateSchema, getPlcStateHandler,
+  readPlcValuesSchema, readPlcValuesHandler,
+  writePlcValuesSchema, writePlcValuesHandler,
+} from "./tools/plcControl.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
@@ -66,6 +73,41 @@ server.tool(
   "Apply structural changes to a LASAL CLASS 2 project. Channel operations (add/remove/rename_server, add/remove/rename_client) edit .st files directly and cascade to all .lcn network files automatically. Network operations (create/delete/rename_network, add/remove/rename_object, create/delete_connection, set_init_value, delete_class) run via Lasal2.exe batch script. The IDE is killed before any changes are made.",
   applyProjectChangesSchema,
   applyProjectChangesHandler
+);
+
+server.tool(
+  "compile_project",
+  "Compile the active LASAL CLASS 2 project. Kills any open CLASS 2 instance first. Returns compiler errors and warnings from the log.",
+  compileProjSchema,
+  compileProjHandler
+);
+
+server.tool(
+  "download_project",
+  "Download the compiled CLASS 2 project to a PLC over the Sigmatek online protocol (TCP port 1954). Uses the project's saved connection if none is specified.",
+  downloadProjSchema,
+  downloadProjHandler
+);
+
+server.tool(
+  "get_plc_state",
+  "Query the runtime state of a PLC (e.g. Running, Stopped, Offline). Uses the project's saved connection if none is specified.",
+  getPlcStateSchema,
+  getPlcStateHandler
+);
+
+server.tool(
+  "read_plc_values",
+  "Read live channel values from a running PLC. Opens a connection, reads all requested channels, then closes the connection. Each channel is specified as 'ObjectName.ChannelName'.",
+  readPlcValuesSchema,
+  readPlcValuesHandler
+);
+
+server.tool(
+  "write_plc_values",
+  "Write values to channels on a running PLC. Opens a connection, writes all values, then closes the connection. Each channel is specified as 'ObjectName.ChannelName'.",
+  writePlcValuesSchema,
+  writePlcValuesHandler
 );
 
 const transport = new StdioServerTransport();
