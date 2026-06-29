@@ -27,6 +27,7 @@ import {
   LutcInstruction
 } from './scriptGenerator.js';
 import { teardownEngine, runProcess } from './processRunner.js';
+import { spawn } from 'child_process';
 import {
   createJob,
   getJob,
@@ -747,6 +748,59 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['projectPath', 'languages'],
           additionalProperties: false
         }
+      },
+      {
+        name: 'snapshot_project',
+        description: 'Create a timestamped backup copy of a project directory next to the original. Call this before any destructive change. Works for both Class 2 (.lcp) and VISUDesigner (.lvp) projects. (Synchronous)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Absolute path to the .lcp/.lvp file or project directory' },
+            label: { type: 'string', description: 'Optional short label appended to the snapshot folder name for easy identification' }
+          },
+          required: ['projectPath'],
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'open_class2_project',
+        description: 'Open the LASAL Class 2 IDE (Lasal2.exe) in GUI mode, optionally loading a project. Note: all async Class 2 tools automatically close the GUI before running their headless script, so you only need to call this when you want the IDE visible for user interaction or GUI-driven automation. (Synchronous, fire-and-forget)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Optional absolute path to the .lcp file to open. If omitted, Lasal2 starts without a project.' }
+          },
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'close_class2_project',
+        description: 'Force-close the LASAL Class 2 IDE (Lasal2.exe) if it is running. Async tools do this automatically, but call this explicitly when you need the IDE closed before a direct file edit or snapshot. (Synchronous)',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'open_visu_project',
+        description: 'Open the VISUDesigner IDE in GUI mode, optionally loading a project. Note: all async VISUDesigner tools automatically close the IDE before running their headless script. (Synchronous, fire-and-forget)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            projectPath: { type: 'string', description: 'Optional absolute path to the .lvp file or project directory to open.' }
+          },
+          additionalProperties: false
+        }
+      },
+      {
+        name: 'close_visu_project',
+        description: 'Force-close the VISUDesigner IDE if it is running. (Synchronous)',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false
+        }
       }
     ]
   };
@@ -1118,22 +1172,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const resultFile = args.resultFile as string;
         const sourceFile = args.sourceFile as string || '';
 
+        const errFilePath = resultFile + '.err';
         let scriptContent = '';
-        scriptContent += `prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
+        scriptContent += `import traceback\n`;
+        scriptContent += `__prj = None\n`;
+        scriptContent += `try:\n`;
+        scriptContent += `    __prj = batch.LoadProject(to_mbcs(${pyUnicode(projectPath)}))\n`;
         if (sourceFile) {
-          scriptContent += `batch.DoCodeAnalysisOnFile(prj, to_mbcs(${pyUnicode(sourceFile)}), to_mbcs(${pyUnicode(resultFile)}))\n`;
+          scriptContent += `    batch.DoCodeAnalysisOnFile(__prj, to_mbcs(${pyUnicode(sourceFile)}), to_mbcs(${pyUnicode(resultFile)}))\n`;
         } else {
-          scriptContent += `batch.DoCodeAnalysisOnProjekt(prj, to_mbcs(${pyUnicode(resultFile)}))\n`;
+          scriptContent += `    batch.DoCodeAnalysisOnProjekt(__prj, to_mbcs(${pyUnicode(resultFile)}))\n`;
         }
-        scriptContent += `batch.CloseProject(prj)\n`;
+        scriptContent += `except Exception as __e:\n`;
+        scriptContent += `    __ef = open(to_mbcs(${pyUnicode(errFilePath)}), 'w')\n`;
+        scriptContent += `    traceback.print_exc(file=__ef)\n`;
+        scriptContent += `    __ef.close()\n`;
+        scriptContent += `finally:\n`;
+        scriptContent += `    if __prj is not None:\n`;
+        scriptContent += `        batch.CloseProject(__prj)\n`;
 
         const logPath = getTempFilePath('analysis', '.log');
         const scriptBody = generateClass2Script({ logPath, scriptBody: scriptContent });
         const scriptPath = getTempFilePath('analysis', '.py');
         writeLatin1File(scriptPath, scriptBody);
 
+        const analysisDataExtractor = (_result: any) => {
+          if (fs.existsSync(errFilePath)) {
+            const errMsg = fs.readFileSync(errFilePath, 'utf8');
+            try { fs.unlinkSync(errFilePath); } catch {}
+            throw new Error(`Code analysis failed: ${errMsg.trim()}`);
+          }
+          return { resultFile, written: fs.existsSync(resultFile) };
+        };
+
         const jobId = createJob('class2', `Lasal2.exe /script:${scriptPath}`);
-        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium });
+        kickoffJob(jobId, 'class2', toolchain.class2.path, [`/script:${scriptPath}`], { logPath, teardownBefore: 'class2', timeoutMs: TIMEOUT.medium, dataExtractor: analysisDataExtractor });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
       }
@@ -2130,6 +2203,76 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         kickoffJob(jobId, 'visudesigner', toolchain.visudesigner.path, ['--script', scriptPath], { teardownBefore: 'visudesigner', timeoutMs: TIMEOUT.publish });
 
         return { content: [{ type: 'text', text: JSON.stringify({ ok: true, status: 'pending', jobId }) }] };
+      }
+
+      case 'snapshot_project': {
+        const projectPath = args.projectPath as string;
+        const label = args.label as string | undefined;
+
+        if (!fs.existsSync(projectPath)) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: [`Path not found: ${projectPath}`] }) }] };
+        }
+
+        const projectDir = fs.statSync(projectPath).isDirectory() ? projectPath : path.dirname(projectPath);
+        const parentDir = path.dirname(projectDir);
+        const dirName = path.basename(projectDir);
+
+        const now = new Date();
+        const ts = now.getFullYear().toString() +
+          String(now.getMonth() + 1).padStart(2, '0') +
+          String(now.getDate()).padStart(2, '0') + '_' +
+          String(now.getHours()).padStart(2, '0') +
+          String(now.getMinutes()).padStart(2, '0') +
+          String(now.getSeconds()).padStart(2, '0');
+
+        const snapshotBase = path.join(parentDir, '_Snapshots');
+        const snapshotName = label ? `${dirName}_${ts}_${label}` : `${dirName}_${ts}`;
+        const snapshotDest = path.join(snapshotBase, snapshotName);
+
+        fs.mkdirSync(snapshotBase, { recursive: true });
+        fs.cpSync(projectDir, snapshotDest, { recursive: true });
+
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, snapshotPath: snapshotDest }) }] };
+      }
+
+      case 'open_class2_project': {
+        if (!toolchain.class2.installed || !toolchain.class2.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['Lasal CLASS 2 is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string | undefined;
+        const cliArgs = projectPath ? [projectPath] : [];
+        const proc = spawn(toolchain.class2.path, cliArgs, {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false
+        });
+        proc.unref();
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, pid: proc.pid }) }] };
+      }
+
+      case 'close_class2_project': {
+        await teardownEngine('class2');
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
+      }
+
+      case 'open_visu_project': {
+        if (!toolchain.visudesigner.installed || !toolchain.visudesigner.path) {
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: ['VISUDesigner is not installed.'] }) }] };
+        }
+        const projectPath = args.projectPath as string | undefined;
+        const cliArgs = projectPath ? [projectPath] : [];
+        const proc = spawn(toolchain.visudesigner.path, cliArgs, {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: false
+        });
+        proc.unref();
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, pid: proc.pid }) }] };
+      }
+
+      case 'close_visu_project': {
+        await teardownEngine('visudesigner');
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
       }
 
       default:

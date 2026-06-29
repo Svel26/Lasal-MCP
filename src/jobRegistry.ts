@@ -154,10 +154,16 @@ export function kickoffJob(
       const warnings: string[] = [];
       let ok = result.ok;
 
-      // Extract details from stdout/stderr
+      // Extract details from stdout/stderr.
+      // VISUDesigner (Chromium/CEF) emits internal noise on stderr that matches
+      // [pid:tid:timestamp:LEVEL:source.cc(line)] patterns — filter these out so
+      // they don't pollute the errors array on otherwise-successful jobs.
       if (result.stderr) {
-        // Collect errors from stderr
-        const errLines = result.stderr.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        const chromiumNoise = /^\[\d+:\d+:\d{4}\/\d{6}\.\d+:[A-Z]+:[^\]]+\(\d+\)]/;
+        const errLines = result.stderr
+          .split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length > 0 && !chromiumNoise.test(l));
         errors.push(...errLines);
       }
 
@@ -166,14 +172,22 @@ export function kickoffJob(
         try {
           const logContent = fs.readFileSync(options.logPath, 'latin1');
           const lines = logContent.split(/\r?\n/);
+          let logHasErrors = false;
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.includes('(ERROR)') || trimmed.includes('(FATAL)')) {
               errors.push(trimmed);
               ok = false;
+              logHasErrors = true;
             } else if (trimmed.includes('(WARN)') || trimmed.includes('(WARNING)')) {
               warnings.push(trimmed);
             }
+          }
+          // Class 2 exits with code 1 when a project has compile warnings but otherwise
+          // succeeded. If the log was produced and has no ERROR/FATAL entries, treat
+          // exit code 1 as a clean run with warnings only.
+          if (engine === 'class2' && result.exitCode === 1 && !logHasErrors) {
+            ok = true;
           }
         } catch (e: any) {
           errors.push(`Failed to read Class 2 log file: ${e.message}`);
