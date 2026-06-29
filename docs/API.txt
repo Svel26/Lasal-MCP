@@ -1,0 +1,137 @@
+CLASS 2 (sigmatek.lasal.batch) — not yet in MCP
+
+Project lifecycle
+- CreateProject — create a new .lcp from scratch
+- SaveAs — save project under a new name/path
+- CleanupProjectDirectory — delete unreferenced/binary files
+- CleanupClassesAndLibraries / CleanupClasses — remove unused classes
+
+Compile & deploy
+- Compile (with flags: BuildChanges, RebuildAll, UserClassesOnly, NoDebugInfo, etc.)
+- CreateBootdisk / CreateBootdiskMngr / CreateBootdiskViaContainer — generate bootdisk for ARM, x86, or both
+- Download — download compiled project to PLC
+- DownloadConnectionFile — push only the connection file
+- DownloadFile / UploadFile — arbitrary file transfer to/from PLC
+- DeleteFileOnPLC — remove a file on the PLC
+- DownloadOS — push a LASAL OS update
+
+PLC runtime control
+- Start / Stop — start/stop the running project on PLC
+- GetPlcState — query PLC state (online/offline/running/stopped)
+- OpenPlcConnection / ClosePlcConnection — open a live debug session
+- ReadPlcValue / WritePlcValue — read/write channel values on a running PLC
+- SaveProjectOnPLC — save project onto PLC flash
+- ClearRamImage — clear the RAM image on PLC
+- GetProcessorArch — query whether target is ARM or x86
+
+Cross-project / library operations
+- CopyClass / LinkClass / CopyClassList / LinkClassList
+- CopyNetwork / CopyNetworkAndLinkClasses / CopyNetworkList
+- CopyAll — copy everything from one project to another
+- UpdateAllUsedClassesOfLib / UpdateReferencedClasses / UpdateReferencedNetworks
+- ImportFromFile — import from a .lcz archive file
+- ReplaceObject — swap one object for another from a source project
+
+Project metadata
+- GetProjectRevision / SetProjectRevision
+- CreateProjectRevisionEntry — add a revision log entry
+- GetCompilerVersion / SetCompilerVersion
+- AddLibrary / AddFile / RemoveFile
+
+Object/network configuration
+- SetTaskOrder / SetTaskTime — configure cyclic/realtime/background task timing
+- SetTaskCPUCore / SetMultiCPUCore — multi-core CPU assignment
+- SetVisualizedFlag / SetVisualizedFlagOPCUA
+- SetCommentNetwork / SetCommentObject — set descriptions
+- SetNetworkOptions / ResetNetworkOptions
+- MoveNetworkToFolder — organize networks into folders
+- SetParameterValue — set object parameters (not channel init values)
+- ExistsClass / ExistsNetwork / ExistsObject / ExistsClient / ExistsConnection — existence checks
+- GetClientConnection — query where a client is connected
+- GetClassObjectNames — list all object instances of a class
+
+IO / Connection Manager
+- CreateIOObject / CreateLabel / ChangeIOServer / ExistsIOLabel
+- AddPrjConnectionFile / DeletePrjConnectionFile / SetPrjConnectionFileActive
+- EncryptConnectionFile / DecryptConnectionFile
+
+OPC UA
+- SetPrjOPCUAEnable
+- SetOPCUASettingObjectServer (physic, unit, folder, hostname, write-protected per server)
+
+Hardware
+- ImportAmlHwConfig — import AML hardware config file (replaces hardware tree)
+- AddPrjDriveFile / RemovePrjDriveFile / LinkObjectToPrjDriveFile — drive parameter files
+- CalculateResourcesAndExport — resource estimation export
+
+Virtual Commissioning
+- AddVirtualCommissioning / DeleteVirtualCommissioning / ChangeVirtualCommissioningClass
+- GetVirtualCommissionProperties / SetVirtualCommissionProperties
+
+MultiMaster
+- MMImportStation / MMRemoveStation
+- MMUpdateCurrentServerList / MMLoadMissingServers / MMReimportWholeStation
+- MMChangeConnectionOption
+
+Data Analyzer
+- DataAnalyzerRun / DataAnalyzerStop / DataAnalyzerLoadConfig / DataAnalyzerSaveData
+
+Static Code Analysis
+- DoCodeAnalysisOnProjekt / DoCodeAnalysisOnFile — outputs result XML
+
+---
+VISUDesigner (sigmatek.lasal.lvd) — essentially nothing wired yet
+
+Project lifecycle
+- CreateProject — create new .lvp with a given resolution
+- LoadProject — load existing .lvp (with optional runtime auto-update)
+- SaveProject, CloseProject, CloseAllProjects
+- PublishProject — compile/publish to the Publish folder (optionally with debug info)
+- ImportProject — merge elements from one project into another (selective by type)
+- DownloadProject — download to HMI via connection string (TCPIP:<ip>)
+- UpdateRuntime — update embedded runtime of project
+
+Project properties (on IProject object)
+- Name, Path, FilePath, Version, RuntimeVersion
+- ConnectionName, RevisionNr
+- UseUndefText, GenerateGZips, DeactivatedReferenceWarnings
+- DataService connection: AutoUrlDetection, Protocol, Connection, Port, Location, FullUrl, ReconnectionInterval
+- JournalUpdateOnLoad
+
+Stations (CLASS 2 connection points)
+- CreateStation — add a station with IP, name, retry interval, active/required flags
+- DeleteStation
+- SetStationProperties — change connection, name, label, revision, active/required
+- UpdateStation / UpdateAllStations — refresh datapoints/datatypes from Mae-Export file
+- GetUpdateStationDetails — diff what would change before updating
+
+Text lists & localization
+- AddTextLists / RemoveTextLists
+- AddTexts / RemoveTexts / ChangeTexts
+- AddLanguages / RemoveLanguages / SetLanguageProperties
+- CsvExportTextLists / CsvImportTextLists — bulk translation via CSV
+- CsvExportComponentTextLists / CsvImportComponentTextLists
+- SetTextListRevisions / SetComponentTextListRevisions
+
+Datapoints & datatypes
+- SetDatapointProperties — alias, refresh time, write-protect, limits, unit, keyboard, enum, init value, etc.
+- SetDataTypeProperties — same property set for datatypes
+
+Alarms
+- AddAlarms / RemoveAlarms
+- SetAlarmServersOrGroups / SetAlarmProperties / SetAlarmRevisions
+
+Schemes (color, state, font, keyboard, navigation, unit, etc.)
+- AddSchemes / RemoveSchemes
+- AddSchemeEntries / RemoveSchemeEntries / MoveSchemeEntries
+- SetSchemeInputs / SetSchemeProperties / SetSchemeEntryProperties
+
+Media
+- AddMediaItems / RemoveMediaItems (images, video, audio, documents, fonts)
+
+Code modules
+- AddCodeModules / RemoveCodeModules
+
+Misc
+- UpdatePropertyValues — propagate renames to all property display values
+- GetCurrentProject — get the project currently open in the GUI (useful if VISUDesigner stays open with SetExitAppAfterScript(False))
