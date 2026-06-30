@@ -1,4 +1,4 @@
-CLASS 2 (sigmatek.lasal.batch) — not yet in MCP
+CLASS 2 (sigmatek.lasal.batch)
 
 Project lifecycle
 - CreateProject — create a new .lcp from scratch
@@ -80,7 +80,7 @@ Static Code Analysis
 - DoCodeAnalysisOnProjekt / DoCodeAnalysisOnFile — outputs result XML
 
 ---
-VISUDesigner (sigmatek.lasal.lvd) — essentially nothing wired yet
+VISUDesigner (sigmatek.lasal.lvd)
 
 Project lifecycle
 - CreateProject — create new .lvp with a given resolution

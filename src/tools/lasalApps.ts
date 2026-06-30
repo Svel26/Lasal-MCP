@@ -6,8 +6,10 @@ import { readState } from "../state.js";
 import { findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
 
 const VISUDESIGNER_EXE =
+  process.env.LASAL_VISUDESIGNER_EXE ||
   "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
 const CLASS2_EXE =
+  process.env.LASAL_CLASS2_EXE ||
   "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
 
 function requireProject(): { path: string } | { error: string } {

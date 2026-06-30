@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 
 const CLASS2_EXE =
+  process.env.LASAL_CLASS2_EXE ||
   "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
 
 const SCRATCH = join(tmpdir(), "lasal-mcp");

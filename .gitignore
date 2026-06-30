@@ -25,3 +25,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Local state file
+lasal-state.json

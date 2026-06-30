@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 
 const VISUDESIGNER_EXE =
+  process.env.LASAL_VISUDESIGNER_EXE ||
   "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
 
 const SCRATCH = join(tmpdir(), "lasal-mcp");
