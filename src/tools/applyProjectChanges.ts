@@ -1,8 +1,6 @@
 import { existsSync } from "fs";
-import { join, basename } from "path";
 import { execSync } from "child_process";
 import { z } from "zod";
-import { readState } from "../state.js";
 import {
   parseLcp,
   parseStClass,
@@ -31,6 +29,7 @@ import {
   renameMethodInSt,
 } from "../utils/lasalXml.js";
 import { runBatchOps, BatchOp } from "../utils/batchScript.js";
+import { resolveLcpPath } from "../utils/resolvePaths.js";
 
 // ─── Operation schemas ────────────────────────────────────────────────────────
 
@@ -346,19 +345,6 @@ export const applyProjectChangesSchema = {
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function resolveLcpPath(lcpPath?: string): { path: string } | { error: string } {
-  if (lcpPath) {
-    if (!existsSync(lcpPath)) return { error: `File not found: ${lcpPath}` };
-    return { path: lcpPath };
-  }
-  const state = readState();
-  if (!state.currentProject) return { error: "No project selected. Call select_project first." };
-  const name = basename(state.currentProject);
-  const lcp = join(state.currentProject, `${name}.lcp`);
-  if (!existsSync(lcp)) return { error: `No .lcp found at ${lcp}` };
-  return { path: lcp };
-}
 
 function killIde() {
   for (const exe of ["Lasal2.exe", "VISUDesigner.exe"]) {

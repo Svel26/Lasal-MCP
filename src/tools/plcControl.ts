@@ -1,28 +1,15 @@
 import { existsSync, readFileSync, mkdirSync } from "fs";
-import { join, basename } from "path";
+import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { readState } from "../state.js";
 import { runBatchOps, runScript, emitPy27String, emitPath, BatchResult } from "../utils/batchScript.js";
+import { resolveLcpPath } from "../utils/resolvePaths.js";
 
 const SCRATCH = join(tmpdir(), "lasal-mcp");
 
 function ensureScratch() {
   if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
-}
-
-function resolveLcpPath(lcpPath?: string): { path: string } | { error: string } {
-  if (lcpPath) {
-    if (!existsSync(lcpPath)) return { error: `File not found: ${lcpPath}` };
-    return { path: lcpPath };
-  }
-  const state = readState();
-  if (!state.currentProject) return { error: "No project selected. Call select_project first." };
-  const name = basename(state.currentProject);
-  const lcp = join(state.currentProject, `${name}.lcp`);
-  if (!existsSync(lcp)) return { error: `No .lcp found at ${lcp}` };
-  return { path: lcp };
 }
 
 function batchResultToResponse(br: BatchResult, extra?: Record<string, unknown>) {

@@ -12,6 +12,9 @@ import {
   closeClass2Handler,
 } from "./tools/lasalApps.js";
 import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
+import { inspectVisuProjectSchema, inspectVisuProjectHandler } from "./tools/inspectVisuProject.js";
+import { readClassSourceSchema, readClassSourceHandler } from "./tools/readClassSource.js";
+import { setTargetIpSchema, setTargetIpHandler } from "./tools/setTargetIp.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 import {
   compileProjSchema, compileProjHandler,
@@ -70,6 +73,27 @@ server.tool(
   "Parse a LASAL CLASS 2 project (.lcp) and return a complete structural inventory: all classes with their Server/Client channels, all networks with their objects and connections. Use this before making any changes to understand what exists and how things are connected.",
   inspectProjectSchema,
   inspectProjectHandler
+);
+
+server.tool(
+  "inspect_visu_project",
+  "Read a VISUDesigner (.lvp) project's current state from disk: stations (connection targets), datapoints (HMI-visible PLC values with types), languages, text list names, and schemes. Use this before apply_visu_changes to understand what already exists.",
+  inspectVisuProjectSchema,
+  inspectVisuProjectHandler
+);
+
+server.tool(
+  "read_class_source",
+  "Return the full source of a CLASS 2 class (.st file). Use this to read method implementations, variable declarations, and logic before modifying a class.",
+  readClassSourceSchema,
+  readClassSourceHandler
+);
+
+server.tool(
+  "set_target_ip",
+  "Change the online connection target for a station in the project's .lss file. Surgically updates only the TCPIP element, preserving all other file content. Use before compile_project / download_project when targeting a different device.",
+  setTargetIpSchema,
+  setTargetIpHandler
 );
 
 server.tool(

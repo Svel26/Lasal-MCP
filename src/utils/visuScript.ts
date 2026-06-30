@@ -190,7 +190,7 @@ export function buildVisuScript(
   saveAtEnd = true
 ): string {
   const lines: string[] = [
-    "import lvd",
+    "import sigmatek.lasal.lvd as lvd",
     "lvd.SetExceptionOnError(True)",
     `prj = lvd.LoadProject(${emitStr(lvpPath)})`,
     "if prj is None: raise RuntimeError(f'Failed to load project: {repr(" + emitStr(lvpPath) + ")}')",

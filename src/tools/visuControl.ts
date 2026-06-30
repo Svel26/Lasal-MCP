@@ -1,43 +1,6 @@
-import { existsSync, readdirSync, statSync } from "fs";
-import { join, basename } from "path";
 import { z } from "zod";
-import { readState } from "../state.js";
 import { runVisuOps, VisuOp } from "../utils/visuScript.js";
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function findLvpFiles(projectPath: string): string[] {
-  const stationsDir = join(projectPath, "Stations");
-  if (!existsSync(stationsDir)) return [];
-  const lvpFiles: string[] = [];
-  for (const type of readdirSync(stationsDir)) {
-    const typeDir = join(stationsDir, type);
-    if (!statSync(typeDir).isDirectory()) continue;
-    for (const station of readdirSync(typeDir)) {
-      const stationDir = join(typeDir, station);
-      if (!statSync(stationDir).isDirectory()) continue;
-      for (const file of readdirSync(stationDir)) {
-        if (file.endsWith(".lvp")) lvpFiles.push(join(stationDir, file));
-      }
-    }
-  }
-  return lvpFiles;
-}
-
-function resolveLvpPath(lvpPath?: string): { path: string } | { error: string } {
-  if (lvpPath) {
-    if (!existsSync(lvpPath)) return { error: `File not found: ${lvpPath}` };
-    return { path: lvpPath };
-  }
-  const state = readState();
-  if (!state.currentProject) return { error: "No project selected. Call select_project first." };
-  const found = findLvpFiles(state.currentProject);
-  if (found.length === 0) return { error: `No .lvp files found in ${state.currentProject}` };
-  if (found.length === 1) return { path: found[0] };
-  return {
-    error: `Multiple .lvp stations found — specify lvp_path:\n${found.map((f) => `  ${f}`).join("\n")}`,
-  };
-}
+import { resolveLvpPath } from "../utils/resolvePaths.js";
 
 function visuResultToResponse(r: ReturnType<typeof runVisuOps>, extra?: Record<string, unknown>) {
   const body: Record<string, unknown> = {

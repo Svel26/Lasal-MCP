@@ -1,9 +1,10 @@
 import { spawn } from "child_process";
-import { existsSync, readdirSync, statSync } from "fs";
+import { existsSync } from "fs";
 import { join, basename } from "path";
 import { execSync } from "child_process";
 import { z } from "zod";
 import { readState } from "../state.js";
+import { findLvpFiles } from "../utils/projectScanner.js";
 
 const VISUDESIGNER_EXE =
   "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
@@ -37,24 +38,6 @@ function killByName(processName: string): string {
 }
 
 
-function findLvpFiles(projectPath: string): string[] {
-  const stationsDir = join(projectPath, "Stations");
-  if (!existsSync(stationsDir)) return [];
-  const lvpFiles: string[] = [];
-
-  for (const type of readdirSync(stationsDir)) {
-    const typeDir = join(stationsDir, type);
-    if (!statSync(typeDir).isDirectory()) continue;
-    for (const station of readdirSync(typeDir)) {
-      const stationDir = join(typeDir, station);
-      if (!statSync(stationDir).isDirectory()) continue;
-      for (const file of readdirSync(stationDir)) {
-        if (file.endsWith(".lvp")) lvpFiles.push(join(stationDir, file));
-      }
-    }
-  }
-  return lvpFiles;
-}
 
 // --- open_visudesigner ---
 
