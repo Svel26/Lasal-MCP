@@ -10,12 +10,10 @@ const STATE_FILE = join(
 
 interface LasalState {
   currentProject: string | null;
-  topDirectory: string;
 }
 
 const DEFAULT_STATE: LasalState = {
   currentProject: null,
-  topDirectory: "C:\\_Projects",
 };
 
 export function readState(): LasalState {

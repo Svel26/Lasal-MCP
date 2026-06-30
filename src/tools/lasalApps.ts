@@ -1,10 +1,9 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
-import { join, basename } from "path";
 import { execSync } from "child_process";
 import { z } from "zod";
 import { readState } from "../state.js";
-import { findLvpFiles } from "../utils/projectScanner.js";
+import { findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
 
 const VISUDESIGNER_EXE =
   "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
@@ -109,27 +108,60 @@ export async function closeVisuDesignerHandler(_args: Record<string, never>) {
 
 // --- open_class2 ---
 
-export const openClass2Schema = {};
+export const openClass2Schema = {
+  lcp_path: z
+    .string()
+    .optional()
+    .describe(
+      "Full path to the .lcp station file to open. Omit to auto-detect from the selected project (required only when multiple .lcp files exist)."
+    ),
+};
 
-export async function openClass2Handler(_args: Record<string, never>) {
+export async function openClass2Handler(args: { lcp_path?: string }) {
   const proj = requireProject();
   if ("error" in proj) {
     return { content: [{ type: "text" as const, text: proj.error }], isError: true };
   }
 
-  const projectName = basename(proj.path);
-  const lsmPath = join(proj.path, `${projectName}.lsm`);
+  const lcpPath = args.lcp_path;
 
-  if (!existsSync(lsmPath)) {
+  if (!lcpPath) {
+    const found = findLcpFiles(proj.path);
+    if (found.length === 0) {
+      return {
+        content: [{ type: "text" as const, text: `No .lcp files found in ${proj.path}` }],
+        isError: true,
+      };
+    }
+    if (found.length === 1) {
+      launchDetached(CLASS2_EXE, [found[0]]);
+      return {
+        content: [{ type: "text" as const, text: `CLASS 2 opened with: ${found[0]}` }],
+      };
+    }
     return {
-      content: [{ type: "text" as const, text: `Project .lsm not found: ${lsmPath}` }],
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            "Multiple .lcp stations found. Specify lcp_path with one of:",
+            ...found.map((f) => `  ${f}`),
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+
+  if (!existsSync(lcpPath)) {
+    return {
+      content: [{ type: "text" as const, text: `File not found: ${lcpPath}` }],
       isError: true,
     };
   }
 
-  launchDetached(CLASS2_EXE, [lsmPath]);
+  launchDetached(CLASS2_EXE, [lcpPath]);
   return {
-    content: [{ type: "text" as const, text: `CLASS 2 opened with: ${lsmPath}` }],
+    content: [{ type: "text" as const, text: `CLASS 2 opened with: ${lcpPath}` }],
   };
 }
 
