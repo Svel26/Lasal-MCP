@@ -24,6 +24,8 @@ import {
   getPlcStateSchema, getPlcStateHandler,
   readPlcValuesSchema, readPlcValuesHandler,
   writePlcValuesSchema, writePlcValuesHandler,
+  startPlcSchema, startPlcHandler,
+  stopPlcSchema, stopPlcHandler,
 } from "./tools/plcControl.js";
 import {
   applyVisuChangesSchema, applyVisuChangesHandler,
@@ -145,6 +147,20 @@ server.tool(
   "Write values to channels on a running PLC. Opens a connection, writes all values, then closes the connection. Each channel is specified as 'ObjectName.ChannelName'.",
   writePlcValuesSchema,
   writePlcValuesHandler
+);
+
+server.tool(
+  "start_plc",
+  "Start the running project on the PLC. Uses the project's saved connection if none is specified.",
+  startPlcSchema,
+  startPlcHandler
+);
+
+server.tool(
+  "stop_plc",
+  "Stop the running project on the PLC. Uses the project's saved connection if none is specified.",
+  stopPlcSchema,
+  stopPlcHandler
 );
 
 server.tool(

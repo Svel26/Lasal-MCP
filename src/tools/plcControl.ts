@@ -18,6 +18,7 @@ function batchResultToResponse(br: BatchResult, extra?: Record<string, unknown>)
     durationMs: br.durationMs,
     ...(br.errors.length ? { errors: br.errors } : {}),
     ...(br.warnings.length ? { warnings: br.warnings } : {}),
+    ...(br.logTail.length ? { logTail: br.logTail } : {}),
     logPath: br.logPath,
     ...extra,
   };
@@ -65,12 +66,13 @@ export async function downloadProjHandler(args: {
   const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
 
+  const connection = args.connection ?? "";
   const br = runBatchOps(resolved.path, [{
     type: "download",
-    connection: args.connection ?? "",
+    connection,
     addLoaderAnyway: args.add_loader_anyway ?? false,
-  }]);
-  return batchResultToResponse(br);
+  }], 300_000);
+  return batchResultToResponse(br, { connection: connection || "(from .lss file)", lcpPath: resolved.path });
 }
 
 // ─── get_plc_state ───────────────────────────────────────────────────────────
@@ -200,6 +202,68 @@ export async function readPlcValuesHandler(args: {
     content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
     ...(ok ? {} : { isError: true }),
   };
+}
+
+// ─── start_plc ───────────────────────────────────────────────────────────────
+
+export const startPlcSchema = {
+  lcp_path: z.string().optional()
+    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
+  connection: z.string().optional()
+    .describe("Connection string or address-book name. Omit to use the project's saved connection."),
+};
+
+export async function startPlcHandler(args: { lcp_path?: string; connection?: string }) {
+  const resolved = resolveLcpPath(args.lcp_path);
+  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+
+  ensureScratch();
+  const id = randomUUID();
+  const logPath = join(SCRATCH, `${id}.log`);
+  const conn = args.connection ?? "";
+
+  const script = [
+    "# -*- coding: utf-8 -*-",
+    "import sigmatek.lasal.batch as batch",
+    `batch.OpenLogfile(${emitPath(logPath)})`,
+    `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+    `batch.Start(prj, ${emitPy27String(conn)})`,
+    "batch.CloseProject(prj)",
+  ].join("\n") + "\n";
+
+  const br = runScript(script, logPath);
+  return batchResultToResponse(br, { connection: conn || "(from .lss file)" });
+}
+
+// ─── stop_plc ────────────────────────────────────────────────────────────────
+
+export const stopPlcSchema = {
+  lcp_path: z.string().optional()
+    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
+  connection: z.string().optional()
+    .describe("Connection string or address-book name. Omit to use the project's saved connection."),
+};
+
+export async function stopPlcHandler(args: { lcp_path?: string; connection?: string }) {
+  const resolved = resolveLcpPath(args.lcp_path);
+  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+
+  ensureScratch();
+  const id = randomUUID();
+  const logPath = join(SCRATCH, `${id}.log`);
+  const conn = args.connection ?? "";
+
+  const script = [
+    "# -*- coding: utf-8 -*-",
+    "import sigmatek.lasal.batch as batch",
+    `batch.OpenLogfile(${emitPath(logPath)})`,
+    `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+    `batch.Stop(prj, ${emitPy27String(conn)})`,
+    "batch.CloseProject(prj)",
+  ].join("\n") + "\n";
+
+  const br = runScript(script, logPath);
+  return batchResultToResponse(br, { connection: conn || "(from .lss file)" });
 }
 
 // ─── write_plc_values ────────────────────────────────────────────────────────

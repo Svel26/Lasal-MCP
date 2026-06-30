@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { runBatchOps, BatchResult } from "../utils/batchScript.js";
+import { join } from "path";
+import { tmpdir } from "os";
+import { randomUUID } from "crypto";
+import { runBatchOps, runScript, emitPy27String, emitPath, BatchResult } from "../utils/batchScript.js";
 import { runVisuOps, VisuResult } from "../utils/visuScript.js";
 import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
 
@@ -61,6 +64,11 @@ export const deployAllSchema = {
     .optional()
     .default(false)
     .describe("Force runtime download to HMI even if the version already matches."),
+  start_plc: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Start the PLC runtime after a successful download. Default true."),
 };
 
 type StepResult = {
@@ -68,6 +76,7 @@ type StepResult = {
   durationMs: number;
   errors?: string[];
   warnings?: string[];
+  logTail?: string[];
   logPath?: string;
 };
 
@@ -77,6 +86,7 @@ function batchToStep(br: BatchResult): StepResult {
     durationMs: br.durationMs,
     ...(br.errors.length ? { errors: br.errors } : {}),
     ...(br.warnings.length ? { warnings: br.warnings } : {}),
+    ...(br.logTail.length ? { logTail: br.logTail } : {}),
     logPath: br.logPath,
   };
 }
@@ -104,9 +114,11 @@ export async function deployAllHandler(args: {
   visu_download_flags?: number;
   add_plc_loader?: boolean;
   add_visu_runtime?: boolean;
+  start_plc?: boolean;
 }) {
   const doCompile = args.compile ?? true;
   const doDownloadPlc = args.download_plc ?? true;
+  const doStartPlc = doDownloadPlc && (args.start_plc ?? true);
   const doUpdateVisuStations = args.update_visu_stations ?? true;
   const doDownloadVisu = args.download_visu ?? false;
 
@@ -160,8 +172,26 @@ export async function deployAllHandler(args: {
       type: "download",
       connection: args.plc_connection ?? "",
       addLoaderAnyway: args.add_plc_loader ?? false,
-    }]);
+    }], 300_000);
     steps.download_plc = batchToStep(br);
+    if (!br.ok) return fail();
+  }
+
+  // Step 2b: start PLC after download
+  if (doStartPlc) {
+    const id = randomUUID();
+    const logPath = join(tmpdir(), "lasal-mcp", `${id}.log`);
+    const conn = args.plc_connection ?? "";
+    const script = [
+      "# -*- coding: utf-8 -*-",
+      "import sigmatek.lasal.batch as batch",
+      `batch.OpenLogfile(${emitPath(logPath)})`,
+      `prj = batch.LoadProject(${emitPath(lcpPath!)})`,
+      `batch.Start(prj, ${emitPy27String(conn)})`,
+      "batch.CloseProject(prj)",
+    ].join("\n") + "\n";
+    const br = runScript(script, logPath);
+    steps.start_plc = batchToStep(br);
     if (!br.ok) return fail();
   }
 

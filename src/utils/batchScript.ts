@@ -15,6 +15,7 @@ export interface BatchResult {
   logPath: string;
   errors: string[];
   warnings: string[];
+  logTail: string[];
   durationMs: number;
   command: string;
 }
@@ -269,6 +270,7 @@ export function runScript(
   const start = Date.now();
   let exitCode = 0;
 
+  const stderrLines: string[] = [];
   try {
     execFileSync(CLASS2_EXE, [`/script:${scriptPath}`], {
       timeout: timeoutMs,
@@ -277,26 +279,40 @@ export function runScript(
     });
   } catch (e: any) {
     exitCode = e.status ?? 1;
+    const stderr: string = (e.stderr ?? "").toString("utf-8").trim();
+    if (stderr) {
+      for (const line of stderr.split("\n")) {
+        const t = line.trim();
+        if (t) stderrLines.push(t);
+      }
+    }
     try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* ignore */ }
   }
 
   const durationMs = Date.now() - start;
   const errors: string[] = [];
   const warnings: string[] = [];
+  const logTail: string[] = [];
 
   if (existsSync(logPath)) {
     const log = readFileSync(logPath, "utf-8");
-    for (const line of log.split("\n")) {
+    const lines = log.split("\n");
+    for (const line of lines) {
       if (line.includes("(ERROR)") || line.includes("(FATAL)")) errors.push(line.trim());
       else if (line.includes("(WARN)")) warnings.push(line.trim());
     }
+    if (exitCode !== 0 || errors.length > 0) {
+      logTail.push(...lines.filter(l => l.trim()).slice(-15).map(l => l.trim()));
+    }
   }
+
+  errors.push(...stderrLines);
 
   if (exitCode !== 0 && errors.length === 0) {
     errors.push(`Lasal2.exe exited with code ${exitCode}`);
   }
 
-  return { ok: exitCode === 0 && errors.length === 0, exitCode, logPath, errors, warnings, durationMs, command };
+  return { ok: exitCode === 0 && errors.length === 0, exitCode, logPath, errors, warnings, logTail, durationMs, command };
 }
 
 export function runBatchOps(
@@ -318,6 +334,7 @@ export function runBatchOps(
 
   killClass2();
 
+  const stderrLines: string[] = [];
   try {
     execFileSync(CLASS2_EXE, [`/script:${scriptPath}`], {
       timeout: timeoutMs,
@@ -326,21 +343,34 @@ export function runBatchOps(
     });
   } catch (e: any) {
     exitCode = e.status ?? 1;
-    // taskkill on error per spec
+    const stderr: string = (e.stderr ?? "").toString("utf-8").trim();
+    if (stderr) {
+      for (const line of stderr.split("\n")) {
+        const t = line.trim();
+        if (t) stderrLines.push(t);
+      }
+    }
     try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* ignore */ }
   }
 
   const durationMs = Date.now() - start;
   const errors: string[] = [];
   const warnings: string[] = [];
+  const logTail: string[] = [];
 
   if (existsSync(logPath)) {
     const log = readFileSync(logPath, "utf-8");
-    for (const line of log.split("\n")) {
+    const lines = log.split("\n");
+    for (const line of lines) {
       if (line.includes("(ERROR)") || line.includes("(FATAL)")) errors.push(line.trim());
       else if (line.includes("(WARN)")) warnings.push(line.trim());
     }
+    if (exitCode !== 0 || errors.length > 0) {
+      logTail.push(...lines.filter(l => l.trim()).slice(-15).map(l => l.trim()));
+    }
   }
+
+  errors.push(...stderrLines);
 
   if (exitCode !== 0 && errors.length === 0) {
     errors.push(`Lasal2.exe exited with code ${exitCode}`);
@@ -352,6 +382,7 @@ export function runBatchOps(
     logPath,
     errors,
     warnings,
+    logTail,
     durationMs,
     command,
   };
