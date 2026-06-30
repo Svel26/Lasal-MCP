@@ -2,35 +2,23 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { selectProjectSchema, selectProjectHandler } from "./tools/selectProject.js";
 import {
-  openVisuDesignerSchema,
-  openVisuDesignerHandler,
-  closeVisuDesignerSchema,
-  closeVisuDesignerHandler,
-  openClass2Schema,
-  openClass2Handler,
-  closeClass2Schema,
-  closeClass2Handler,
+  manageVisuDesignerSchema,
+  manageVisuDesignerHandler,
+  manageClass2Schema,
+  manageClass2Handler,
 } from "./tools/lasalApps.js";
 import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
 import { inspectVisuProjectSchema, inspectVisuProjectHandler } from "./tools/inspectVisuProject.js";
-import { readClassSourceSchema, readClassSourceHandler } from "./tools/readClassSource.js";
-import { writeClassSourceSchema, writeClassSourceHandler } from "./tools/writeClassSource.js";
+import { classSourceSchema, classSourceHandler } from "./tools/readClassSource.js";
 import { deployAllSchema, deployAllHandler } from "./tools/deployAll.js";
 import { setTargetIpSchema, setTargetIpHandler } from "./tools/setTargetIp.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 import {
-  compileProjSchema, compileProjHandler,
-  downloadProjSchema, downloadProjHandler,
-  getPlcStateSchema, getPlcStateHandler,
-  readPlcValuesSchema, readPlcValuesHandler,
-  writePlcValuesSchema, writePlcValuesHandler,
-  startPlcSchema, startPlcHandler,
-  stopPlcSchema, stopPlcHandler,
+  buildProjectSchema, buildProjectHandler,
+  controlPlcSchema, controlPlcHandler,
+  plcValuesSchema, plcValuesHandler,
 } from "./tools/plcControl.js";
-import {
-  applyVisuChangesSchema, applyVisuChangesHandler,
-  downloadVisuProjectSchema, downloadVisuProjectHandler,
-} from "./tools/visuControl.js";
+import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
@@ -45,31 +33,17 @@ server.tool(
 );
 
 server.tool(
-  "open_visudesigner",
-  "Open VISUDesigner with a station from the active project. Omit lcp_path to see available stations.",
-  openVisuDesignerSchema,
-  openVisuDesignerHandler
+  "manage_visudesigner",
+  "Open or close VISUDesigner. Use action='open' to launch it with a station file from the active project; action='close' kills the process.",
+  manageVisuDesignerSchema,
+  manageVisuDesignerHandler
 );
 
 server.tool(
-  "close_visudesigner",
-  "Close VISUDesigner (kills the process).",
-  closeVisuDesignerSchema,
-  closeVisuDesignerHandler
-);
-
-server.tool(
-  "open_class2",
-  "Open LASAL CLASS 2 with the active project's .lsm file.",
-  openClass2Schema,
-  openClass2Handler
-);
-
-server.tool(
-  "close_class2",
-  "Close LASAL CLASS 2 (kills the process).",
-  closeClass2Schema,
-  closeClass2Handler
+  "manage_class2",
+  "Open or close LASAL CLASS 2. Use action='open' to launch it with the active project's .lcp file; action='close' kills the process.",
+  manageClass2Schema,
+  manageClass2Handler
 );
 
 server.tool(
@@ -81,28 +55,21 @@ server.tool(
 
 server.tool(
   "inspect_visu_project",
-  "Read a VISUDesigner (.lvp) project's current state from disk: stations (connection targets), datapoints (HMI-visible PLC values with types), languages, text list names, and schemes. Use this before apply_visu_changes to understand what already exists.",
+  "Read a VISUDesigner (.lvp) project's current state from disk: stations (connection targets), datapoints (HMI-visible PLC values with types), languages, text list names, and schemes. Use this before visu_project to understand what already exists.",
   inspectVisuProjectSchema,
   inspectVisuProjectHandler
 );
 
 server.tool(
-  "read_class_source",
-  "Return the full source of a CLASS 2 class (.st file). Use this to read method implementations, variable declarations, and logic before modifying a class.",
-  readClassSourceSchema,
-  readClassSourceHandler
-);
-
-server.tool(
-  "write_class_source",
-  "Write the full source of a CLASS 2 class back to its .st file (and optionally its .h header). Use this after read_class_source to apply code changes — method bodies, variable declarations, logic — directly to the file. The IDE must be closed; use close_class2 first if needed. Content must be latin1-compatible.",
-  writeClassSourceSchema,
-  writeClassSourceHandler
+  "class_source",
+  "Read or write the source of a CLASS 2 class (.st file). Use action='read' to retrieve method implementations and variable declarations before modifying; action='write' to apply code changes back to the file. The IDE must be closed when writing; use manage_class2 with action='close' first if needed. Content must be latin1-compatible.",
+  classSourceSchema,
+  classSourceHandler
 );
 
 server.tool(
   "set_target_ip",
-  "Change the online connection target for a station in the project's .lss file. Surgically updates only the TCPIP element, preserving all other file content. Use before compile_project / download_project when targeting a different device.",
+  "Change the online connection target for a station in the project's .lss file. Surgically updates only the TCPIP element, preserving all other file content. Use before build_project with action='download' when targeting a different device.",
   setTargetIpSchema,
   setTargetIpHandler
 );
@@ -115,72 +82,37 @@ server.tool(
 );
 
 server.tool(
-  "compile_project",
-  "Compile the active LASAL CLASS 2 project. Kills any open CLASS 2 instance first. Returns compiler errors and warnings from the log.",
-  compileProjSchema,
-  compileProjHandler
+  "build_project",
+  "Compile or download a LASAL CLASS 2 project. action='compile' builds the project (kills any open CLASS 2 first, returns errors and warnings). action='download' transfers the compiled project to a PLC over the Sigmatek online protocol (TCP port 1954).",
+  buildProjectSchema,
+  buildProjectHandler
 );
 
 server.tool(
-  "download_project",
-  "Download the compiled CLASS 2 project to a PLC over the Sigmatek online protocol (TCP port 1954). Uses the project's saved connection if none is specified.",
-  downloadProjSchema,
-  downloadProjHandler
+  "control_plc",
+  "Control the runtime state of a PLC. action='start' runs the project; action='stop' halts it; action='get_state' queries the current state (e.g. Running, Stopped, Offline). Uses the project's saved connection if none is specified.",
+  controlPlcSchema,
+  controlPlcHandler
 );
 
 server.tool(
-  "get_plc_state",
-  "Query the runtime state of a PLC (e.g. Running, Stopped, Offline). Uses the project's saved connection if none is specified.",
-  getPlcStateSchema,
-  getPlcStateHandler
+  "plc_values",
+  "Read or write live channel values on a running PLC. action='read' fetches values for the given channels; action='write' pushes new values. Each channel is specified as 'ObjectName.ChannelName'. Opens a connection, performs all operations, then closes it.",
+  plcValuesSchema,
+  plcValuesHandler
 );
 
 server.tool(
-  "read_plc_values",
-  "Read live channel values from a running PLC. Opens a connection, reads all requested channels, then closes the connection. Each channel is specified as 'ObjectName.ChannelName'.",
-  readPlcValuesSchema,
-  readPlcValuesHandler
-);
-
-server.tool(
-  "write_plc_values",
-  "Write values to channels on a running PLC. Opens a connection, writes all values, then closes the connection. Each channel is specified as 'ObjectName.ChannelName'.",
-  writePlcValuesSchema,
-  writePlcValuesHandler
-);
-
-server.tool(
-  "start_plc",
-  "Start the running project on the PLC. Uses the project's saved connection if none is specified.",
-  startPlcSchema,
-  startPlcHandler
-);
-
-server.tool(
-  "stop_plc",
-  "Stop the running project on the PLC. Uses the project's saved connection if none is specified.",
-  stopPlcSchema,
-  stopPlcHandler
-);
-
-server.tool(
-  "apply_visu_changes",
-  "Apply changes to a VISUDesigner (.lvp) project using the headless VISUDesigner API. " +
-    "Kills any running VISUDesigner first, runs the operations as a Python 3.12 script, then saves and closes. " +
-    "Supports: update_all_stations, update_station (single station by number), publish, " +
+  "visu_project",
+  "Apply changes to or download a VISUDesigner (.lvp) project. " +
+    "action='apply_changes': kills any running VISUDesigner, loads the project, runs the operations list, saves, and closes. " +
+    "action='download': pushes the project to an HMI device without saving content changes. " +
+    "Supported operations: update_all_stations, update_station, publish, " +
     "text list/text management (add/remove/change/set_revisions), CSV import/export for translations, " +
     "datapoint/datatype property editing, scheme management (add/remove/configure entries), " +
-    "media items (images, video, audio, docs, fonts), code modules, and HMI download. " +
-    "Run 'update_all_stations' or 'update_station' after CLASS 2 channel changes to sync datapoints into the VISUDesigner project.",
-  applyVisuChangesSchema,
-  applyVisuChangesHandler
-);
-
-server.tool(
-  "download_visu_project",
-  "Download a VISUDesigner (.lvp) project to an HMI device. Does not save the project — use apply_visu_changes with a 'download' operation if you need to make changes and deploy in one step.",
-  downloadVisuProjectSchema,
-  downloadVisuProjectHandler
+    "media items (images, video, audio, docs, fonts), code modules, and HMI download.",
+  visuProjectSchema,
+  visuProjectHandler
 );
 
 server.tool(

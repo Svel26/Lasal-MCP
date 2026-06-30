@@ -28,72 +28,115 @@ function batchResultToResponse(br: BatchResult, extra?: Record<string, unknown>)
   };
 }
 
-// ─── compile_project ─────────────────────────────────────────────────────────
+// ─── build_project ────────────────────────────────────────────────────────────
 
-export const compileProjSchema = {
-  lcp_path: z.string().optional()
+export const buildProjectSchema = {
+  action: z
+    .enum(["compile", "download"])
+    .describe("'compile' builds the project; 'download' transfers it to the PLC."),
+  lcp_path: z
+    .string()
+    .optional()
     .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  options: z.enum(["RebuildAll", "BuildChanges", "UserClassesOnly", "NoDebugInfo"])
+  options: z
+    .enum(["RebuildAll", "BuildChanges", "UserClassesOnly", "NoDebugInfo"])
     .optional()
     .default("RebuildAll")
-    .describe("Compile mode. RebuildAll is safest. BuildChanges is faster for incremental work."),
+    .describe("Compile mode (compile only). RebuildAll is safest; BuildChanges is faster for incremental work."),
+  connection: z
+    .string()
+    .optional()
+    .describe(
+      "Connection string (e.g. 'TCPIP:192.168.1.100') or address-book name (download only). Omit to use the connection saved in the .lss file."
+    ),
+  add_loader_anyway: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Force loader download even if the target OS already has a compatible loader (download only)."),
 };
 
-export async function compileProjHandler(args: { lcp_path?: string; options?: string }) {
-  const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
-
-  const br = runBatchOps(resolved.path, [{ type: "compile", optionName: args.options ?? "RebuildAll" }]);
-  return batchResultToResponse(br);
-}
-
-// ─── download_project ────────────────────────────────────────────────────────
-
-export const downloadProjSchema = {
-  lcp_path: z.string().optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  connection: z.string().optional()
-    .describe("Connection string (e.g. 'TCPIP:192.168.1.100') or address-book name. Omit to use the connection saved in the project (.lss file)."),
-  add_loader_anyway: z.boolean().optional().default(false)
-    .describe("Force loader download even if the target OS already has a compatible loader."),
-};
-
-export async function downloadProjHandler(args: {
+export async function buildProjectHandler(args: {
+  action: "compile" | "download";
   lcp_path?: string;
+  options?: string;
   connection?: string;
   add_loader_anyway?: boolean;
 }) {
   const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
 
+  if (args.action === "compile") {
+    const br = runBatchOps(resolved.path, [{ type: "compile", optionName: args.options ?? "RebuildAll" }]);
+    return batchResultToResponse(br);
+  }
+
   const connection = args.connection ?? "";
-  const br = runBatchOps(resolved.path, [{
-    type: "download",
-    connection,
-    addLoaderAnyway: args.add_loader_anyway ?? false,
-  }], 300_000);
+  const br = runBatchOps(
+    resolved.path,
+    [{ type: "download", connection, addLoaderAnyway: args.add_loader_anyway ?? false }],
+    300_000
+  );
   return batchResultToResponse(br, { connection: connection || "(from .lss file)", lcpPath: resolved.path });
 }
 
-// ─── get_plc_state ───────────────────────────────────────────────────────────
+// ─── control_plc ─────────────────────────────────────────────────────────────
 
-export const getPlcStateSchema = {
-  lcp_path: z.string().optional()
+export const controlPlcSchema = {
+  action: z
+    .enum(["start", "stop", "get_state"])
+    .describe("'start' runs the PLC project; 'stop' halts it; 'get_state' queries its current state."),
+  lcp_path: z
+    .string()
+    .optional()
     .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  connection: z.string().optional()
+  connection: z
+    .string()
+    .optional()
     .describe("Connection string or address-book name. Omit to use the project's saved connection."),
 };
 
-export async function getPlcStateHandler(args: { lcp_path?: string; connection?: string }) {
+export async function controlPlcHandler(args: {
+  action: "start" | "stop" | "get_state";
+  lcp_path?: string;
+  connection?: string;
+}) {
   const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
 
   ensureScratch();
   const id = randomUUID();
   const logPath = join(SCRATCH, `${id}.log`);
-  const resultPath = join(SCRATCH, `${id}.json`);
   const conn = args.connection ?? "";
 
+  if (args.action === "start") {
+    const script = [
+      "# -*- coding: utf-8 -*-",
+      "import sigmatek.lasal.batch as batch",
+      `batch.OpenLogfile(${emitPath(logPath)})`,
+      `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+      `batch.Start(prj, ${emitPy27String(conn)})`,
+      "batch.CloseProject(prj)",
+    ].join("\n") + "\n";
+    const br = runScript(script, logPath);
+    return batchResultToResponse(br, { connection: conn || "(from .lss file)" });
+  }
+
+  if (args.action === "stop") {
+    const script = [
+      "# -*- coding: utf-8 -*-",
+      "import sigmatek.lasal.batch as batch",
+      `batch.OpenLogfile(${emitPath(logPath)})`,
+      `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+      `batch.Stop(prj, ${emitPy27String(conn)})`,
+      "batch.CloseProject(prj)",
+    ].join("\n") + "\n";
+    const br = runScript(script, logPath);
+    return batchResultToResponse(br, { connection: conn || "(from .lss file)" });
+  }
+
+  // get_state
+  const resultPath = join(SCRATCH, `${id}.json`);
   const script = [
     "# -*- coding: utf-8 -*-",
     "import sigmatek.lasal.batch as batch",
@@ -118,30 +161,48 @@ export async function getPlcStateHandler(args: { lcp_path?: string; connection?:
   ].join("\n") + "\n";
 
   const br = runScript(script, logPath);
-
   let stateData: Record<string, unknown> = {};
   if (existsSync(resultPath)) {
     try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch { /* log parse failure silently */ }
   }
-
   return batchResultToResponse(br, stateData);
 }
 
-// ─── read_plc_values ─────────────────────────────────────────────────────────
+// ─── plc_values ──────────────────────────────────────────────────────────────
 
-export const readPlcValuesSchema = {
-  channels: z.array(z.string())
-    .describe("List of channel paths to read, each in 'ObjectName.ChannelName' format."),
-  lcp_path: z.string().optional()
+export const plcValuesSchema = {
+  action: z
+    .enum(["read", "write"])
+    .describe("'read' fetches live channel values; 'write' pushes new values."),
+  lcp_path: z
+    .string()
+    .optional()
     .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  connection: z.string().optional()
+  connection: z
+    .string()
+    .optional()
     .describe("Connection string or address-book name. Omit to use the project's saved connection."),
+  channels: z
+    .array(z.string())
+    .optional()
+    .describe("Channel paths to read, each in 'ObjectName.ChannelName' format (read only)."),
+  values: z
+    .array(
+      z.object({
+        channel: z.string().describe("Channel path in 'ObjectName.ChannelName' format."),
+        value: z.string().describe("New value as string."),
+      })
+    )
+    .optional()
+    .describe("Channel/value pairs to write (write only)."),
 };
 
-export async function readPlcValuesHandler(args: {
-  channels: string[];
+export async function plcValuesHandler(args: {
+  action: "read" | "write";
   lcp_path?: string;
   connection?: string;
+  channels?: string[];
+  values?: { channel: string; value: string }[];
 }) {
   const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
@@ -152,175 +213,71 @@ export async function readPlcValuesHandler(args: {
   const resultPath = join(SCRATCH, `${id}.json`);
   const conn = args.connection ?? "";
 
-  const channelListPy = `[${args.channels.map(emitPy27String).join(", ")}]`;
+  let script: string;
 
-  const script = [
-    "# -*- coding: utf-8 -*-",
-    "import sigmatek.lasal.batch as batch",
-    "import json",
-    "batch.SetExceptionOnError(False)",
-    `batch.OpenLogfile(${emitPath(logPath)})`,
-    `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-    `conn_ok = batch.OpenPlcConnection(prj, ${emitPy27String(conn)})`,
-    "if conn_ok:",
-    `    channels = ${channelListPy}`,
-    "    results = {}",
-    "    for ch in channels:",
-    "        dic = {}",
-    "        ok = batch.ReadPlcValue(ch, dic)",
-    "        data = {}",
-    "        for k, v in dic.items():",
-    "            data[str(k)] = str(v)",
-    "        results[ch] = {'ok': bool(ok), 'data': data}",
-    "    batch.ClosePlcConnection()",
-    "    result = {'ok': True, 'channels': results}",
-    "else:",
-    "    result = {'ok': False, 'error': 'Failed to open PLC connection — check connection string and PLC state'}",
-    "batch.CloseProject(prj)",
-    `f = open(${emitPath(resultPath)}, 'w')`,
-    "json.dump(result, f)",
-    "f.close()",
-  ].join("\n") + "\n";
-
-  const br = runScript(script, logPath);
-
-  let plcData: Record<string, unknown> = {};
-  if (existsSync(resultPath)) {
-    try { plcData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch { /* ignore */ }
+  if (args.action === "read") {
+    if (!args.channels?.length) {
+      return { content: [{ type: "text" as const, text: "channels is required for action 'read'" }], isError: true };
+    }
+    const channelListPy = `[${args.channels.map(emitPy27String).join(", ")}]`;
+    script = [
+      "# -*- coding: utf-8 -*-",
+      "import sigmatek.lasal.batch as batch",
+      "import json",
+      "batch.SetExceptionOnError(False)",
+      `batch.OpenLogfile(${emitPath(logPath)})`,
+      `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+      `conn_ok = batch.OpenPlcConnection(prj, ${emitPy27String(conn)})`,
+      "if conn_ok:",
+      `    channels = ${channelListPy}`,
+      "    results = {}",
+      "    for ch in channels:",
+      "        dic = {}",
+      "        ok = batch.ReadPlcValue(ch, dic)",
+      "        data = {}",
+      "        for k, v in dic.items():",
+      "            data[str(k)] = str(v)",
+      "        results[ch] = {'ok': bool(ok), 'data': data}",
+      "    batch.ClosePlcConnection()",
+      "    result = {'ok': True, 'channels': results}",
+      "else:",
+      "    result = {'ok': False, 'error': 'Failed to open PLC connection — check connection string and PLC state'}",
+      "batch.CloseProject(prj)",
+      `f = open(${emitPath(resultPath)}, 'w')`,
+      "json.dump(result, f)",
+      "f.close()",
+    ].join("\n") + "\n";
+  } else {
+    if (!args.values?.length) {
+      return { content: [{ type: "text" as const, text: "values is required for action 'write'" }], isError: true };
+    }
+    const writeOpsPy = `[${args.values.map((v) => `(${emitPy27String(v.channel)}, ${emitPy27String(v.value)})`).join(", ")}]`;
+    script = [
+      "# -*- coding: utf-8 -*-",
+      "import sigmatek.lasal.batch as batch",
+      "import json",
+      "batch.SetExceptionOnError(False)",
+      `batch.OpenLogfile(${emitPath(logPath)})`,
+      `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+      `conn_ok = batch.OpenPlcConnection(prj, ${emitPy27String(conn)})`,
+      "if conn_ok:",
+      `    write_ops = ${writeOpsPy}`,
+      "    results = {}",
+      "    for ch, val in write_ops:",
+      "        ok = batch.WritePlcValue(ch, val)",
+      "        results[ch] = {'ok': bool(ok)}",
+      "    batch.ClosePlcConnection()",
+      "    result = {'ok': True, 'writes': results}",
+      "else:",
+      "    result = {'ok': False, 'error': 'Failed to open PLC connection — check connection string and PLC state'}",
+      "batch.CloseProject(prj)",
+      `f = open(${emitPath(resultPath)}, 'w')`,
+      "json.dump(result, f)",
+      "f.close()",
+    ].join("\n") + "\n";
   }
 
-  const ok = br.ok && (plcData.ok as boolean) !== false;
-  const body: Record<string, unknown> = {
-    ok,
-    durationMs: br.durationMs,
-    ...plcData,
-    ...(br.errors.length ? { scriptErrors: br.errors } : {}),
-    ...(br.warnings.length ? { scriptWarnings: br.warnings } : {}),
-    logPath: br.logPath,
-  };
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
-    ...(ok ? {} : { isError: true }),
-  };
-}
-
-// ─── start_plc ───────────────────────────────────────────────────────────────
-
-export const startPlcSchema = {
-  lcp_path: z.string().optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  connection: z.string().optional()
-    .describe("Connection string or address-book name. Omit to use the project's saved connection."),
-};
-
-export async function startPlcHandler(args: { lcp_path?: string; connection?: string }) {
-  const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
-
-  ensureScratch();
-  const id = randomUUID();
-  const logPath = join(SCRATCH, `${id}.log`);
-  const conn = args.connection ?? "";
-
-  const script = [
-    "# -*- coding: utf-8 -*-",
-    "import sigmatek.lasal.batch as batch",
-    `batch.OpenLogfile(${emitPath(logPath)})`,
-    `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-    `batch.Start(prj, ${emitPy27String(conn)})`,
-    "batch.CloseProject(prj)",
-  ].join("\n") + "\n";
-
   const br = runScript(script, logPath);
-  return batchResultToResponse(br, { connection: conn || "(from .lss file)" });
-}
-
-// ─── stop_plc ────────────────────────────────────────────────────────────────
-
-export const stopPlcSchema = {
-  lcp_path: z.string().optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  connection: z.string().optional()
-    .describe("Connection string or address-book name. Omit to use the project's saved connection."),
-};
-
-export async function stopPlcHandler(args: { lcp_path?: string; connection?: string }) {
-  const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
-
-  ensureScratch();
-  const id = randomUUID();
-  const logPath = join(SCRATCH, `${id}.log`);
-  const conn = args.connection ?? "";
-
-  const script = [
-    "# -*- coding: utf-8 -*-",
-    "import sigmatek.lasal.batch as batch",
-    `batch.OpenLogfile(${emitPath(logPath)})`,
-    `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-    `batch.Stop(prj, ${emitPy27String(conn)})`,
-    "batch.CloseProject(prj)",
-  ].join("\n") + "\n";
-
-  const br = runScript(script, logPath);
-  return batchResultToResponse(br, { connection: conn || "(from .lss file)" });
-}
-
-// ─── write_plc_values ────────────────────────────────────────────────────────
-
-export const writePlcValuesSchema = {
-  values: z.array(z.object({
-    channel: z.string().describe("Channel path in 'ObjectName.ChannelName' format."),
-    value: z.string().describe("New value as string."),
-  })).describe("List of channel/value pairs to write."),
-  lcp_path: z.string().optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
-  connection: z.string().optional()
-    .describe("Connection string or address-book name. Omit to use the project's saved connection."),
-};
-
-export async function writePlcValuesHandler(args: {
-  values: { channel: string; value: string }[];
-  lcp_path?: string;
-  connection?: string;
-}) {
-  const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
-
-  ensureScratch();
-  const id = randomUUID();
-  const logPath = join(SCRATCH, `${id}.log`);
-  const resultPath = join(SCRATCH, `${id}.json`);
-  const conn = args.connection ?? "";
-
-  const writeOpsPy = `[${args.values.map(v => `(${emitPy27String(v.channel)}, ${emitPy27String(v.value)})`).join(", ")}]`;
-
-  const script = [
-    "# -*- coding: utf-8 -*-",
-    "import sigmatek.lasal.batch as batch",
-    "import json",
-    "batch.SetExceptionOnError(False)",
-    `batch.OpenLogfile(${emitPath(logPath)})`,
-    `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-    `conn_ok = batch.OpenPlcConnection(prj, ${emitPy27String(conn)})`,
-    "if conn_ok:",
-    `    write_ops = ${writeOpsPy}`,
-    "    results = {}",
-    "    for ch, val in write_ops:",
-    "        ok = batch.WritePlcValue(ch, val)",
-    "        results[ch] = {'ok': bool(ok)}",
-    "    batch.ClosePlcConnection()",
-    "    result = {'ok': True, 'writes': results}",
-    "else:",
-    "    result = {'ok': False, 'error': 'Failed to open PLC connection — check connection string and PLC state'}",
-    "batch.CloseProject(prj)",
-    `f = open(${emitPath(resultPath)}, 'w')`,
-    "json.dump(result, f)",
-    "f.close()",
-  ].join("\n") + "\n";
-
-  const br = runScript(script, logPath);
-
   let plcData: Record<string, unknown> = {};
   if (existsSync(resultPath)) {
     try { plcData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch { /* ignore */ }

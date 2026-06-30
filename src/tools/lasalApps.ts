@@ -38,20 +38,23 @@ function killByName(processName: string): string {
   }
 }
 
+// --- manage_visudesigner ---
 
-
-// --- open_visudesigner ---
-
-export const openVisuDesignerSchema = {
+export const manageVisuDesignerSchema = {
+  action: z.enum(["open", "close"]).describe("'open' launches VISUDesigner; 'close' kills it."),
   lvp_path: z
     .string()
     .optional()
     .describe(
-      "Full path to the .lvp station file to open. Omit to auto-detect from the selected project (required only when multiple .lvp files exist)."
+      "Full path to the .lvp station file to open (open only). Omit to auto-detect from the selected project."
     ),
 };
 
-export async function openVisuDesignerHandler(args: { lvp_path?: string }) {
+export async function manageVisuDesignerHandler(args: { action: "open" | "close"; lvp_path?: string }) {
+  if (args.action === "close") {
+    return { content: [{ type: "text" as const, text: killByName("VISUDesigner.exe") }] };
+  }
+
   const proj = requireProject();
   if ("error" in proj) {
     return { content: [{ type: "text" as const, text: proj.error }], isError: true };
@@ -69,57 +72,41 @@ export async function openVisuDesignerHandler(args: { lvp_path?: string }) {
     }
     if (found.length === 1) {
       launchDetached(VISUDESIGNER_EXE, [found[0]]);
-      return {
-        content: [{ type: "text" as const, text: `VISUDesigner opened with: ${found[0]}` }],
-      };
+      return { content: [{ type: "text" as const, text: `VISUDesigner opened with: ${found[0]}` }] };
     }
     return {
-      content: [
-        {
-          type: "text" as const,
-          text: [
-            "Multiple .lvp stations found. Specify lvp_path with one of:",
-            ...found.map((f) => `  ${f}`),
-          ].join("\n"),
-        },
-      ],
+      content: [{
+        type: "text" as const,
+        text: ["Multiple .lvp stations found. Specify lvp_path with one of:", ...found.map((f) => `  ${f}`)].join("\n"),
+      }],
     };
   }
 
   if (!existsSync(lvpPath)) {
-    return {
-      content: [{ type: "text" as const, text: `File not found: ${lvpPath}` }],
-      isError: true,
-    };
+    return { content: [{ type: "text" as const, text: `File not found: ${lvpPath}` }], isError: true };
   }
 
   launchDetached(VISUDESIGNER_EXE, [lvpPath]);
-  return {
-    content: [{ type: "text" as const, text: `VISUDesigner opened with: ${lvpPath}` }],
-  };
+  return { content: [{ type: "text" as const, text: `VISUDesigner opened with: ${lvpPath}` }] };
 }
 
-// --- close_visudesigner ---
+// --- manage_class2 ---
 
-export const closeVisuDesignerSchema = {};
-
-export async function closeVisuDesignerHandler(_args: Record<string, never>) {
-  const result = killByName("VISUDesigner.exe");
-  return { content: [{ type: "text" as const, text: result }] };
-}
-
-// --- open_class2 ---
-
-export const openClass2Schema = {
+export const manageClass2Schema = {
+  action: z.enum(["open", "close"]).describe("'open' launches LASAL CLASS 2; 'close' kills it."),
   lcp_path: z
     .string()
     .optional()
     .describe(
-      "Full path to the .lcp station file to open. Omit to auto-detect from the selected project (required only when multiple .lcp files exist)."
+      "Full path to the .lcp station file to open (open only). Omit to auto-detect from the selected project."
     ),
 };
 
-export async function openClass2Handler(args: { lcp_path?: string }) {
+export async function manageClass2Handler(args: { action: "open" | "close"; lcp_path?: string }) {
+  if (args.action === "close") {
+    return { content: [{ type: "text" as const, text: killByName("Lasal2.exe") }] };
+  }
+
   const proj = requireProject();
   if ("error" in proj) {
     return { content: [{ type: "text" as const, text: proj.error }], isError: true };
@@ -137,41 +124,20 @@ export async function openClass2Handler(args: { lcp_path?: string }) {
     }
     if (found.length === 1) {
       launchDetached(CLASS2_EXE, [found[0]]);
-      return {
-        content: [{ type: "text" as const, text: `CLASS 2 opened with: ${found[0]}` }],
-      };
+      return { content: [{ type: "text" as const, text: `CLASS 2 opened with: ${found[0]}` }] };
     }
     return {
-      content: [
-        {
-          type: "text" as const,
-          text: [
-            "Multiple .lcp stations found. Specify lcp_path with one of:",
-            ...found.map((f) => `  ${f}`),
-          ].join("\n"),
-        },
-      ],
+      content: [{
+        type: "text" as const,
+        text: ["Multiple .lcp stations found. Specify lcp_path with one of:", ...found.map((f) => `  ${f}`)].join("\n"),
+      }],
     };
   }
 
   if (!existsSync(lcpPath)) {
-    return {
-      content: [{ type: "text" as const, text: `File not found: ${lcpPath}` }],
-      isError: true,
-    };
+    return { content: [{ type: "text" as const, text: `File not found: ${lcpPath}` }], isError: true };
   }
 
   launchDetached(CLASS2_EXE, [lcpPath]);
-  return {
-    content: [{ type: "text" as const, text: `CLASS 2 opened with: ${lcpPath}` }],
-  };
-}
-
-// --- close_class2 ---
-
-export const closeClass2Schema = {};
-
-export async function closeClass2Handler(_args: Record<string, never>) {
-  const result = killByName("Lasal2.exe");
-  return { content: [{ type: "text" as const, text: result }] };
+  return { content: [{ type: "text" as const, text: `CLASS 2 opened with: ${lcpPath}` }] };
 }
