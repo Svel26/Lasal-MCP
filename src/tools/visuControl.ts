@@ -87,6 +87,27 @@ const mediaItemDefSchema = z.object({
 // Individual op schemas
 const UpdateAllStationsOp = z.object({ type: z.literal("update_all_stations") });
 
+const UpdateStationOp = z.object({
+  type: z.literal("update_station"),
+  station_nr: z.number().int().describe("Station number to update (as defined in the VISUDesigner project)"),
+});
+
+const PublishOp = z.object({
+  type: z.literal("publish"),
+  debug: z.boolean().optional().default(false)
+    .describe("Publish with additional debug information. Requires TypeScript support to be enabled in the project."),
+});
+
+const SetTextListRevisionsOp = z.object({
+  type: z.literal("set_text_list_revisions"),
+  text_lists: z.array(textListDefSchema).describe("Text lists with their revision strings to set (use the 'revision' field)"),
+});
+
+const SetComponentTextListRevisionsOp = z.object({
+  type: z.literal("set_component_text_list_revisions"),
+  text_lists: z.array(textListDefSchema).describe("Component text lists with their revision strings to set (use the 'revision' field)"),
+});
+
 const AddTextListsOp = z.object({
   type: z.literal("add_text_lists"),
   text_lists: z.array(textListDefSchema).describe("Text lists to add (optionally with texts and revisions)"),
@@ -278,9 +299,11 @@ const DownloadOp = z.object({
 });
 
 const OperationSchema = z.discriminatedUnion("type", [
-  UpdateAllStationsOp,
+  UpdateAllStationsOp, UpdateStationOp,
+  PublishOp,
   AddTextListsOp, RemoveTextListsOp,
   AddTextsOp, RemoveTextsOp, ChangeTextsOp, ChangeComponentTextsOp,
+  SetTextListRevisionsOp, SetComponentTextListRevisionsOp,
   CsvExportTextListsOp, CsvImportTextListsOp,
   CsvExportComponentTextListsOp, CsvImportComponentTextListsOp,
   SetDatapointPropertiesOp, SetDataTypePropertiesOp,
@@ -309,9 +332,12 @@ export const applyVisuChangesSchema = {
     .describe(
       "Ordered list of VISUDesigner operations. Each has a 'type' field. " +
         "The project is loaded, all operations are applied, then saved and closed. " +
-        "Available types: update_all_stations | add_text_lists | remove_text_lists | add_texts | " +
-        "remove_texts | change_texts | change_component_texts | csv_export_text_lists | " +
-        "csv_import_text_lists | csv_export_component_text_lists | csv_import_component_text_lists | " +
+        "Available types: update_all_stations | update_station | publish | " +
+        "add_text_lists | remove_text_lists | add_texts | " +
+        "remove_texts | change_texts | change_component_texts | " +
+        "set_text_list_revisions | set_component_text_list_revisions | " +
+        "csv_export_text_lists | csv_import_text_lists | " +
+        "csv_export_component_text_lists | csv_import_component_text_lists | " +
         "set_datapoint_properties | set_datatype_properties | add_schemes | remove_schemes | " +
         "add_scheme_entries | remove_scheme_entries | move_scheme_entries | set_scheme_inputs | " +
         "set_scheme_properties | set_scheme_entry_properties | add_media_items | remove_media_items | " +
@@ -347,6 +373,10 @@ export async function applyVisuChangesHandler(args: { lvp_path?: string; operati
     switch (op.type) {
       case "update_all_stations":
         return { type: "update_all_stations" as const };
+      case "update_station":
+        return { type: "update_station" as const, station_nr: op.station_nr };
+      case "publish":
+        return { type: "publish" as const, debug: op.debug };
       case "add_text_lists":
         return { type: "add_text_lists" as const, text_lists: op.text_lists };
       case "remove_text_lists":
@@ -359,6 +389,10 @@ export async function applyVisuChangesHandler(args: { lvp_path?: string; operati
         return { type: "change_texts" as const, text_lists: op.text_lists };
       case "change_component_texts":
         return { type: "change_component_texts" as const, text_lists: op.text_lists };
+      case "set_text_list_revisions":
+        return { type: "set_text_list_revisions" as const, text_lists: op.text_lists };
+      case "set_component_text_list_revisions":
+        return { type: "set_component_text_list_revisions" as const, text_lists: op.text_lists };
       case "csv_export_text_lists":
         return { type: "csv_export_text_lists" as const, csv_path: op.csv_path, text_lists: op.text_lists, languages: op.languages };
       case "csv_import_text_lists":

@@ -427,6 +427,7 @@ export async function applyProjectChangesHandler(args: {
             defValue: op.defValue,
             writeProtected: op.writeProtected,
             retentive: op.retentive,
+            comment: op.comment,
           });
           if (op.stType) addServerTypeToStBody(stPath, op.name, op.stType);
           results.push({ op: `add_server(${op.className}, ${op.name})`, ok: true, message: op.stType ? "Added server to XML block + ST body" : "Added server to XML block (no stType provided)" });

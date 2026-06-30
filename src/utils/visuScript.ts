@@ -63,12 +63,16 @@ export interface MediaItemDef {
 
 export type VisuOp =
   | { type: "update_all_stations" }
+  | { type: "update_station"; station_nr: number }
+  | { type: "publish"; debug?: boolean }
   | { type: "add_text_lists"; text_lists: TextListDef[] }
   | { type: "remove_text_lists"; names: string[] }
   | { type: "add_texts"; text_lists: TextListDef[] }
   | { type: "remove_texts"; text_lists: TextListRemoveDef[] }
   | { type: "change_texts"; text_lists: TextListDef[] }
   | { type: "change_component_texts"; text_lists: TextListDef[] }
+  | { type: "set_text_list_revisions"; text_lists: TextListDef[] }
+  | { type: "set_component_text_list_revisions"; text_lists: TextListDef[] }
   | { type: "csv_export_text_lists"; csv_path: string; text_lists?: string[]; languages?: string[] }
   | { type: "csv_import_text_lists"; file_paths: string[]; text_lists?: string[]; languages?: string[] }
   | { type: "csv_export_component_text_lists"; csv_path: string; text_lists?: string[]; languages?: string[] }
@@ -204,6 +208,14 @@ export function buildVisuScript(
         lines.push("lvd.UpdateAllStations(prj)");
         break;
 
+      case "update_station":
+        lines.push(`lvd.UpdateStation(prj, ${op.station_nr})`);
+        break;
+
+      case "publish":
+        lines.push(`lvd.PublishProject(prj, ${op.debug ? "True" : "False"})`);
+        break;
+
       case "add_text_lists":
         lines.push(
           `lvd.AddTextLists(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
@@ -235,6 +247,18 @@ export function buildVisuScript(
       case "change_component_texts":
         lines.push(
           `lvd.ChangeComponentTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
+        );
+        break;
+
+      case "set_text_list_revisions":
+        lines.push(
+          `lvd.SetTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
+        );
+        break;
+
+      case "set_component_text_list_revisions":
+        lines.push(
+          `lvd.SetComponentTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
         );
         break;
 

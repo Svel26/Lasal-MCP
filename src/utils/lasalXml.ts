@@ -300,19 +300,19 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function serverXmlLine(s: ServerChannel, indent: string): string {
+function serverXmlLine(s: ServerChannel, indent: string, eol = "\n"): string {
   let line = `${indent}<Server Name="${s.name}" GUID="${s.guid}" Visualized="${s.visualized}" Initialize="${s.initialize}"`;
   if (s.defValue !== undefined) line += ` DefValue="${s.defValue}"`;
   line += ` WriteProtected="${s.writeProtected}" Retentive="${s.retentive}"`;
   if (s.comment) line += ` Comment="${s.comment}"`;
-  line += "/>\n";
+  line += "/>" + eol;
   return line;
 }
 
-function clientXmlLine(c: ClientChannel, indent: string): string {
+function clientXmlLine(c: ClientChannel, indent: string, eol = "\n"): string {
   let line = `${indent}<Client Name="${c.name}" Required="${c.required}" Internal="${c.internal}"`;
   if (c.comment) line += ` Comment="${c.comment}"`;
-  line += "/>\n";
+  line += "/>" + eol;
   return line;
 }
 
@@ -325,9 +325,10 @@ export function addServerToSt(stPath: string, server: Omit<ServerChannel, "guid"
   const ch = { ...server, guid: server.guid ?? newGuid() } as ServerChannel;
   editStBlock(stPath, (xml) => {
     const indent = detectChannelsIndent(xml);
-    const line = serverXmlLine(ch, indent);
-    // insert before </Channels>
-    return xml.replace("</Channels>", line + "</Channels>");
+    const eol = xml.includes("\r\n") ? "\r\n" : "\n";
+    const line = serverXmlLine(ch, indent, eol);
+    // Replace `(closingIndent)</Channels>` preserving the closing tag's own indent
+    return xml.replace(/([ \t]*)<\/Channels>/, (_, closingIndent) => line + closingIndent + "</Channels>");
   });
 }
 
@@ -345,8 +346,9 @@ export function renameServerInSt(stPath: string, oldName: string, newName: strin
 export function addClientToSt(stPath: string, client: ClientChannel): void {
   editStBlock(stPath, (xml) => {
     const indent = detectChannelsIndent(xml);
-    const line = clientXmlLine(client, indent);
-    return xml.replace("</Channels>", line + "</Channels>");
+    const eol = xml.includes("\r\n") ? "\r\n" : "\n";
+    const line = clientXmlLine(client, indent, eol);
+    return xml.replace(/([ \t]*)<\/Channels>/, (_, closingIndent) => line + closingIndent + "</Channels>");
   });
 }
 
@@ -621,10 +623,12 @@ function findSectionRange(
 
   const start = m.index + m[0].length; // character after the marker line's colon
 
-  // Find next section (// followed by word then colon) or END_CLASS;
+  // Find the next section marker line (// + word) or END_CLASS;.
+  // Use multiline mode with ^[ \t]* so n.index lands at the START of the line,
+  // not mid-line at the //, keeping the marker's leading whitespace in slice(range.end).
   const nextSection = new RegExp(
-    `\\/\\/[A-Za-z]|END_CLASS\\s*;`,
-    "g"
+    `^[ \\t]*(?:\\/\\/[A-Za-z]|END_CLASS\\s*;)`,
+    "gm"
   );
   nextSection.lastIndex = start;
   const n = nextSection.exec(text);
@@ -711,7 +715,10 @@ function removeLineFromSection(
 }
 
 export function addServerTypeToStBody(stPath: string, name: string, stType: string): void {
-  editStBody(stPath, (c) => insertIntoSection(c, "Servers", `\t${name} \t: ${stType};\n`));
+  editStBody(stPath, (c) => {
+    const eol = c.includes("\r\n") ? "\r\n" : "\n";
+    return insertIntoSection(c, "Servers", `\t${name} \t: ${stType};${eol}`);
+  });
 }
 
 export function removeServerTypeFromStBody(stPath: string, name: string): void {
@@ -732,7 +739,10 @@ export function renameServerInStBody(stPath: string, oldName: string, newName: s
 }
 
 export function addClientTypeToStBody(stPath: string, name: string, stType: string): void {
-  editStBody(stPath, (c) => insertIntoSection(c, "Clients", `\t${name} \t: ${stType};\n`));
+  editStBody(stPath, (c) => {
+    const eol = c.includes("\r\n") ? "\r\n" : "\n";
+    return insertIntoSection(c, "Clients", `\t${name} \t: ${stType};${eol}`);
+  });
 }
 
 export function removeClientTypeFromStBody(stPath: string, name: string): void {
@@ -755,7 +765,10 @@ export function renameClientInStBody(stPath: string, oldName: string, newName: s
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function addVariableToSt(stPath: string, name: string, type: string): void {
-  editStBody(stPath, (c) => insertIntoSection(c, "Variables", `\t\t${name} \t: ${type};\n`));
+  editStBody(stPath, (c) => {
+    const eol = c.includes("\r\n") ? "\r\n" : "\n";
+    return insertIntoSection(c, "Variables", `\t\t${name} \t: ${type};${eol}`);
+  });
 }
 
 export function removeVariableFromSt(stPath: string, name: string): void {
@@ -822,7 +835,7 @@ export interface AddMethodOptions {
   body?: string;         // implementation body; default is "// TODO: implement"
 }
 
-function buildMethodDeclaration(opts: AddMethodOptions): string {
+function buildMethodDeclaration(opts: AddMethodOptions, eol = "\n"): string {
   const modStr = opts.modifiers?.length ? opts.modifiers.join(" ") + " " : "";
   const lines: string[] = [`\tFUNCTION ${modStr}${opts.name}`];
   const inputs = (opts.params ?? []).filter((p) => !p.direction || p.direction === "input");
@@ -845,10 +858,10 @@ function buildMethodDeclaration(opts: AddMethodOptions): string {
     lines.push("\t\tEND_VAR");
   }
   lines.push("\t\t;"); // declaration ends with ;
-  return lines.join("\n") + "\n";
+  return lines.join(eol) + eol;
 }
 
-function buildMethodImplementation(className: string, opts: AddMethodOptions): string {
+function buildMethodImplementation(className: string, opts: AddMethodOptions, eol = "\n"): string {
   const lines: string[] = [`FUNCTION ${className}::${opts.name}`];
   const inputs = (opts.params ?? []).filter((p) => !p.direction || p.direction === "input");
   const outputs = (opts.params ?? []).filter((p) => p.direction === "output");
@@ -873,24 +886,25 @@ function buildMethodImplementation(className: string, opts: AddMethodOptions): s
   lines.push("\t" + (opts.body ?? `// TODO: implement ${opts.name}`));
   lines.push("");
   lines.push("END_FUNCTION");
-  return lines.join("\n") + "\n\n";
+  return lines.join(eol) + eol + eol;
 }
 
 export function addMethodToSt(stPath: string, className: string, opts: AddMethodOptions): void {
   editStBody(stPath, (content) => {
+    const eol = content.includes("\r\n") ? "\r\n" : "\n";
     const { pre, classPart, implPart } = splitStSections(content);
 
     // 1. Add declaration to //Functions: section (before //Tables: or END_CLASS;)
     const funcRange = findSectionRange(classPart, "Functions");
     let newClassPart = classPart;
     if (funcRange) {
-      const decl = buildMethodDeclaration(opts);
+      const decl = buildMethodDeclaration(opts, eol);
       newClassPart =
         classPart.slice(0, funcRange.end) + decl + classPart.slice(funcRange.end);
     }
 
-    // 2. Add implementation to end of implPart (before the final empty lines)
-    const impl = buildMethodImplementation(className, opts);
+    // 2. Add implementation to end of implPart
+    const impl = buildMethodImplementation(className, opts, eol);
     const newImplPart = implPart + impl;
 
     return pre + newClassPart + newImplPart;
@@ -936,16 +950,28 @@ function findMethodDeclRange(
   if (!m) return null;
 
   const declStart = range.start + m.index;
-  // Find the trailing ; that closes the declaration
-  let pos = range.start + m.index + m[0].length;
-  // Skip VAR_INPUT...END_VAR blocks if present, then find ;
-  const semiRe = /;/g;
-  semiRe.lastIndex = pos;
-  const sm = semiRe.exec(classPart.slice(0, range.end));
-  if (!sm) return null;
-  let declEnd = sm.index + 1;
-  while (declEnd < classPart.length && (classPart[declEnd] === "\r" || classPart[declEnd] === "\n")) declEnd++;
-  return { start: declStart, end: declEnd };
+
+  // Scan forward tracking VAR block depth to find the closing ; at depth 0.
+  // Params have ; inside VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT blocks (depth > 0).
+  // The declaration-closing ; is always at depth 0 (on the FUNCTION line itself
+  // for no-param methods, or on a separate line / end of last END_VAR for parameterised ones).
+  const tokenRe = /\bVAR(?:_INPUT|_OUTPUT|_IN_OUT)\b|\bEND_VAR\b|;/g;
+  tokenRe.lastIndex = range.start + m.index + m[0].length;
+  let depth = 0;
+  let token: RegExpExecArray | null;
+  while ((token = tokenRe.exec(classPart)) !== null) {
+    if (token.index >= range.end) break;
+    if (token[0] === "END_VAR") {
+      depth--;
+    } else if (token[0] !== ";") {
+      depth++; // VAR_INPUT, VAR_OUTPUT, or VAR_IN_OUT
+    } else if (depth === 0) {
+      let declEnd = token.index + 1;
+      while (declEnd < classPart.length && (classPart[declEnd] === "\r" || classPart[declEnd] === "\n")) declEnd++;
+      return { start: declStart, end: declEnd };
+    }
+  }
+  return null;
 }
 
 export function removeMethodFromSt(stPath: string, className: string, name: string): void {

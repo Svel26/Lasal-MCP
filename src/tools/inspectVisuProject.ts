@@ -144,6 +144,55 @@ export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_d
     }
   }
 
+  // ── Alarms ────────────────────────────────────────────────────────────────
+  const alarmsDir = join(projectDir, "Alarms");
+  if (existsSync(alarmsDir)) {
+    try {
+      const alarms: string[] = [];
+      for (const f of readdirSync(alarmsDir)) {
+        if (!f.endsWith(".json")) continue;
+        try {
+          const data: any = readJson(join(alarmsDir, f));
+          const name: string = data.name ?? basename(f, ".json");
+          alarms.push(name);
+        } catch { /* skip */ }
+      }
+      if (alarms.length) result.alarms = alarms;
+    } catch (e: any) {
+      errors.push(`alarms: ${e.message}`);
+    }
+  }
+
+  // ── Views & Dashboards ────────────────────────────────────────────────────
+  for (const dirName of ["Views", "Dashboards", "GlobalDashboards", "Windows"]) {
+    const dir = join(projectDir, dirName);
+    if (!existsSync(dir)) continue;
+    try {
+      const names: string[] = [];
+      for (const f of readdirSync(dir)) {
+        if (!f.endsWith(".json")) continue;
+        try {
+          const data: any = readJson(join(dir, f));
+          names.push(data.name ?? basename(f, ".json"));
+        } catch { /* skip */ }
+      }
+      if (names.length) result[dirName.toLowerCase()] = names;
+    } catch (e: any) {
+      errors.push(`${dirName}: ${e.message}`);
+    }
+  }
+
+  // ── Code modules ─────────────────────────────────────────────────────────
+  const codeModulesDir = join(projectDir, "CodeModules");
+  if (existsSync(codeModulesDir)) {
+    try {
+      const modules = readdirSync(codeModulesDir).filter((f) => f.endsWith(".js") || f.endsWith(".ts"));
+      if (modules.length) result.codeModules = modules;
+    } catch (e: any) {
+      errors.push(`codeModules: ${e.message}`);
+    }
+  }
+
   if (errors.length) result.errors = errors;
 
   return {

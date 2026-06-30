@@ -14,6 +14,8 @@ import {
 import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
 import { inspectVisuProjectSchema, inspectVisuProjectHandler } from "./tools/inspectVisuProject.js";
 import { readClassSourceSchema, readClassSourceHandler } from "./tools/readClassSource.js";
+import { writeClassSourceSchema, writeClassSourceHandler } from "./tools/writeClassSource.js";
+import { deployAllSchema, deployAllHandler } from "./tools/deployAll.js";
 import { setTargetIpSchema, setTargetIpHandler } from "./tools/setTargetIp.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 import {
@@ -90,6 +92,13 @@ server.tool(
 );
 
 server.tool(
+  "write_class_source",
+  "Write the full source of a CLASS 2 class back to its .st file (and optionally its .h header). Use this after read_class_source to apply code changes — method bodies, variable declarations, logic — directly to the file. The IDE must be closed; use close_class2 first if needed. Content must be latin1-compatible.",
+  writeClassSourceSchema,
+  writeClassSourceHandler
+);
+
+server.tool(
   "set_target_ip",
   "Change the online connection target for a station in the project's .lss file. Surgically updates only the TCPIP element, preserving all other file content. Use before compile_project / download_project when targeting a different device.",
   setTargetIpSchema,
@@ -142,10 +151,11 @@ server.tool(
   "apply_visu_changes",
   "Apply changes to a VISUDesigner (.lvp) project using the headless VISUDesigner API. " +
     "Kills any running VISUDesigner first, runs the operations as a Python 3.12 script, then saves and closes. " +
-    "Supports: update_all_stations, text list/text management (add/remove/change), CSV import/export for translations, " +
+    "Supports: update_all_stations, update_station (single station by number), publish, " +
+    "text list/text management (add/remove/change/set_revisions), CSV import/export for translations, " +
     "datapoint/datatype property editing, scheme management (add/remove/configure entries), " +
     "media items (images, video, audio, docs, fonts), code modules, and HMI download. " +
-    "The 'update_all_stations' operation should be run after CLASS 2 channel changes to sync datapoints into the VISUDesigner project.",
+    "Run 'update_all_stations' or 'update_station' after CLASS 2 channel changes to sync datapoints into the VISUDesigner project.",
   applyVisuChangesSchema,
   applyVisuChangesHandler
 );
@@ -155,6 +165,13 @@ server.tool(
   "Download a VISUDesigner (.lvp) project to an HMI device. Does not save the project — use apply_visu_changes with a 'download' operation if you need to make changes and deploy in one step.",
   downloadVisuProjectSchema,
   downloadVisuProjectHandler
+);
+
+server.tool(
+  "deploy_all",
+  "Run the full deploy pipeline in one call: compile CLASS 2 → download to PLC → update VISUDesigner stations → optionally download visu to HMI. Each step is skipped if its flag is false. Stops immediately on any failure and reports which step failed. Use after making CLASS 2 or VISUDesigner changes to push everything to the target hardware.",
+  deployAllSchema,
+  deployAllHandler
 );
 
 const transport = new StdioServerTransport();
