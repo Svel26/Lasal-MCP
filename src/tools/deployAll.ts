@@ -5,6 +5,8 @@ import { randomUUID } from "crypto";
 import { runBatchOps, runScript, emitPy27String, emitPath, BatchResult } from "../utils/batchScript.js";
 import { runVisuOps, VisuResult } from "../utils/visuScript.js";
 import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
+import { withEngineLock } from "../utils/engine.js";
+import { hmiRuntimeHandler } from "./hmiRuntime.js";
 
 export const deployAllSchema = {
   lcp_path: z
@@ -69,6 +71,11 @@ export const deployAllSchema = {
     .optional()
     .default(true)
     .describe("Start the PLC runtime after a successful download. Default true."),
+  start_hmi_runtime: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Start the local HMI runtime (DataService) and copy HMI files after a successful compilation/update. Default false."),
 };
 
 type StepResult = {
@@ -115,12 +122,14 @@ export async function deployAllHandler(args: {
   add_plc_loader?: boolean;
   add_visu_runtime?: boolean;
   start_plc?: boolean;
+  start_hmi_runtime?: boolean;
 }) {
-  const doCompile = args.compile ?? true;
-  const doDownloadPlc = args.download_plc ?? true;
-  const doStartPlc = doDownloadPlc && (args.start_plc ?? true);
-  const doUpdateVisuStations = args.update_visu_stations ?? true;
-  const doDownloadVisu = args.download_visu ?? false;
+  return withEngineLock(async () => {
+    const doCompile = args.compile ?? true;
+    const doDownloadPlc = args.download_plc ?? true;
+    const doStartPlc = doDownloadPlc && (args.start_plc ?? true);
+    const doUpdateVisuStations = args.update_visu_stations ?? true;
+    const doDownloadVisu = args.download_visu ?? false;
 
   const steps: Record<string, StepResult> = {};
 
@@ -211,7 +220,20 @@ export async function deployAllHandler(args: {
     if (!vr.ok) return fail();
   }
 
+  // Step 4: start HMI runtime
+  if (args.start_hmi_runtime) {
+    const startStart = Date.now();
+    const hmiRes = await hmiRuntimeHandler({ action: "start", lvp_path: lvpPath });
+    steps.hmi_runtime = {
+      ok: !hmiRes.isError,
+      durationMs: Date.now() - startStart,
+      ...(hmiRes.isError ? { errors: [ hmiRes.content[0].text ] } : { logTail: [ `HMI started: ${hmiRes.content[0].text}` ] })
+    };
+    if (hmiRes.isError) return fail();
+  }
+
   return {
     content: [{ type: "text" as const, text: JSON.stringify({ ok: true, steps }, null, 2) }],
   };
+  });
 }

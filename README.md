@@ -77,19 +77,21 @@ Add the following config to your %APPDATA%\\Claude\\claude\_desktop\_config.json
 | Tool Name | Description |
 | :---- | :---- |
 | select\_project | Set the active project root directory path. |
-| open\_class2 / close\_class2 | Open or close the LASAL CLASS 2 IDE. |
-| open\_visudesigner / close\_visudesigner | Open or close the VISUDesigner HMI editor. |
+| manage\_visudesigner | Open or close the VISUDesigner HMI editor. |
+| manage\_class2 | Open or close the LASAL CLASS 2 IDE. |
 | inspect\_project | Get structural details of networks, classes, objects, and connections. |
 | inspect\_visu\_project | Get HMI details of stations, datapoints, schemes, and languages. |
-| read\_class\_source / write\_class\_source | Read or write raw Structured Text (.st) code for classes. |
-| apply\_project\_changes | Perform structural modifications (creating networks, instantiating classes). |
-| apply\_visu\_changes | Modify HMI elements, CSV translations, media files, and schemes. |
-| compile\_project | Compile the PLC project. |
+| class\_source | Read or write raw Structured Text (.st) code for classes. |
 | set\_target\_ip | Set the online target IP address. |
-| download\_project / download\_visu\_project | Download PLC runtime or HMI visualisation to hardware. |
-| get\_plc\_state / start\_plc / stop\_plc | Monitor and control PLC runtime state. |
-| read\_plc\_values / write\_plc\_values | Query or update live channel values on the PLC. |
-| deploy\_all | Sequence compilation, PLC download, HMI update, and HMI download in one call. |
+| apply\_project\_changes | Perform structural modifications (creating networks, instantiating classes). |
+| build\_project | Compile the PLC project or download it to the PLC. |
+| control\_plc | Monitor and control PLC runtime state (start, stop, get_state). |
+| plc\_values | Query or update live channel values on the PLC. |
+| visu\_project | Apply changes to or download a VISUDesigner HMI project. |
+| hmi\_runtime | Serves the web HMI simulation locally (start, stop, status). |
+| hmi\_browser | Drives a headless Edge browser to debug and evaluate the running HMI. |
+| plc\_diagnostics | Perform diagnostic operations (trace, file upload/download/delete, code analysis). |
+| deploy\_all | Compile CLASS 2, deploy to PLC, sync VISU stations, and start local DataService. |
 
 ## **Development**
 

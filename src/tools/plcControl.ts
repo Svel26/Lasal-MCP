@@ -1,15 +1,65 @@
-import { existsSync, readFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, mkdirSync, lstatSync, readdirSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { runBatchOps, runScript, emitPy27String, emitPath, BatchResult } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
-
-const SCRATCH = join(tmpdir(), "lasal-mcp");
+import { parseLcn } from "../utils/lasalXml.js";
+import { withEngineLock, SCRATCH } from "../utils/engine.js";
 
 function ensureScratch() {
   if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
+}
+
+// Recursively find all project files
+function getProjectFiles(dir: string, files: string[] = []): string[] {
+  try {
+    for (const f of readdirSync(dir)) {
+      const p = join(dir, f);
+      if (lstatSync(p).isDirectory()) {
+        getProjectFiles(p, files);
+      } else {
+        files.push(p);
+      }
+    }
+  } catch {}
+  return files;
+}
+
+// Resolve Structured Text channel type for coercion
+function resolveChannelType(projDir: string, objectName: string, channelName: string): string | null {
+  const files = getProjectFiles(projDir);
+  const lcnFiles = files.filter(f => f.endsWith(".lcn"));
+  const stFiles = files.filter(f => f.endsWith(".st"));
+
+  let className: string | null = null;
+  for (const lcnFile of lcnFiles) {
+    try {
+      const info = parseLcn(lcnFile);
+      const obj = info.objects.find(o => o.name === objectName);
+      if (obj) {
+        className = obj.className;
+        break;
+      }
+    } catch {}
+  }
+  if (!className) return null;
+
+  const stFile = stFiles.find(f => {
+    const base = f.substring(f.lastIndexOf("\\") + 1, f.lastIndexOf("."));
+    return base.toLowerCase() === className?.toLowerCase();
+  });
+  if (!stFile) return null;
+
+  try {
+    const stContent = readFileSync(stFile, "utf-8");
+    const re = new RegExp(`//\\s*${channelName}\\s*:\\s*(\\w+)`, "i");
+    const m = stContent.match(re);
+    if (m) {
+      return m[1].toUpperCase();
+    }
+  } catch {}
+  return null;
 }
 
 function batchResultToResponse(br: BatchResult, extra?: Record<string, unknown>) {
@@ -101,8 +151,9 @@ export async function controlPlcHandler(args: {
   lcp_path?: string;
   connection?: string;
 }) {
-  const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+  return withEngineLock(async () => {
+    const resolved = resolveLcpPath(args.lcp_path);
+    if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
 
   ensureScratch();
   const id = randomUUID();
@@ -166,6 +217,7 @@ export async function controlPlcHandler(args: {
     try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch { /* log parse failure silently */ }
   }
   return batchResultToResponse(br, stateData);
+  });
 }
 
 // ─── plc_values ──────────────────────────────────────────────────────────────
@@ -204,8 +256,9 @@ export async function plcValuesHandler(args: {
   channels?: string[];
   values?: { channel: string; value: string }[];
 }) {
-  const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+  return withEngineLock(async () => {
+    const resolved = resolveLcpPath(args.lcp_path);
+    if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
 
   ensureScratch();
   const id = randomUUID();
@@ -248,10 +301,32 @@ export async function plcValuesHandler(args: {
       "f.close()",
     ].join("\n") + "\n";
   } else {
-    if (!args.values?.length) {
-      return { content: [{ type: "text" as const, text: "values is required for action 'write'" }], isError: true };
+    const writeOpsList: string[] = [];
+    const projDir = resolved.path.substring(0, resolved.path.lastIndexOf("\\"));
+    for (const item of args.values ?? []) {
+      const ch = item.channel;
+      const parts = ch.split(".");
+      let pyVal = `${emitPy27String(item.value)}`;
+      if (parts.length === 2) {
+        const type = resolveChannelType(projDir, parts[0], parts[1]);
+        if (type) {
+          if (type === "BOOL") {
+            const isTrue = item.value.toLowerCase() === "true" || item.value === "1";
+            pyVal = isTrue ? "True" : "False";
+          } else if (["REAL", "LREAL"].includes(type)) {
+            if (!isNaN(Number(item.value))) {
+              pyVal = item.value;
+            }
+          } else if (["DINT", "INT", "SINT", "UDINT", "UINT", "USINT"].includes(type)) {
+            if (/^-?\d+$/.test(item.value)) {
+              pyVal = item.value;
+            }
+          }
+        }
+      }
+      writeOpsList.push(`(${emitPy27String(ch)}, ${pyVal})`);
     }
-    const writeOpsPy = `[${args.values.map((v) => `(${emitPy27String(v.channel)}, ${emitPy27String(v.value)})`).join(", ")}]`;
+    const writeOpsPy = `[${writeOpsList.join(", ")}]`;
     script = [
       "# -*- coding: utf-8 -*-",
       "import sigmatek.lasal.batch as batch",
@@ -279,15 +354,23 @@ export async function plcValuesHandler(args: {
 
   const br = runScript(script, logPath);
   let plcData: Record<string, unknown> = {};
+  let parseError: string | null = null;
+  let rawContent = "";
   if (existsSync(resultPath)) {
-    try { plcData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch { /* ignore */ }
+    rawContent = readFileSync(resultPath, "utf-8");
+    try {
+      plcData = JSON.parse(rawContent);
+    } catch (e: any) {
+      parseError = e.message;
+    }
   }
 
-  const ok = br.ok && (plcData.ok as boolean) !== false;
+  const ok = br.ok && parseError === null && (plcData.ok as boolean) !== false;
   const body: Record<string, unknown> = {
     ok,
     durationMs: br.durationMs,
     ...plcData,
+    ...(parseError ? { ok: false, error: `JSON Parse failure: ${parseError}`, raw: rawContent } : {}),
     ...(br.errors.length ? { scriptErrors: br.errors } : {}),
     ...(br.warnings.length ? { scriptWarnings: br.warnings } : {}),
     logPath: br.logPath,
@@ -296,4 +379,5 @@ export async function plcValuesHandler(args: {
     content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
     ...(ok ? {} : { isError: true }),
   };
+  });
 }

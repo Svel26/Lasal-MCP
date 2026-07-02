@@ -1,16 +1,9 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
-import { execSync } from "child_process";
 import { z } from "zod";
 import { readState } from "../state.js";
 import { findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
-
-const VISUDESIGNER_EXE =
-  process.env.LASAL_VISUDESIGNER_EXE ||
-  "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
-const CLASS2_EXE =
-  process.env.LASAL_CLASS2_EXE ||
-  "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
+import { CLASS2_EXE, VISUDESIGNER_EXE, killClass2, killVisuDesigner } from "../utils/engine.js";
 
 function requireProject(): { path: string } | { error: string } {
   const state = readState();
@@ -29,14 +22,7 @@ function launchDetached(exe: string, args: string[]): void {
   child.unref();
 }
 
-function killByName(processName: string): string {
-  try {
-    execSync(`taskkill /IM "${processName}" /F`, { stdio: "pipe" });
-    return `${processName} closed.`;
-  } catch {
-    return `${processName} was not running.`;
-  }
-}
+
 
 // --- manage_visudesigner ---
 
@@ -52,7 +38,8 @@ export const manageVisuDesignerSchema = {
 
 export async function manageVisuDesignerHandler(args: { action: "open" | "close"; lvp_path?: string }) {
   if (args.action === "close") {
-    return { content: [{ type: "text" as const, text: killByName("VISUDesigner.exe") }] };
+    killVisuDesigner();
+    return { content: [{ type: "text" as const, text: "VISUDesigner closed." }] };
   }
 
   const proj = requireProject();
@@ -104,7 +91,8 @@ export const manageClass2Schema = {
 
 export async function manageClass2Handler(args: { action: "open" | "close"; lcp_path?: string }) {
   if (args.action === "close") {
-    return { content: [{ type: "text" as const, text: killByName("Lasal2.exe") }] };
+    killClass2();
+    return { content: [{ type: "text" as const, text: "CLASS 2 closed." }] };
   }
 
   const proj = requireProject();

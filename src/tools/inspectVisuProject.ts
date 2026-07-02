@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync, createReadStream } from "fs";
 import { join, dirname, basename } from "path";
+import { createInterface } from "readline";
 import { z } from "zod";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 
@@ -8,55 +9,290 @@ export const inspectVisuProjectSchema = {
     .string()
     .optional()
     .describe("Full path to the .lvp file. Omit to auto-detect from the selected project."),
-  all_datapoints: z
-    .boolean()
+  scope: z
+    .enum(["summary", "dashboards", "function_blocks", "code_modules", "datapoints"])
     .optional()
-    .default(false)
-    .describe(
-      "Return the full flat list of all datapoint paths. Default false returns only top-level objects. " +
-      "Use true when you need to see every channel (can be large for big projects)."
-    ),
+    .default("summary")
+    .describe("Detail scope to inspect. Omit or set to 'summary' for the default summary."),
+  filter: z
+    .string()
+    .optional()
+    .describe("Filter/query string (regex) for datapoint scan. Required when scope='datapoints'."),
+  limit: z
+    .number()
+    .int()
+    .optional()
+    .default(50)
+    .describe("Maximum matches to return when scope='datapoints'. Default 50."),
 };
 
-function readJson(filePath: string): unknown {
+function readJson(filePath: string): any {
   return JSON.parse(readFileSync(filePath, "utf-8"));
 }
 
-function flattenDatapoints(
-  nodes: any[],
-  parentPath = ""
-): Array<{ path: string; datatype: string }> {
-  const result: Array<{ path: string; datatype: string }> = [];
-  for (const node of nodes ?? []) {
-    if (node.type !== "datapoint") continue;
-    const path = parentPath ? `${parentPath}.${node.name}` : node.name;
-    const datatype = node.datatype?.value ?? "?";
-    result.push({ path, datatype });
-    if (node.children?.length) {
-      result.push(...flattenDatapoints(node.children, path));
+async function scanDatapointsStream(
+  filePath: string,
+  filterRegex: RegExp,
+  limit: number
+): Promise<Array<{ path: string; datatype: string }>> {
+  const fileStream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
+
+  const results: Array<{ path: string; datatype: string }> = [];
+  const nameStack: string[] = [];
+  
+  let currentName: string | null = null;
+  let currentDatatype: string | null = null;
+  let inDatatype = false;
+
+  for await (const line of rl) {
+    if (line.includes('"children": [')) {
+      if (currentName) {
+        nameStack.push(currentName);
+        currentName = null;
+        currentDatatype = null;
+      }
+      continue;
+    }
+
+    if (line.trim().startsWith(']')) {
+      if (nameStack.length > 0) {
+        nameStack.pop();
+      }
+      continue;
+    }
+
+    const nameMatch = line.match(/"name"\s*:\s*"([^"]+)"/);
+    if (nameMatch) {
+      currentName = nameMatch[1];
+    }
+
+    if (line.includes('"datatype"')) {
+      inDatatype = true;
+      const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
+      if (valMatch) {
+        currentDatatype = valMatch[1];
+        inDatatype = false;
+      }
+    } else if (inDatatype) {
+      const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
+      if (valMatch) {
+        currentDatatype = valMatch[1];
+        inDatatype = false;
+      }
+    }
+
+    if (line.trim().startsWith('}') || line.trim().startsWith('},')) {
+      if (currentName) {
+        const fullPath = [...nameStack, currentName].join(".");
+        if (filterRegex.test(fullPath)) {
+          results.push({ path: fullPath, datatype: currentDatatype || "unknown" });
+          if (results.length >= limit) {
+            rl.close();
+            fileStream.destroy();
+            break;
+          }
+        }
+      }
+      currentName = null;
+      currentDatatype = null;
     }
   }
-  return result;
+
+  return results;
 }
 
-export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_datapoints?: boolean }) {
+async function getDatapointSummary(
+  filePath: string
+): Promise<{ roots: Array<{ name: string; datatype: string }>; total: number }> {
+  const fileStream = createReadStream(filePath, { encoding: "utf-8" });
+  const rl = createInterface({
+    input: fileStream,
+    crlfDelay: Infinity,
+  });
+
+  const roots: Array<{ name: string; datatype: string }> = [];
+  let total = 0;
+  const nameStack: string[] = [];
+  
+  let currentName: string | null = null;
+  let currentDatatype: string | null = null;
+  let inDatatype = false;
+
+  for await (const line of rl) {
+    if (line.includes('"children": [')) {
+      if (currentName) {
+        nameStack.push(currentName);
+        currentName = null;
+        currentDatatype = null;
+      }
+      continue;
+    }
+
+    if (line.trim().startsWith(']')) {
+      if (nameStack.length > 0) {
+        nameStack.pop();
+      }
+      continue;
+    }
+
+    const nameMatch = line.match(/"name"\s*:\s*"([^"]+)"/);
+    if (nameMatch) {
+      currentName = nameMatch[1];
+    }
+
+    if (line.includes('"datatype"')) {
+      inDatatype = true;
+      const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
+      if (valMatch) {
+        currentDatatype = valMatch[1];
+        inDatatype = false;
+      }
+    } else if (inDatatype) {
+      const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
+      if (valMatch) {
+        currentDatatype = valMatch[1];
+        inDatatype = false;
+      }
+    }
+
+    if (line.trim().startsWith('}') || line.trim().startsWith('},')) {
+      if (currentName) {
+        total++;
+        if (nameStack.length === 0) {
+          roots.push({ name: currentName, datatype: currentDatatype || "unknown" });
+        }
+      }
+      currentName = null;
+      currentDatatype = null;
+    }
+  }
+
+  return { roots, total };
+}
+
+export async function inspectVisuProjectHandler(args: {
+  lvp_path?: string;
+  scope?: "summary" | "dashboards" | "function_blocks" | "code_modules" | "datapoints";
+  filter?: string;
+  limit?: number;
+}) {
   const resolved = resolveLvpPath(args.lvp_path);
   if ("error" in resolved) {
     return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
   }
 
   const lvpPath = resolved.path;
-  // The .lvp is a file whose parent dir is the project folder-database
-  // e.g. .../VisuPalletizerLVD/VisuPalletizerLVD.lvp → project dir is .../VisuPalletizerLVD/
   const projectDir = dirname(lvpPath);
+  const scope = args.scope ?? "summary";
 
-  const result: Record<string, unknown> = {
+  const result: Record<string, any> = {
     lvpPath,
     projectName: basename(lvpPath, ".lvp"),
+    scope,
   };
   const errors: string[] = [];
 
-  // ── Stations ─────────────────────────────────────────────────────────────
+  // ── 1. Datapoints scope (optimized stream scan) ────────────────────────────
+  if (scope === "datapoints") {
+    if (!args.filter) {
+      return { content: [{ type: "text" as const, text: "filter is required when scope='datapoints'" }], isError: true };
+    }
+    const dpFile = join(projectDir, "Datapoints", "0_Datapoints.json");
+    if (existsSync(dpFile)) {
+      try {
+        const matches = await scanDatapointsStream(dpFile, new RegExp(args.filter, "i"), args.limit ?? 50);
+        result.datapoints = matches;
+      } catch (e: any) {
+        errors.push(`datapoints scan error: ${e.message}`);
+      }
+    } else {
+      result.datapoints = [];
+    }
+    if (errors.length) result.errors = errors;
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+
+  // ── 2. Dashboards scope (element counts) ───────────────────────────────────
+  if (scope === "dashboards") {
+    const list: Array<{ name: string; path: string; elementCount: number; type: string }> = [];
+    for (const dirName of ["Dashboards", "GlobalDashboards", "Windows"]) {
+      const dir = join(projectDir, dirName);
+      if (!existsSync(dir)) continue;
+      try {
+        for (const f of readdirSync(dir)) {
+          if (!f.endsWith(".json")) continue;
+          const fullPath = join(dir, f);
+          try {
+            const data = readJson(fullPath);
+            const count = Array.isArray(data.dashboardelements) ? data.dashboardelements.length : 0;
+            list.push({
+              name: data.name ?? basename(f, ".json"),
+              path: fullPath,
+              elementCount: count,
+              type: dirName.slice(0, -1).toLowerCase(), // dashboard, globaldashboard, window
+            });
+          } catch {}
+        }
+      } catch (e: any) {
+        errors.push(`${dirName}: ${e.message}`);
+      }
+    }
+    result.dashboards = list;
+    if (errors.length) result.errors = errors;
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+
+  // ── 3. Function Blocks scope ───────────────────────────────────────────────
+  if (scope === "function_blocks") {
+    const fbs: any[] = [];
+    const fbDir = join(projectDir, "Functionblocks");
+    if (existsSync(fbDir)) {
+      try {
+        for (const f of readdirSync(fbDir)) {
+          if (!f.endsWith(".json")) continue;
+          const jsonPath = join(fbDir, f);
+          try {
+            const data = readJson(jsonPath);
+            fbs.push({
+              name: data.name ?? basename(f, ".json"),
+              jsonPath,
+              jsPath: jsonPath.replace(".json", ".js"),
+              properties: data.properties ?? [],
+            });
+          } catch {}
+        }
+      } catch (e: any) {
+        errors.push(`function_blocks: ${e.message}`);
+      }
+    }
+    result.functionBlocks = fbs;
+    if (errors.length) result.errors = errors;
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+
+  // ── 4. Code Modules scope ──────────────────────────────────────────────────
+  if (scope === "code_modules") {
+    const codeModulesDir = join(projectDir, "CodeModules");
+    const list: string[] = [];
+    if (existsSync(codeModulesDir)) {
+      try {
+        const modules = readdirSync(codeModulesDir).filter((f) => f.endsWith(".js") || f.endsWith(".ts"));
+        list.push(...modules);
+      } catch (e: any) {
+        errors.push(`codeModules: ${e.message}`);
+      }
+    }
+    result.codeModules = list;
+    if (errors.length) result.errors = errors;
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+
+  // ── 5. Default Summary scope ───────────────────────────────────────────────
+  // Stations
   const stationsFile = join(projectDir, "Stations", "Stations.json");
   if (existsSync(stationsFile)) {
     try {
@@ -72,7 +308,7 @@ export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_d
     }
   }
 
-  // ── Languages ────────────────────────────────────────────────────────────
+  // Languages
   const locDir = join(projectDir, "Localization");
   if (existsSync(locDir)) {
     try {
@@ -84,47 +320,43 @@ export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_d
     }
   }
 
-  // ── Datapoints ────────────────────────────────────────────────────────────
+  // Datapoints summary (optimized stream)
   const dpFile = join(projectDir, "Datapoints", "0_Datapoints.json");
   if (existsSync(dpFile)) {
     try {
-      const data: any = readJson(dpFile);
-      const allDps = flattenDatapoints(data.datapoints ?? []);
-      if (args.all_datapoints) {
-        result.datapoints = allDps;
-      } else {
-        // Top-level only (no dot in path = root objects)
-        result.datapointRoots = allDps
-          .filter((dp) => !dp.path.includes("."))
-          .map((dp) => ({ name: dp.path, datatype: dp.datatype }));
-        result.totalDatapoints = allDps.length;
-        result.hint_datapoints = "Set all_datapoints:true to see all nested paths.";
-      }
+      const summary = await getDatapointSummary(dpFile);
+      result.datapointRoots = summary.roots;
+      result.totalDatapoints = summary.total;
     } catch (e: any) {
-      errors.push(`datapoints: ${e.message}`);
+      errors.push(`datapoints summary: ${e.message}`);
     }
   }
 
-  // ── Text lists ────────────────────────────────────────────────────────────
-  const langs = (result.languages as string[] | undefined) ?? [];
-  const textLists: string[] = [];
-  for (const lang of langs) {
-    const tlDir = join(locDir, lang, "Textlists");
-    if (!existsSync(tlDir)) continue;
+  // Text Lists
+  const textListsDir = join(projectDir, "Localization");
+  if (existsSync(textListsDir)) {
     try {
-      for (const f of readdirSync(tlDir)) {
-        if (!f.endsWith(".json")) continue;
+      const textLists: string[] = [];
+      for (const langDir of readdirSync(textListsDir)) {
+        const langPath = join(textListsDir, langDir);
         try {
-          const data: any = readJson(join(tlDir, f));
-          const name: string = data.name ?? basename(f, ".json");
-          if (!textLists.includes(name)) textLists.push(name);
-        } catch { /* skip */ }
+          for (const f of readdirSync(langPath)) {
+            if (!f.endsWith(".json")) continue;
+            try {
+              const data = readJson(join(langPath, f));
+              const name = data.name ?? basename(f, ".json");
+              if (!textLists.includes(name)) textLists.push(name);
+            } catch {}
+          }
+        } catch {}
       }
-    } catch { /* skip */ }
+      if (textLists.length) result.textLists = textLists;
+    } catch (e: any) {
+      errors.push(`textLists: ${e.message}`);
+    }
   }
-  if (textLists.length > 0) result.textLists = textLists;
 
-  // ── Schemes ───────────────────────────────────────────────────────────────
+  // Schemes
   const schemesDir = join(projectDir, "Schemes");
   if (existsSync(schemesDir)) {
     try {
@@ -136,7 +368,7 @@ export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_d
             if (!schemeFile.endsWith(".json")) continue;
             schemes.push({ type: typeDir, name: basename(schemeFile, ".json") });
           }
-        } catch { /* skip */ }
+        } catch {}
       }
       if (schemes.length) result.schemes = schemes;
     } catch (e: any) {
@@ -144,7 +376,7 @@ export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_d
     }
   }
 
-  // ── Alarms ────────────────────────────────────────────────────────────────
+  // Alarms
   const alarmsDir = join(projectDir, "Alarms");
   if (existsSync(alarmsDir)) {
     try {
@@ -155,41 +387,11 @@ export async function inspectVisuProjectHandler(args: { lvp_path?: string; all_d
           const data: any = readJson(join(alarmsDir, f));
           const name: string = data.name ?? basename(f, ".json");
           alarms.push(name);
-        } catch { /* skip */ }
+        } catch {}
       }
       if (alarms.length) result.alarms = alarms;
     } catch (e: any) {
       errors.push(`alarms: ${e.message}`);
-    }
-  }
-
-  // ── Views & Dashboards ────────────────────────────────────────────────────
-  for (const dirName of ["Views", "Dashboards", "GlobalDashboards", "Windows"]) {
-    const dir = join(projectDir, dirName);
-    if (!existsSync(dir)) continue;
-    try {
-      const names: string[] = [];
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".json")) continue;
-        try {
-          const data: any = readJson(join(dir, f));
-          names.push(data.name ?? basename(f, ".json"));
-        } catch { /* skip */ }
-      }
-      if (names.length) result[dirName.toLowerCase()] = names;
-    } catch (e: any) {
-      errors.push(`${dirName}: ${e.message}`);
-    }
-  }
-
-  // ── Code modules ─────────────────────────────────────────────────────────
-  const codeModulesDir = join(projectDir, "CodeModules");
-  if (existsSync(codeModulesDir)) {
-    try {
-      const modules = readdirSync(codeModulesDir).filter((f) => f.endsWith(".js") || f.endsWith(".ts"));
-      if (modules.length) result.codeModules = modules;
-    } catch (e: any) {
-      errors.push(`codeModules: ${e.message}`);
     }
   }
 

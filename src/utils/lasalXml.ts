@@ -441,15 +441,23 @@ export function cascadeRenameServerInLcn(lcnPath: string, className: string, old
   });
 
   // 2. Rename in Connections: Destination="ObjName.OldName" → "ObjName.NewName"
-  // We must only rename connections that target objects of this class.
-  // Since we don't track which objects belong to which class in connections,
-  // we rename any destination ending in .OldName that likely belongs to this class.
-  // (The full accuracy requires cross-referencing object names - done in the tool layer.)
-  // Here we do the raw rename; the caller passes a pre-filtered set of object names.
-  content = content.replace(
-    new RegExp(`(Destination\\s*=\\s*"[^".]+\\.)(${escapeRe(oldName)}")`, "g"),
-    `$1${newName}"`
-  );
+  // Resolve object->class from the .lcn object list and only rewrite connections whose object is an instance of the edited class.
+  const lcnInfo = parseLcn(lcnPath);
+  const objMap = new Map<string, string>(); // object name -> class name
+  for (const obj of lcnInfo.objects) {
+    objMap.set(obj.name, obj.className);
+  }
+
+  const connectionRe = new RegExp(`(Destination\\s*=\\s*")([^".]+)\\.(${escapeRe(oldName)})(")`, "g");
+  content = content.replace(connectionRe, (match, prefix, objName, serverName, suffix) => {
+    const objClass = objMap.get(objName);
+    if (objClass === className) {
+      return `${prefix}${objName}.${newName}${suffix}`;
+    } else if (!objClass) {
+      console.warn(`Warning: Could not resolve class for object "${objName}" in ${lcnPath} when renaming server "${oldName}" to "${newName}"`);
+    }
+    return match;
+  });
 
   writeLatin1(lcnPath, content);
 }
@@ -636,50 +644,7 @@ function findSectionRange(
   return { start, end };
 }
 
-/** Parse variables from the class body text. */
-function parseVariablesFromBody(classPart: string): StVariable[] {
-  const range = findSectionRange(classPart, "Variables");
-  if (!range) return [];
-  const section = classPart.slice(range.start, range.end);
-  const result: StVariable[] = [];
-  for (const line of section.split("\n")) {
-    // Match: optional-whitespace Name optional-whitespace : Type ;
-    const m = line.match(/^\s+(\w+)\s*:\s*(.+?)\s*;?\s*$/);
-    if (m && m[1] && m[2]) {
-      result.push({ name: m[1], type: m[2].trim() });
-    }
-  }
-  return result;
-}
 
-/** Parse method signatures from the class body Functions section. */
-function parseMethodsFromBody(classPart: string): StMethodSig[] {
-  const range = findSectionRange(classPart, "Functions");
-  if (!range) return [];
-  const section = classPart.slice(range.start, range.end);
-  const result: StMethodSig[] = [];
-
-  // Find each FUNCTION declaration
-  const funcRe = /\bFUNCTION\b([\s\w]*?)\s+(\w+)\s*(?:;|\r?\n|$)/g;
-  let m: RegExpExecArray | null;
-  while ((m = funcRe.exec(section)) !== null) {
-    const modStr = m[1].trim();
-    const name = m[2];
-    if (name.startsWith("@")) continue; // system tables
-    const modifiers = modStr ? modStr.split(/\s+/).filter(Boolean) : [];
-    result.push({ name, modifiers, params: [] }); // params parsing omitted for brevity
-  }
-  return result;
-}
-
-export function parseStBody(stPath: string): StBodyInfo {
-  const content = readLatin1(stPath);
-  const { classPart } = splitStSections(content);
-  return {
-    variables: parseVariablesFromBody(classPart),
-    methods: parseMethodsFromBody(classPart),
-  };
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ST body channel type declarations  (//Servers: and //Clients: sections)
@@ -797,8 +762,14 @@ export function renameVariableInSt(
     if (varRange) {
       const section = classPart.slice(varRange.start, varRange.end);
       const newSection = section.replace(
-        new RegExp(`\\b${escapeRe(oldName)}\\b`, "g"),
-        newName
+        new RegExp(`\\b${escapeRe(oldName)}\\b`, "gi"),
+        (m) => {
+          return newName[0] === oldName[0]
+            ? newName
+            : m[0] === m[0].toUpperCase()
+            ? newName[0].toUpperCase() + newName.slice(1)
+            : newName;
+        }
       );
       newClassPart =
         classPart.slice(0, varRange.start) + newSection + classPart.slice(varRange.end);

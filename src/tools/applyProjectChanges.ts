@@ -30,6 +30,7 @@ import {
 } from "../utils/lasalXml.js";
 import { runBatchOps, BatchOp } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
+import { withEngineLock, killClass2, killVisuDesigner } from "../utils/engine.js";
 
 // ─── Operation schemas ────────────────────────────────────────────────────────
 
@@ -335,7 +336,7 @@ export const applyProjectChangesSchema = {
     .optional()
     .describe("Absolute path to the .lcp file. Omit to use the currently selected project."),
   operations: z
-    .array(z.any())
+    .array(OperationSchema)
     .describe(
       "Ordered list of operations to apply. " +
       "Each has a 'type' field. " +
@@ -347,9 +348,8 @@ export const applyProjectChangesSchema = {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function killIde() {
-  for (const exe of ["Lasal2.exe", "VISUDesigner.exe"]) {
-    try { execSync(`taskkill /IM "${exe}" /F /T`, { stdio: "pipe" }); } catch { /* not running */ }
-  }
+  killClass2();
+  killVisuDesigner();
 }
 
 function findStForClass(classFiles: { absPath: string }[], className: string): string | null {
@@ -369,7 +369,8 @@ export async function applyProjectChangesHandler(args: {
   lcp_path?: string;
   operations: unknown[];
 }) {
-  const resolved = resolveLcpPath(args.lcp_path);
+  return withEngineLock(async () => {
+    const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) {
     return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
   }
@@ -762,4 +763,5 @@ export async function applyProjectChangesHandler(args: {
     content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }],
     ...(overallOk ? {} : { isError: true }),
   };
+  });
 }

@@ -1,14 +1,8 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { execSync, execFileSync } from "child_process";
-import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-
-const VISUDESIGNER_EXE =
-  process.env.LASAL_VISUDESIGNER_EXE ||
-  "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
-
-const SCRATCH = join(tmpdir(), "lasal-mcp");
+import { VISUDESIGNER_EXE, SCRATCH, killVisuDesigner } from "./engine.js";
 
 export interface VisuResult {
   ok: boolean;
@@ -192,15 +186,10 @@ function emitMediaItem(def: MediaItemDef): string {
 export function buildVisuScript(
   lvpPath: string,
   ops: VisuOp[],
+  logPath: string,
   saveAtEnd = true
 ): string {
-  const lines: string[] = [
-    "import sigmatek.lasal.lvd as lvd",
-    "lvd.SetExceptionOnError(True)",
-    `prj = lvd.LoadProject(${emitStr(lvpPath)})`,
-    "if prj is None: raise RuntimeError(f'Failed to load project: {repr(" + emitStr(lvpPath) + ")}')",
-    "",
-  ];
+  const lines: string[] = [];
 
   for (const op of ops) {
     switch (op.type) {
@@ -384,11 +373,37 @@ export function buildVisuScript(
     }
   }
 
-  if (saveAtEnd) {
-    lines.push("", "lvd.SaveProject(prj)");
-  }
-  lines.push("lvd.CloseProject(prj)");
-  return lines.join("\n") + "\n";
+  const indentedBody = lines.map(line => line ? `    ${line}` : "").join("\n");
+
+  const finalScript = [
+    "import sys",
+    "import traceback",
+    `log_file = open(${emitStr(logPath)}, "w", encoding="utf-8")`,
+    "sys.stdout = log_file",
+    "sys.stderr = log_file",
+    "",
+    "import sigmatek.lasal.lvd as lvd",
+    "lvd.SetExceptionOnError(True)",
+    "",
+    "try:",
+    "    print('(STEP) LoadProject')",
+    `    prj = lvd.LoadProject(${emitStr(lvpPath)})`,
+    "    if prj is None: raise RuntimeError('Failed to load project')",
+    "",
+    indentedBody,
+    "",
+    saveAtEnd ? "    print('(STEP) SaveProject')\n    lvd.SaveProject(prj)" : "",
+    "    print('(STEP) CloseProject')",
+    "    lvd.CloseProject(prj)",
+    "except Exception as e:",
+    "    print('(ERROR) Exception occurred during script execution:')",
+    "    traceback.print_exc()",
+    "    sys.exit(1)",
+    "finally:",
+    "    log_file.close()"
+  ].join("\n") + "\n";
+
+  return finalScript;
 }
 
 // ── Script runner ─────────────────────────────────────────────────────────────
@@ -397,9 +412,7 @@ function ensureScratch() {
   if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
 }
 
-function killVisuDesigner() {
-  try { execSync(`taskkill /IM "VISUDesigner.exe" /F /T`, { stdio: "pipe" }); } catch { /* not running */ }
-}
+
 
 function parseLog(logPath: string): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
@@ -426,7 +439,7 @@ export function runVisuOps(
   const scriptPath = join(SCRATCH, `visu_${id}.py`);
   const logPath = join(SCRATCH, `visu_${id}.log`);
 
-  writeFileSync(scriptPath, buildVisuScript(lvpPath, ops, saveAtEnd), "utf-8");
+  writeFileSync(scriptPath, buildVisuScript(lvpPath, ops, logPath, saveAtEnd), "utf-8");
 
   const start = Date.now();
   let exitCode = 0;
@@ -451,7 +464,7 @@ export function runVisuOps(
         if (t) errors.push(t);
       }
     }
-    try { execSync(`taskkill /IM "VISUDesigner.exe" /F /T`, { stdio: "pipe" }); } catch { /* ignore */ }
+    killVisuDesigner();
   }
 
   const durationMs = Date.now() - start;
@@ -460,6 +473,13 @@ export function runVisuOps(
   const { errors: logErrors, warnings: logWarnings } = parseLog(logPath);
   errors.push(...logErrors);
   warnings.push(...logWarnings);
+
+  if (exitCode !== 0 && existsSync(logPath)) {
+    const logContent = readFileSync(logPath, "utf-8").trim();
+    if (logContent) {
+      errors.push("--- Log Output ---", ...logContent.split("\n").map(l => l.trim()));
+    }
+  }
 
   if (exitCode !== 0 && errors.length === 0) {
     errors.push(`VISUDesigner.exe exited with code ${exitCode}`);

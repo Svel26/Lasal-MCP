@@ -1,14 +1,8 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { execSync, execFileSync } from "child_process";
-import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-
-const CLASS2_EXE =
-  process.env.LASAL_CLASS2_EXE ||
-  "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
-
-const SCRATCH = join(tmpdir(), "lasal-mcp");
+import { CLASS2_EXE, SCRATCH, killClass2 } from "./engine.js";
 
 export interface BatchResult {
   ok: boolean;
@@ -57,9 +51,7 @@ function ensureScratch() {
   if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
 }
 
-function killClass2() {
-  try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* not running */ }
-}
+
 
 export function emitPy27String(s: string): string {
   // Produce a Python 2.7 string expression encoded with mbcs to match C++ ATL::CStringT expectations
@@ -287,7 +279,7 @@ export function runScript(
         if (t) stderrLines.push(t);
       }
     }
-    try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* ignore */ }
+    killClass2();
   }
 
   const durationMs = Date.now() - start;
@@ -351,7 +343,7 @@ export function runBatchOps(
         if (t) stderrLines.push(t);
       }
     }
-    try { execSync(`taskkill /IM "Lasal2.exe" /F /T`, { stdio: "pipe" }); } catch { /* ignore */ }
+    killClass2();
   }
 
   const durationMs = Date.now() - start;

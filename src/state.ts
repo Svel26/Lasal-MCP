@@ -8,8 +8,14 @@ const STATE_FILE = join(
   "lasal-state.json"
 );
 
-interface LasalState {
+export interface LasalState {
   currentProject: string | null;
+  hmiRuntime?: {
+    pid: number;
+    port: number;
+    url: string;
+    dataDir: string;
+  };
 }
 
 const DEFAULT_STATE: LasalState = {

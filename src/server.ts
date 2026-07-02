@@ -19,6 +19,10 @@ import {
   plcValuesSchema, plcValuesHandler,
 } from "./tools/plcControl.js";
 import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
+import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
+import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
+import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
+import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
@@ -116,11 +120,77 @@ server.tool(
 );
 
 server.tool(
+  "hmi_runtime",
+  "Manage the local serving of the web HMI simulation. action='start' publishes, prepares files, and spawns LasalVISUDataService.exe in background. action='stop' kills the DataService. action='status' queries if it is currently running.",
+  hmiRuntimeSchema,
+  hmiRuntimeHandler
+);
+
+server.tool(
+  "hmi_browser",
+  "Drive a headless Edge browser instance to debug the running HMI simulation. Actions: open (navigates to HMI), screenshot (returns PNG image), console (gets page console/errors), eval (evaluates JS expressions to query datapoints/state), click, type, wait, close.",
+  hmiBrowserSchema,
+  hmiBrowserHandler
+);
+
+server.tool(
+  "plc_diagnostics",
+  "Perform diagnostic operations on the target PLC. action='trace' loads DataAnalyzer config, runs trace, and saves data. action='file_upload' uploads a file from PLC to host. action='file_download' downloads a file from host to PLC. action='file_delete' deletes file on PLC. action='code_analysis' performs static code analysis.",
+  plcDiagnosticsSchema,
+  plcDiagnosticsHandler
+);
+
+server.resource(
+  "LASAL HMI Debugging and JS API Guide",
+  "lasal://guide",
+  {
+    description: "Guide for debugging LASAL web HMIs and using the runtime JS API",
+    mimeType: "text/markdown"
+  },
+  async () => {
+    return {
+      contents: [{
+        uri: "lasal://guide",
+        mimeType: "text/markdown",
+        text: `# LASAL HMI Debugging and JS API Guide
+
+## HMI Debugging Workflows
+1. **Compilation and Deploy**: Use \`deploy_all\` with \`start_hmi_runtime: true\` to compile, deploy to the PLC, sync VISU stations, and start the local DataService.
+2. **Launch HMI Runtime**: Use \`hmi_runtime\` action \`start\` to publish and run the HMI DataService.
+3. **Debug with Browser**: Use \`hmi_browser\` action \`open\` to load the local HMI, and use \`screenshot\`, \`console\`, and \`eval\` to debug the interface.
+
+## Runtime JavaScript API Cheat-sheet
+Within the HMI web environment, you can interact with the runtime using the global \`sig\` or Polymer elements API.
+- **Read a Datapoint**:
+  \`\`\`javascript
+  sig.datapoint.get('Palletizer.s_BoxWidth')
+  \`\`\`
+- **Write a Datapoint**:
+  \`\`\`javascript
+  sig.datapoint.set('Palletizer.s_BoxWidth', 150)
+  \`\`\`
+- **Get Active Alarms**:
+  \`\`\`javascript
+  sig.alarm.getActiveAlarms()
+  \`\`\`
+- **Read Active View/Dashboard**:
+  \`\`\`javascript
+  document.querySelector('sig-app').activeView
+  \`\`\`
+`
+      }]
+    };
+  }
+);
+
+server.tool(
   "deploy_all",
   "Run the full deploy pipeline in one call: compile CLASS 2 → download to PLC → update VISUDesigner stations → optionally download visu to HMI. Each step is skipped if its flag is false. Stops immediately on any failure and reports which step failed. Use after making CLASS 2 or VISUDesigner changes to push everything to the target hardware.",
   deployAllSchema,
   deployAllHandler
 );
+
+cleanupScratch();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

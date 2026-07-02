@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { runVisuOps, VisuOp } from "../utils/visuScript.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
+import { withEngineLock } from "../utils/engine.js";
 
 function visuResultToResponse(r: ReturnType<typeof runVisuOps>, extra?: Record<string, unknown>) {
   const body: Record<string, unknown> = {
@@ -320,7 +321,7 @@ export const visuProjectSchema = {
     .optional()
     .describe("Full path to the .lvp project file. Omit to auto-detect from the selected project."),
   operations: z
-    .array(z.any())
+    .array(OperationSchema)
     .optional()
     .describe(
       "Ordered list of VISUDesigner operations (apply_changes only). Each has a 'type' field. " +
@@ -360,10 +361,11 @@ export async function visuProjectHandler(args: {
   flags?: number;
   add_runtime?: boolean;
 }) {
-  const resolved = resolveLvpPath(args.lvp_path);
-  if ("error" in resolved) {
-    return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
-  }
+  return withEngineLock(async () => {
+    const resolved = resolveLvpPath(args.lvp_path);
+    if ("error" in resolved) {
+      return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+    }
 
   if (args.action === "download") {
     if (!args.connection) {
@@ -390,4 +392,5 @@ export async function visuProjectHandler(args: {
   const visuOps: VisuOp[] = parsed.ops.map(toVisuOp);
   const r = runVisuOps(resolved.path, visuOps);
   return visuResultToResponse(r, { lvpPath: resolved.path });
+  });
 }
