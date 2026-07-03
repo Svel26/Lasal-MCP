@@ -6,6 +6,8 @@ import { readState, writeState } from "../state.js";
 import { DATASERVICE_EXE, killDataService, withEngineLock } from "../utils/engine.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { runVisuOps } from "../utils/visuScript.js";
+import { respond, fail } from "../utils/respond.js";
+import * as http from "http";
 
 export const hmiRuntimeSchema = {
   action: z.enum(["start", "stop", "status"]).describe("Action to perform on the HMI runtime DataService."),
@@ -62,176 +64,208 @@ function isPidRunning(pid: number): boolean {
   }
 }
 
+function checkHttpHealth(url: string, timeoutMs = 1000): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const req = http.get(url, { timeout: timeoutMs }, (res) => {
+        resolve(res.statusCode === 200 || res.statusCode === 302 || res.statusCode === 301);
+        res.resume();
+      });
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 export async function hmiRuntimeHandler(args: {
   action: "start" | "stop" | "status";
   lvp_path?: string;
   debugPublish?: boolean;
   publishFirst?: boolean;
 }) {
-  const state = readState();
+  return withEngineLock(async () => {
+    const state = readState();
+    const warnings: string[] = [];
 
-  if (args.action === "stop") {
-    const running = state.hmiRuntime;
-    if (running) {
-      killDataService(running.pid);
-      state.hmiRuntime = undefined;
-      writeState(state);
-      return { content: [{ type: "text" as const, text: `HMI runtime DataService (PID ${running.pid}) stopped.` }] };
-    } else {
-      killDataService();
-      return { content: [{ type: "text" as const, text: "No tracked HMI runtime running. Attempted global process kill." }] };
-    }
-  }
-
-  if (args.action === "status") {
-    const running = state.hmiRuntime;
-    if (running && isPidRunning(running.pid)) {
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({ running: true, ...running }, null, 2)
-        }]
-      };
-    } else {
+    if (args.action === "stop") {
+      const running = state.hmiRuntime;
       if (running) {
+        killDataService(running.pid);
         state.hmiRuntime = undefined;
         writeState(state);
+        return respond({ ok: true, message: `HMI runtime DataService (PID ${running.pid}) stopped.` });
+      } else {
+        killDataService();
+        return respond({ ok: true, message: "No tracked HMI runtime running. Attempted global process kill." });
       }
-      return { content: [{ type: "text" as const, text: JSON.stringify({ running: false }, null, 2) }] };
-    }
-  }
-
-  // action === "start"
-  const resolved = resolveLvpPath(args.lvp_path);
-  if ("error" in resolved) {
-    return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
-  }
-
-  // 1. Publish first if requested
-  if (args.publishFirst ?? true) {
-    let debug = args.debugPublish ?? true;
-    let publishResult = runVisuOps(resolved.path, [{ type: "publish", debug }]);
-    if (!publishResult.ok && debug) {
-      console.warn("Debug publish failed (possibly due to disabled TypeScript). Retrying with standard publish...");
-      publishResult = runVisuOps(resolved.path, [{ type: "publish", debug: false }]);
-    }
-    if (!publishResult.ok) {
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Failed to publish project before starting HMI runtime: ${publishResult.errors.join("\n")}`
-        }],
-        isError: true,
-      };
-    }
-  }
-
-  // 2. Discover published folders
-  const visuDir = resolved.path.substring(0, resolved.path.lastIndexOf("\\"));
-  const webrootSrc = join(visuDir, "TempPreview", "Publish", "webroot");
-  const dataSrc = join(visuDir, "TempPreview", "Publish", "dataservice", "data");
-
-  if (!existsSync(webrootSrc)) {
-    return { content: [{ type: "text" as const, text: `Published webroot not found at: ${webrootSrc}. Run HMI publish first.` }], isError: true };
-  }
-
-  // 3. Prepare C:\lslvisu
-  const dataDir = "C:\\lslvisu";
-  try {
-    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-    
-    // Copy webroot files
-    copyDirSync(webrootSrc, dataDir);
-
-    // Copy dataservice data if available
-    if (existsSync(dataSrc)) {
-      copyDirSync(dataSrc, join(dataDir, "dataservice", "data"));
     }
 
-    // Link rt folder
-    const visuDesignerDir = DATASERVICE_EXE.substring(0, DATASERVICE_EXE.indexOf("\\Lasal VISUDesigner"));
-    const rtSrc = join(visuDesignerDir, "SIGMATEK", "Lasal", "VISUDesigner", "Runtime", "rt");
-    if (existsSync(rtSrc)) {
-      createJunction(rtSrc, join(dataDir, "rt"));
-    } else {
-      console.warn(`Warning: VISUDesigner Runtime 'rt' directory not found at ${rtSrc}. Paths starting with 'rt/' might fail to resolve.`);
-    }
-
-    // Create logs dir
-    const logDir = join(dataDir, "dataservice", "logs");
-    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
-
-    // 4. Ensure stations.json is Intern
-    const stationsJsonPath = join(dataDir, "dataservice", "data", "stations.json");
-    if (existsSync(stationsJsonPath)) {
-      try {
-        const stations = JSON.parse(readFileSync(stationsJsonPath, "utf-8"));
-        if (Array.isArray(stations.stations)) {
-          for (const s of stations.stations) {
-            s.conType = "INTERN";
-          }
-          writeFileSync(stationsJsonPath, JSON.stringify(stations, null, 2), "utf-8");
+    if (args.action === "status") {
+      const running = state.hmiRuntime;
+      if (running && isPidRunning(running.pid)) {
+        const healthy = await checkHttpHealth(`http://127.0.0.1:${running.port}/`);
+        return respond({ ok: true, running: true, healthy, ...running });
+      } else {
+        if (running) {
+          state.hmiRuntime = undefined;
+          writeState(state);
         }
-      } catch {}
+        return respond({ ok: true, running: false });
+      }
     }
 
-    // 5. Patch config.json
-    const configPath = join(dataDir, "dataservice", "config.json");
-    const dataConfigPath = join(dataDir, "dataservice", "data", "config.json");
-    const configContent = {
-      WindowsAutoExit: false,
-      WSAccessLog: true,
-      WSErrorLog: true,
-      LogDir: logDir,
-    };
-    writeFileSync(configPath, JSON.stringify(configContent, null, 2), "utf-8");
-    if (existsSync(join(dataDir, "dataservice", "data"))) {
-      writeFileSync(dataConfigPath, JSON.stringify(configContent, null, 2), "utf-8");
+    // action === "start"
+    const resolved = resolveLvpPath(args.lvp_path);
+    if ("error" in resolved) {
+      return fail(resolved.error, ["Select a project first using select_project or specify lvp_path."]);
     }
-  } catch (e: any) {
-    return { content: [{ type: "text" as const, text: `Failed to set up HMI runtime directory C:\\lslvisu: ${e.message}` }], isError: true };
-  }
 
-  // 6. Kill any existing instance
-  if (state.hmiRuntime) {
-    killDataService(state.hmiRuntime.pid);
-  } else {
-    killDataService();
-  }
-
-  // 7. Spawn DataService detached
-  if (!existsSync(DATASERVICE_EXE)) {
-    return { content: [{ type: "text" as const, text: `LasalVISUDataService.exe not found at standard path: ${DATASERVICE_EXE}` }], isError: true };
-  }
-
-  try {
-    const child = spawn(DATASERVICE_EXE, [], {
-      cwd: dataDir,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    const pid = child.pid;
-    if (!pid) {
-      return { content: [{ type: "text" as const, text: "Failed to spawn LasalVISUDataService.exe process." }], isError: true };
+    // 1. Publish first if requested
+    if (args.publishFirst ?? true) {
+      let debug = args.debugPublish ?? true;
+      let publishResult = runVisuOps(resolved.path, [{ type: "publish", debug }]);
+      if (!publishResult.ok && debug) {
+        warnings.push("Debug publish failed (possibly due to disabled TypeScript). Retrying with standard publish...");
+        publishResult = runVisuOps(resolved.path, [{ type: "publish", debug: false }]);
+      }
+      if (!publishResult.ok) {
+        return fail(`Failed to publish project before starting HMI runtime: ${publishResult.errors.join("\n")}`, []);
+      }
     }
-    child.unref();
 
-    // Wait a brief moment for startup and discover port
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    const port = getPortForPid(pid);
-    const url = "file:///C:/lslvisu/index.html";
+    // 2. Discover published folders
+    const visuDir = resolved.path.substring(0, resolved.path.lastIndexOf("\\"));
+    const webrootSrc = join(visuDir, "TempPreview", "Publish", "webroot");
+    const dataSrc = join(visuDir, "TempPreview", "Publish", "dataservice", "data");
 
-    state.hmiRuntime = { pid, port, url, dataDir };
-    writeState(state);
+    if (!existsSync(webrootSrc)) {
+      return fail(`Published webroot not found at: ${webrootSrc}. Run HMI publish first.`, []);
+    }
 
-    return {
-      content: [{
-        type: "text" as const,
-        text: JSON.stringify({ success: true, pid, port, url }, null, 2)
-      }]
-    };
-  } catch (e: any) {
-    return { content: [{ type: "text" as const, text: `Failed to launch HMI runtime: ${e.message}` }], isError: true };
-  }
+    // 3. Prepare HMI Dir (with override support)
+    const dataDir = process.env.LASAL_MCP_HMI_DIR || "C:\\lslvisu";
+    try {
+      if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+      
+      // Copy webroot files
+      copyDirSync(webrootSrc, dataDir);
+
+      // Copy dataservice data if available
+      if (existsSync(dataSrc)) {
+        copyDirSync(dataSrc, join(dataDir, "dataservice", "data"));
+      }
+
+      // Link rt folder
+      const visuDesignerDir = DATASERVICE_EXE.substring(0, DATASERVICE_EXE.indexOf("\\Lasal VISUDesigner"));
+      const rtSrc = join(visuDesignerDir, "SIGMATEK", "Lasal", "VISUDesigner", "Runtime", "rt");
+      if (existsSync(rtSrc)) {
+        try {
+          createJunction(rtSrc, join(dataDir, "rt"));
+        } catch (e: any) {
+          warnings.push(`Warning: Failed to create junction for 'rt' directory: ${e.message}`);
+        }
+      } else {
+        warnings.push(`Warning: VISUDesigner Runtime 'rt' directory not found at ${rtSrc}. Paths starting with 'rt/' might fail to resolve.`);
+      }
+
+      // Create logs dir
+      const logDir = join(dataDir, "dataservice", "logs");
+      if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
+
+      // 4. Ensure stations.json is Intern
+      const stationsJsonPath = join(dataDir, "dataservice", "data", "stations.json");
+      if (existsSync(stationsJsonPath)) {
+        try {
+          const stations = JSON.parse(readFileSync(stationsJsonPath, "utf-8"));
+          if (Array.isArray(stations.stations)) {
+            for (const s of stations.stations) {
+              s.conType = "INTERN";
+            }
+            writeFileSync(stationsJsonPath, JSON.stringify(stations, null, 2), "utf-8");
+          }
+        } catch {}
+      }
+
+      // 5. Patch config.json
+      const configPath = join(dataDir, "dataservice", "config.json");
+      const dataConfigPath = join(dataDir, "dataservice", "data", "config.json");
+      const configContent = {
+        WindowsAutoExit: false,
+        WSAccessLog: true,
+        WSErrorLog: true,
+        LogDir: logDir,
+      };
+      writeFileSync(configPath, JSON.stringify(configContent, null, 2), "utf-8");
+      if (existsSync(join(dataDir, "dataservice", "data"))) {
+        writeFileSync(dataConfigPath, JSON.stringify(configContent, null, 2), "utf-8");
+      }
+    } catch (e: any) {
+      return fail(`Failed to set up HMI runtime directory ${dataDir}: ${e.message}`, []);
+    }
+
+    // 6. Kill any existing instance
+    if (state.hmiRuntime) {
+      killDataService(state.hmiRuntime.pid);
+    } else {
+      killDataService();
+    }
+
+    // 7. Spawn DataService detached
+    if (!existsSync(DATASERVICE_EXE)) {
+      return fail(`LasalVISUDataService.exe not found at standard path: ${DATASERVICE_EXE}`, ["Make sure VISUDesigner is installed properly."]);
+    }
+
+    try {
+      const child = spawn(DATASERVICE_EXE, [], {
+        cwd: dataDir,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      const pid = child.pid;
+      if (!pid) {
+        return fail("Failed to spawn LasalVISUDataService.exe process.", []);
+      }
+      child.unref();
+
+      // Poll HTTP health up to 10 seconds to detect startup and discover port
+      let healthy = false;
+      let port = 9980;
+      const startTime = Date.now();
+      while (Date.now() - startTime < 10000) {
+        const discoveredPort = getPortForPid(pid);
+        if (discoveredPort) {
+          port = discoveredPort;
+        }
+        const isHealthy = await checkHttpHealth(`http://127.0.0.1:${port}/`);
+        if (isHealthy) {
+          healthy = true;
+          break;
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      const url = "file:///C:/lslvisu/index.html";
+
+      state.hmiRuntime = { pid, port, url, dataDir };
+      writeState(state);
+
+      return respond({
+        ok: true,
+        success: true,
+        pid,
+        port,
+        url,
+        healthy,
+        ...(warnings.length ? { warnings } : {})
+      });
+    } catch (e: any) {
+      return fail(`Failed to launch HMI runtime: ${e.message}`, []);
+    }
+  });
 }

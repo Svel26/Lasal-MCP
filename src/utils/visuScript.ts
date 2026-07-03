@@ -1,8 +1,8 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
-import { execSync, execFileSync } from "child_process";
 import { randomUUID } from "crypto";
 import { VISUDESIGNER_EXE, SCRATCH, killVisuDesigner } from "./engine.js";
+import { runEngineScript, StepOutcome } from "./scriptRunner.js";
 
 export interface VisuResult {
   ok: boolean;
@@ -11,9 +11,10 @@ export interface VisuResult {
   errors: string[];
   warnings: string[];
   durationMs: number;
+  steps?: StepOutcome[];
+  timedOut?: boolean;
+  hints?: string[];
 }
-
-// ── Input shape types (what the MCP tool accepts) ─────────────────────────────
 
 export type TextEntry = Record<string, string>;
 
@@ -89,8 +90,6 @@ export type VisuOp =
   | { type: "update_property_values" }
   | { type: "download"; connection: string; flags?: number; add_runtime?: boolean };
 
-// ── Python 3.12 emission helpers ──────────────────────────────────────────────
-
 function emitStr(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r")}"`;
 }
@@ -110,8 +109,6 @@ function emitOptStrList(arr: string[] | undefined): string {
   return arr && arr.length > 0 ? emitStrList(arr) : "None";
 }
 
-// Emits one or more TextElement calls for a single text entry
-// { id: "K1", De: "Hallo", En: "Hello" } → TextElement calls per language
 function emitTextElementsForEntry(entry: TextEntry): string[] {
   const { id, ...langs } = entry;
   const langKeys = Object.keys(langs).filter((k) => langs[k] !== undefined);
@@ -160,6 +157,7 @@ function emitSchemeForRemove(def: { scheme_type: string; name: string }): string
   return `lvd.Scheme(${emitStr(def.scheme_type)}, ${emitStr(def.name)}, None, None)`;
 }
 
+// Positions or entries to remove
 function emitSchemeForRemoveEntries(def: SchemeDef): string {
   const positions = def.positions ?? (def.entries?.map((e) => e.position) ?? []);
   const elems = positions.map((p) => `lvd.SchemeEntry(${p})`).join(", ");
@@ -181,197 +179,163 @@ function emitMediaItem(def: MediaItemDef): string {
   return `lvd.MediaItem(${emitStr(def.media_type)}, ${emitStr(def.path ?? def.name ?? "")})`;
 }
 
-// ── Script builder ────────────────────────────────────────────────────────────
-
 export function buildVisuScript(
   lvpPath: string,
   ops: VisuOp[],
   logPath: string,
+  stepsPath: string,
   saveAtEnd = true
-): string {
+): { script: string; expectedSteps: string[] } {
   const lines: string[] = [];
+  const expectedSteps: string[] = ["LoadProject"];
 
-  for (const op of ops) {
+  const pyStepsPath = stepsPath.replace(/\\/g, "\\\\");
+
+  lines.push(
+    "    f_step = open(r\"" + stepsPath + "\", \"a\", encoding=\"utf-8\")",
+    "    f_step.write(\"STEP LoadProject OK\\n\")",
+    "    f_step.close()",
+    ""
+  );
+
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    const label = `${i}_${op.type}`;
+    expectedSteps.push(label);
+
+    const opLines: string[] = [];
     switch (op.type) {
-
       case "update_all_stations":
-        lines.push("lvd.UpdateAllStations(prj)");
+        opLines.push("lvd.UpdateAllStations(prj)");
         break;
-
       case "update_station":
-        lines.push(`lvd.UpdateStation(prj, ${op.station_nr})`);
+        opLines.push(`lvd.UpdateStation(prj, ${op.station_nr})`);
         break;
-
       case "publish":
-        lines.push(`lvd.PublishProject(prj, ${op.debug ? "True" : "False"})`);
+        opLines.push(`lvd.PublishProject(prj, ${op.debug ? "True" : "False"})`);
         break;
-
       case "add_text_lists":
-        lines.push(
-          `lvd.AddTextLists(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
-        );
+        opLines.push(`lvd.AddTextLists(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
-
       case "remove_text_lists":
-        lines.push(`lvd.RemoveTextLists(prj, ${emitStrList(op.names)})`);
+        opLines.push(`lvd.RemoveTextLists(prj, ${emitStrList(op.names)})`);
         break;
-
       case "add_texts":
-        lines.push(
-          `lvd.AddTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
-        );
+        opLines.push(`lvd.AddTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
-
       case "remove_texts":
-        lines.push(
-          `lvd.RemoveTexts(prj, [${op.text_lists.map(emitTextListForRemove).join(", ")}])`
-        );
+        opLines.push(`lvd.RemoveTexts(prj, [${op.text_lists.map(emitTextListForRemove).join(", ")}])`);
         break;
-
       case "change_texts":
-        lines.push(
-          `lvd.ChangeTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
-        );
+        opLines.push(`lvd.ChangeTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
-
       case "change_component_texts":
-        lines.push(
-          `lvd.ChangeComponentTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
-        );
+        opLines.push(`lvd.ChangeComponentTexts(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
-
       case "set_text_list_revisions":
-        lines.push(
-          `lvd.SetTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
-        );
+        opLines.push(`lvd.SetTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
-
       case "set_component_text_list_revisions":
-        lines.push(
-          `lvd.SetComponentTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`
-        );
+        opLines.push(`lvd.SetComponentTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
-
       case "csv_export_text_lists":
-        lines.push(
-          `lvd.CsvExportTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`
-        );
+        opLines.push(`lvd.CsvExportTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
         break;
-
       case "csv_import_text_lists":
-        lines.push(
-          `lvd.CsvImportTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`
-        );
+        opLines.push(`lvd.CsvImportTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
         break;
-
       case "csv_export_component_text_lists":
-        lines.push(
-          `lvd.CsvExportComponentTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`
-        );
+        opLines.push(`lvd.CsvExportComponentTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
         break;
-
       case "csv_import_component_text_lists":
-        lines.push(
-          `lvd.CsvImportComponentTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`
-        );
+        opLines.push(`lvd.CsvImportComponentTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
         break;
-
       case "set_datapoint_properties":
-        lines.push(
-          `lvd.SetDatapointProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`
-        );
+        opLines.push(`lvd.SetDatapointProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`);
         break;
-
       case "set_datatype_properties":
-        lines.push(
-          `lvd.SetDataTypeProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`
-        );
+        opLines.push(`lvd.SetDataTypeProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`);
         break;
-
       case "add_schemes":
-        lines.push(
-          `lvd.AddSchemes(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`
-        );
+        opLines.push(`lvd.AddSchemes(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`);
         break;
-
       case "remove_schemes":
-        lines.push(
-          `lvd.RemoveSchemes(prj, [${op.schemes.map(emitSchemeForRemove).join(", ")}])`
-        );
+        opLines.push(`lvd.RemoveSchemes(prj, [${op.schemes.map(emitSchemeForRemove).join(", ")}])`);
         break;
-
       case "add_scheme_entries":
-        lines.push(
-          `lvd.AddSchemeEntries(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`
-        );
+        opLines.push(`lvd.AddSchemeEntries(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`);
         break;
-
       case "remove_scheme_entries":
-        lines.push(
-          `lvd.RemoveSchemeEntries(prj, [${op.schemes.map(emitSchemeForRemoveEntries).join(", ")}])`
-        );
+        opLines.push(`lvd.RemoveSchemeEntries(prj, [${op.schemes.map(emitSchemeForRemoveEntries).join(", ")}])`);
         break;
-
       case "move_scheme_entries":
-        lines.push(
-          `lvd.MoveSchemeEntries(prj, [${op.schemes.map(emitSchemeForMoves).join(", ")}])`
-        );
+        opLines.push(`lvd.MoveSchemeEntries(prj, [${op.schemes.map(emitSchemeForMoves).join(", ")}])`);
         break;
-
       case "set_scheme_inputs":
-        lines.push(
-          `lvd.SetSchemeInputs(prj, [${op.schemes.map(emitSchemeForInput).join(", ")}])`
-        );
+        opLines.push(`lvd.SetSchemeInputs(prj, [${op.schemes.map(emitSchemeForInput).join(", ")}])`);
         break;
-
       case "set_scheme_properties":
-        lines.push(
-          `lvd.SetSchemeProperties(prj, ${emitStr(op.scheme_type)}, [${op.properties.map(emitPropertySet).join(", ")}])`
-        );
+        opLines.push(`lvd.SetSchemeProperties(prj, ${emitStr(op.scheme_type)}, [${op.properties.map(emitPropertySet).join(", ")}])`);
         break;
-
       case "set_scheme_entry_properties":
-        lines.push(
-          `lvd.SetSchemeEntryProperties(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`
-        );
+        opLines.push(`lvd.SetSchemeEntryProperties(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`);
         break;
-
       case "add_media_items": {
         const overwrite = op.overwrite ? "True" : "False";
-        lines.push(
-          `lvd.AddMediaItems(prj, [${op.items.map(emitMediaItem).join(", ")}], ${overwrite})`
-        );
+        opLines.push(`lvd.AddMediaItems(prj, [${op.items.map(emitMediaItem).join(", ")}], ${overwrite})`);
         break;
       }
-
       case "remove_media_items":
-        lines.push(
-          `lvd.RemoveMediaItems(prj, [${op.items.map(emitMediaItem).join(", ")}])`
-        );
+        opLines.push(`lvd.RemoveMediaItems(prj, [${op.items.map(emitMediaItem).join(", ")}])`);
         break;
-
       case "add_code_modules":
-        lines.push(`lvd.AddCodeModules(prj, ${emitStrList(op.paths)})`);
+        opLines.push(`lvd.AddCodeModules(prj, ${emitStrList(op.paths)})`);
         break;
-
       case "remove_code_modules":
-        lines.push(`lvd.RemoveCodeModules(prj, ${emitStrList(op.names)})`);
+        opLines.push(`lvd.RemoveCodeModules(prj, ${emitStrList(op.names)})`);
         break;
-
       case "update_property_values":
-        lines.push("lvd.UpdatePropertyValues(prj)");
+        opLines.push("lvd.UpdatePropertyValues(prj)");
         break;
-
       case "download": {
         const flags = op.flags ?? 0;
         const addRuntime = op.add_runtime ? "True" : "False";
-        lines.push(
-          `lvd.DownloadProject(prj, ${emitStr(op.connection)}, ${flags}, ${addRuntime})`
-        );
+        opLines.push(`lvd.DownloadProject(prj, ${emitStr(op.connection)}, ${flags}, ${addRuntime})`);
         break;
       }
     }
+
+    for (const opLine of opLines) {
+      lines.push(`    ${opLine}`);
+    }
+
+    lines.push(
+      `    f_step = open(r"${stepsPath}", "a", encoding="utf-8")`,
+      `    f_step.write("STEP ${label} OK\\n")`,
+      `    f_step.close()`,
+      ""
+    );
   }
+
+  if (saveAtEnd) {
+    expectedSteps.push("SaveProject");
+    lines.push(
+      "    lvd.SaveProject(prj)",
+      `    f_step = open(r"${stepsPath}", "a", encoding="utf-8")`,
+      `    f_step.write("STEP SaveProject OK\\n")`,
+      `    f_step.close()`,
+      ""
+    );
+  }
+
+  expectedSteps.push("CloseProject");
+  lines.push(
+    "    lvd.CloseProject(prj)",
+    `    f_step = open(r"${stepsPath}", "a", encoding="utf-8")`,
+    `    f_step.write("STEP CloseProject OK\\n")`,
+    `    f_step.close()`,
+    ""
+  );
 
   const indentedBody = lines.map(line => line ? `    ${line}` : "").join("\n");
 
@@ -386,15 +350,10 @@ export function buildVisuScript(
     "lvd.SetExceptionOnError(True)",
     "",
     "try:",
-    "    print('(STEP) LoadProject')",
     `    prj = lvd.LoadProject(${emitStr(lvpPath)})`,
     "    if prj is None: raise RuntimeError('Failed to load project')",
     "",
-    indentedBody,
-    "",
-    saveAtEnd ? "    print('(STEP) SaveProject')\n    lvd.SaveProject(prj)" : "",
-    "    print('(STEP) CloseProject')",
-    "    lvd.CloseProject(prj)",
+    lines.join("\n"),
     "except Exception as e:",
     "    print('(ERROR) Exception occurred during script execution:')",
     "    traceback.print_exc()",
@@ -403,29 +362,14 @@ export function buildVisuScript(
     "    log_file.close()"
   ].join("\n") + "\n";
 
-  return finalScript;
+  return {
+    script: finalScript,
+    expectedSteps
+  };
 }
-
-// ── Script runner ─────────────────────────────────────────────────────────────
 
 function ensureScratch() {
   if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
-}
-
-
-
-function parseLog(logPath: string): { errors: string[]; warnings: string[] } {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-  if (existsSync(logPath)) {
-    for (const line of readFileSync(logPath, "utf-8").split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
-      if (t.includes("(ERROR)") || t.includes("(FATAL)")) errors.push(t);
-      else if (t.includes("(WARN)")) warnings.push(t);
-    }
-  }
-  return { errors, warnings };
 }
 
 export function runVisuOps(
@@ -438,52 +382,32 @@ export function runVisuOps(
   const id = randomUUID();
   const scriptPath = join(SCRATCH, `visu_${id}.py`);
   const logPath = join(SCRATCH, `visu_${id}.log`);
+  const stepsPath = join(SCRATCH, `visu_${id}.steps`);
 
-  writeFileSync(scriptPath, buildVisuScript(lvpPath, ops, logPath, saveAtEnd), "utf-8");
-
-  const start = Date.now();
-  let exitCode = 0;
-  const errors: string[] = [];
-  const warnings: string[] = [];
+  const { script, expectedSteps } = buildVisuScript(lvpPath, ops, logPath, stepsPath, saveAtEnd);
+  writeFileSync(scriptPath, script, "utf-8");
 
   killVisuDesigner();
 
-  try {
-    execFileSync(VISUDESIGNER_EXE, ["--script", scriptPath], {
-      timeout: timeoutMs,
-      stdio: "pipe",
-      windowsHide: true,
-    });
-  } catch (e: any) {
-    exitCode = e.status ?? 1;
-    // Capture Python traceback from stderr
-    const stderr: string = (e.stderr ?? "").toString("utf-8").trim();
-    if (stderr) {
-      for (const line of stderr.split("\n")) {
-        const t = line.trim();
-        if (t) errors.push(t);
-      }
-    }
-    killVisuDesigner();
-  }
+  const result = runEngineScript(scriptPath, {
+    exe: VISUDESIGNER_EXE,
+    argsFor: (p) => ["--script", p],
+    timeoutMs,
+    logEncoding: "utf-8",
+    killOnFailure: killVisuDesigner,
+    expectedSteps,
+    stepsPath
+  }, logPath);
 
-  const durationMs = Date.now() - start;
-
-  // Also parse any log file VISUDesigner may have written
-  const { errors: logErrors, warnings: logWarnings } = parseLog(logPath);
-  errors.push(...logErrors);
-  warnings.push(...logWarnings);
-
-  if (exitCode !== 0 && existsSync(logPath)) {
-    const logContent = readFileSync(logPath, "utf-8").trim();
-    if (logContent) {
-      errors.push("--- Log Output ---", ...logContent.split("\n").map(l => l.trim()));
-    }
-  }
-
-  if (exitCode !== 0 && errors.length === 0) {
-    errors.push(`VISUDesigner.exe exited with code ${exitCode}`);
-  }
-
-  return { ok: exitCode === 0 && errors.length === 0, exitCode, logPath, errors, warnings, durationMs };
+  return {
+    ok: result.ok,
+    exitCode: result.exitCode,
+    logPath: result.logPath,
+    errors: result.errors,
+    warnings: result.warnings,
+    durationMs: result.durationMs,
+    steps: result.steps,
+    timedOut: result.timedOut,
+    hints: result.hints
+  };
 }

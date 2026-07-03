@@ -3,11 +3,11 @@ import { join, dirname, basename } from "path";
 import { z } from "zod";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, killVisuDesigner } from "../utils/engine.js";
+import { EditTransaction } from "../utils/editTransaction.js";
 import {
   newDesignTimeId,
   newInstanceId,
   getFileEntryVersion,
-  backupFile,
   writeTabIndentedJson
 } from "../utils/visuDashboardIO.js";
 import {
@@ -219,6 +219,12 @@ export async function visuDashboardHandler(args: {
   const backups: string[] = [];
   let isError = false;
 
+  const tx = new EditTransaction();
+  const backup = (p: string) => {
+    tx.backup(p);
+    backups.push(p);
+  };
+
   await withEngineLock(async () => {
     // Safety: kill VISUDesigner before any direct file writes
     killVisuDesigner();
@@ -353,8 +359,7 @@ export async function visuDashboardHandler(args: {
             if (!existsSync(path)) {
               throw new Error(`File not found at ${path}`);
             }
-            const bak = backupFile(path);
-            if (bak) backups.push(bak);
+            backup(path);
 
             unlinkSync(path);
             opResult.ok = true;
@@ -366,8 +371,7 @@ export async function visuDashboardHandler(args: {
             if (!found) {
               throw new Error(`Dashboard/template '${op.dashboardName}' not found.`);
             }
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             if (!Array.isArray(data.dashboardelements)) {
@@ -412,8 +416,7 @@ export async function visuDashboardHandler(args: {
             if (!found) {
               throw new Error(`Dashboard/template '${op.dashboardName}' not found.`);
             }
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             const origCount = data.dashboardelements?.length || 0;
@@ -433,8 +436,7 @@ export async function visuDashboardHandler(args: {
             if (!found) {
               throw new Error(`Dashboard/template '${op.dashboardName}' not found.`);
             }
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             const targetName = op.name || "";
@@ -482,8 +484,7 @@ export async function visuDashboardHandler(args: {
             if (!found) {
               throw new Error(`Dashboard/template '${op.dashboardName}' not found.`);
             }
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             const el = (data.dashboardelements || []).find((x: any) => x.name === op.name);
@@ -504,8 +505,7 @@ export async function visuDashboardHandler(args: {
             if (!found) {
               throw new Error(`Dashboard/template '${op.dashboardName}' not found.`);
             }
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             const el = (data.dashboardelements || []).find((x: any) => x.name === op.name);
@@ -526,8 +526,7 @@ export async function visuDashboardHandler(args: {
             if (!found) {
               throw new Error(`Dashboard/template '${op.dashboardName}' not found.`);
             }
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             const srcEl = (data.dashboardelements || []).find((x: any) => x.name === op.name);
@@ -571,8 +570,7 @@ export async function visuDashboardHandler(args: {
             const templateData = JSON.parse(readFileSync(templateFile, "utf-8"));
             const templateId = templateData.designTimeId;
 
-            const bak = backupFile(found.path);
-            if (bak) backups.push(bak);
+            backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             if (data.dashboardelements?.some((x: any) => x.name === op.name)) {
@@ -620,6 +618,12 @@ export async function visuDashboardHandler(args: {
       }
 
       results.push(opResult);
+    }
+
+    if (isError) {
+      tx.rollback();
+    } else {
+      tx.commit();
     }
   });
 

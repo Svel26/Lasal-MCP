@@ -288,12 +288,11 @@ function editStBlock(stPath: string, editFn: (xml: string) => string): void {
 }
 
 function serverLineRegex(name: string): RegExp {
-  // Matches the full line of a <Server Name="X" ... /> element
-  return new RegExp(`[ \\t]*<Server\\s+Name\\s*=\\s*"${escapeRe(name)}"[^\\n]*\\n`, "");
+  return new RegExp(`[ \\t]*<Server\\s+[^>]*Name\\s*=\\s*"${escapeRe(name)}"[^>]*\\/>\\s*\\r?\\n?`, "s");
 }
 
 function clientLineRegex(name: string): RegExp {
-  return new RegExp(`[ \\t]*<Client\\s+Name\\s*=\\s*"${escapeRe(name)}"[^\\n]*\\n`, "");
+  return new RegExp(`[ \\t]*<Client\\s+[^>]*Name\\s*=\\s*"${escapeRe(name)}"[^>]*\\/>\\s*\\r?\\n?`, "s");
 }
 
 function escapeRe(s: string): string {
@@ -695,10 +694,14 @@ export function renameServerInStBody(stPath: string, oldName: string, newName: s
     const { pre, classPart, implPart } = splitStSections(c);
     const range = findSectionRange(classPart, "Servers");
     if (!range) return c;
-    const newClassPart = classPart.replace(
+    const before = classPart.slice(0, range.start);
+    const section = classPart.slice(range.start, range.end);
+    const after = classPart.slice(range.end);
+    const newSection = section.replace(
       new RegExp(`\\b${escapeRe(oldName)}\\b(?=[ \\t]*:)`, "g"),
       newName
     );
+    const newClassPart = before + newSection + after;
     return pre + newClassPart + implPart;
   });
 }
@@ -717,10 +720,16 @@ export function removeClientTypeFromStBody(stPath: string, name: string): void {
 export function renameClientInStBody(stPath: string, oldName: string, newName: string): void {
   editStBody(stPath, (c) => {
     const { pre, classPart, implPart } = splitStSections(c);
-    const newClassPart = classPart.replace(
+    const range = findSectionRange(classPart, "Clients");
+    if (!range) return c;
+    const before = classPart.slice(0, range.start);
+    const section = classPart.slice(range.start, range.end);
+    const after = classPart.slice(range.end);
+    const newSection = section.replace(
       new RegExp(`\\b${escapeRe(oldName)}\\b(?=[ \\t]*:)`, "g"),
       newName
     );
+    const newClassPart = before + newSection + after;
     return pre + newClassPart + implPart;
   });
 }

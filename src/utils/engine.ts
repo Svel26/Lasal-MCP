@@ -13,9 +13,39 @@ export const CLASS2_EXE =
   process.env.LASAL_CLASS2_EXE ||
   "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
 
-export const DATASERVICE_EXE =
-  process.env.LASAL_DATASERVICE_EXE ||
-  "C:\\Program Files\\Lasal VISUDesigner V01_04_004_2750\\Lasal VISUDataService V01_04_004_663\\Windows\\LasalVISUDataService.exe";
+export function resolveDataServiceExe(): string {
+  if (process.env.LASAL_DATASERVICE_EXE) {
+    return process.env.LASAL_DATASERVICE_EXE;
+  }
+  const root = "C:\\Program Files";
+  if (!existsSync(root)) return "";
+  
+  try {
+    const dirs = readdirSync(root).filter(d => d.startsWith("Lasal VISUDesigner V"));
+    if (dirs.length > 0) {
+      dirs.sort((a, b) => b.localeCompare(a));
+      for (const dir of dirs) {
+        const parentPath = join(root, dir);
+        try {
+          const subDirs = readdirSync(parentPath).filter(d => d.startsWith("Lasal VISUDataService V"));
+          if (subDirs.length > 0) {
+            subDirs.sort((a, b) => b.localeCompare(a));
+            for (const subDir of subDirs) {
+              const exePath = join(parentPath, subDir, "Windows", "LasalVISUDataService.exe");
+              if (existsSync(exePath)) {
+                return exePath;
+              }
+            }
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  
+  return "C:\\Program Files\\Lasal VISUDesigner V01_04_004_2750\\Lasal VISUDataService V01_04_004_663\\Windows\\LasalVISUDataService.exe";
+}
+
+export const DATASERVICE_EXE = resolveDataServiceExe();
 
 function findEdgePath(): string {
   const paths = [
@@ -56,7 +86,27 @@ export function cleanupScratch(): void {
   }
 }
 
-// ─── Centralized Process Killing ─────────────────────────────────────────────
+// ─── Centralized Process Killing & Status ────────────────────────────────────
+
+export function isProcessRunning(imageName: string): boolean {
+  try {
+    const out = execSync(`tasklist /FI "IMAGENAME eq ${imageName}" /NH`, { stdio: "pipe", encoding: "utf-8" });
+    return out.toLowerCase().includes(imageName.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+export function getProcessPid(imageName: string): number | undefined {
+  try {
+    const out = execSync(`tasklist /FI "IMAGENAME eq ${imageName}" /FO CSV /NH`, { stdio: "pipe", encoding: "utf-8" });
+    const m = out.match(/"([^"]+)"\s*,\s*"(\d+)"/);
+    if (m && m[1].toLowerCase() === imageName.toLowerCase()) {
+      return parseInt(m[2]);
+    }
+  } catch {}
+  return undefined;
+}
 
 export function killClass2(): void {
   try {

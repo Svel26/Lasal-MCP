@@ -2,6 +2,8 @@ import { z } from "zod";
 import { runVisuOps, VisuOp } from "../utils/visuScript.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock } from "../utils/engine.js";
+import { preflightHmi } from "../utils/preflight.js";
+import { respond, fail } from "../utils/respond.js";
 
 function visuResultToResponse(r: ReturnType<typeof runVisuOps>, extra?: Record<string, unknown>) {
   const body: Record<string, unknown> = {
@@ -10,12 +12,10 @@ function visuResultToResponse(r: ReturnType<typeof runVisuOps>, extra?: Record<s
     ...(r.errors.length ? { errors: r.errors } : {}),
     ...(r.warnings.length ? { warnings: r.warnings } : {}),
     logPath: r.logPath,
+    ...(r.hints?.length ? { hints: r.hints } : {}),
     ...extra,
   };
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }],
-    ...(r.ok ? {} : { isError: true }),
-  };
+  return respond(body as any);
 }
 
 // ── Operation schemas ─────────────────────────────────────────────────────────
@@ -369,14 +369,29 @@ export async function visuProjectHandler(args: {
 
   if (args.action === "download") {
     if (!args.connection) {
-      return { content: [{ type: "text" as const, text: "connection is required for action 'download'" }], isError: true };
+      return fail("connection is required for action 'download'", ["Provide the connection parameter."]);
     }
+    const m = args.connection.match(/TCPIP:(.+)/i);
+    const ipUsed = m ? m[1].split(":")[0] : args.connection;
+
+    const pf = await preflightHmi(resolved.path, args.connection);
+    if (!pf.ok) {
+      return respond({
+        ok: false,
+        preflight: pf,
+        connectionUsed: args.connection,
+        ipUsed,
+        errors: pf.problems.map(p => p.message),
+        hints: pf.problems.map(p => p.fix)
+      });
+    }
+
     const r = runVisuOps(
       resolved.path,
       [{ type: "download", connection: args.connection, flags: args.flags ?? 0, add_runtime: args.add_runtime ?? false }],
       false
     );
-    return visuResultToResponse(r, { lvpPath: resolved.path, connection: args.connection });
+    return visuResultToResponse(r, { lvpPath: resolved.path, connectionUsed: args.connection, ipUsed });
   }
 
   // apply_changes

@@ -2,6 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from "fs";
 import { z } from "zod";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { parseLcp, parseStClass } from "../utils/lasalXml.js";
+import { isProcessRunning } from "../utils/engine.js";
+import { respond, fail } from "../utils/respond.js";
 
 export const classSourceSchema = {
   action: z.enum(["read", "write"]).describe("'read' returns the source; 'write' overwrites it."),
@@ -48,6 +50,21 @@ function resolveStPath(
   return { error: `Class "${className}" not found.\nAvailable classes: ${available.join(", ")}` };
 }
 
+function validateLatin1(s: string): { ok: boolean; offending?: { char: string; code: number; index: number }[] } {
+  const offending: { char: string; code: number; index: number }[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code > 0xff) {
+      offending.push({ char: s[i], code, index: i });
+      if (offending.length >= 10) break;
+    }
+  }
+  return {
+    ok: offending.length === 0,
+    offending: offending.length > 0 ? offending : undefined
+  };
+}
+
 export async function classSourceHandler(args: {
   action: "read" | "write";
   class_name: string;
@@ -57,16 +74,19 @@ export async function classSourceHandler(args: {
   header_source?: string;
 }) {
   const resolved = resolveLcpPath(args.lcp_path);
-  if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+  if ("error" in resolved) {
+    return fail(resolved.error, ["Select a project first using select_project or specify lcp_path."]);
+  }
 
   const found = resolveStPath(resolved.path, args.class_name);
   if ("error" in found) {
-    return { content: [{ type: "text" as const, text: found.error }], isError: true };
+    return fail(found.error, ["Make sure the class name is typed correctly."]);
   }
   const { stPath } = found;
 
   if (args.action === "read") {
-    const result: Record<string, unknown> = {
+    const result: any = {
+      ok: true,
       className: args.class_name,
       stPath,
       source: readFileSync(stPath, "latin1"),
@@ -78,20 +98,48 @@ export async function classSourceHandler(args: {
         result.headerSource = readFileSync(hPath, "latin1");
       }
     }
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    return respond(result);
   }
 
   // write
-  if (!args.source) {
-    return { content: [{ type: "text" as const, text: "source is required for action 'write'" }], isError: true };
+  if (isProcessRunning("Lasal2.exe")) {
+    return fail(
+      "CLASS 2 IDE is open.",
+      ["Close the CLASS 2 IDE manually or run manage_class2 close before writing to Structured Text class files."]
+    );
   }
 
-  const result: Record<string, unknown> = { className: args.class_name, stPath };
+  if (!args.source) {
+    return fail("source is required for action 'write'", ["Provide the source parameter."]);
+  }
+
+  // Validate latin1
+  const validation = validateLatin1(args.source);
+  if (!validation.ok) {
+    const details = validation.offending!.map(o => `'${o.char}' (code: ${o.code}) at index ${o.index}`).join(", ");
+    return fail(
+      "Source contains non-latin1 characters.",
+      ["Make sure all characters in the source are representable in ISO-8859-1 (latin1). Offending characters: " + details]
+    );
+  }
+
+  if (args.header_source !== undefined) {
+    const hValidation = validateLatin1(args.header_source);
+    if (!hValidation.ok) {
+      const details = hValidation.offending!.map(o => `'${o.char}' (code: ${o.code}) at index ${o.index}`).join(", ");
+      return fail(
+        "Header source contains non-latin1 characters.",
+        ["Make sure all characters in the header source are representable in ISO-8859-1 (latin1). Offending characters: " + details]
+      );
+    }
+  }
+
+  const result = { ok: true, className: args.class_name, stPath } as any;
   try {
     writeFileSync(stPath, args.source, "latin1");
     result.stWritten = true;
   } catch (e: any) {
-    return { content: [{ type: "text" as const, text: `Failed to write .st file: ${e.message}` }], isError: true };
+    return fail(`Failed to write .st file: ${e.message}`, []);
   }
 
   if (args.header_source !== undefined) {
@@ -105,5 +153,5 @@ export async function classSourceHandler(args: {
     }
   }
 
-  return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  return respond(result);
 }
