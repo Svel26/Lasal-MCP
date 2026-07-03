@@ -10,14 +10,14 @@ export const inspectVisuProjectSchema = {
     .optional()
     .describe("Full path to the .lvp file. Omit to auto-detect from the selected project."),
   scope: z
-    .enum(["summary", "dashboards", "function_blocks", "code_modules", "datapoints"])
+    .enum(["summary", "dashboards", "function_blocks", "code_modules", "datapoints", "dashboard_detail"])
     .optional()
     .default("summary")
     .describe("Detail scope to inspect. Omit or set to 'summary' for the default summary."),
   filter: z
     .string()
     .optional()
-    .describe("Filter/query string (regex) for datapoint scan. Required when scope='datapoints'."),
+    .describe("Filter/query string (regex) for datapoint scan, or dashboard name/filename for dashboard_detail scope. Required when scope='datapoints' or scope='dashboard_detail'."),
   limit: z
     .number()
     .int()
@@ -176,7 +176,7 @@ async function getDatapointSummary(
 
 export async function inspectVisuProjectHandler(args: {
   lvp_path?: string;
-  scope?: "summary" | "dashboards" | "function_blocks" | "code_modules" | "datapoints";
+  scope?: "summary" | "dashboards" | "function_blocks" | "code_modules" | "datapoints" | "dashboard_detail";
   filter?: string;
   limit?: number;
 }) {
@@ -216,10 +216,60 @@ export async function inspectVisuProjectHandler(args: {
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   }
 
+  // ── 1.5. Dashboard Detail scope ──────────────────────────────────────────
+  if (scope === "dashboard_detail") {
+    if (!args.filter) {
+      return { content: [{ type: "text" as const, text: "filter (dashboard name/filename) is required when scope='dashboard_detail'" }], isError: true };
+    }
+    let foundPath: string | null = null;
+    for (const dirName of ["Dashboards", "GlobalDashboards", "Window", "ControlTemplate"]) {
+      const dir = join(projectDir, dirName);
+      if (!existsSync(dir)) continue;
+      try {
+        for (const f of readdirSync(dir)) {
+          if (!f.endsWith(".json")) continue;
+          const name = basename(f, ".json");
+          if (name.toLowerCase() === args.filter.toLowerCase()) {
+            foundPath = join(dir, f);
+            break;
+          }
+        }
+      } catch {}
+      if (foundPath) break;
+    }
+
+    if (!foundPath) {
+      return { content: [{ type: "text" as const, text: `Dashboard/window/template with name '${args.filter}' not found` }], isError: true };
+    }
+
+    try {
+      const data = readJson(foundPath);
+      result.dashboard = {
+        name: data.name,
+        type: data.type,
+        controlId: data.controlId,
+        designTimeId: data.designTimeId,
+        instanceId: data.instanceId,
+        properties: data.properties ?? [],
+        elements: (data.dashboardelements ?? []).map((el: any) => ({
+          name: el.name,
+          controlId: el.controlId,
+          designTimeId: el.designTimeId,
+          instanceId: el.instanceId,
+          properties: el.properties ?? []
+        }))
+      };
+    } catch (e: any) {
+      errors.push(`Error reading dashboard: ${e.message}`);
+    }
+    if (errors.length) result.errors = errors;
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+
   // ── 2. Dashboards scope (element counts) ───────────────────────────────────
   if (scope === "dashboards") {
     const list: Array<{ name: string; path: string; elementCount: number; type: string }> = [];
-    for (const dirName of ["Dashboards", "GlobalDashboards", "Windows"]) {
+    for (const dirName of ["Dashboards", "GlobalDashboards", "Window"]) {
       const dir = join(projectDir, dirName);
       if (!existsSync(dir)) continue;
       try {
@@ -360,13 +410,26 @@ export async function inspectVisuProjectHandler(args: {
   const schemesDir = join(projectDir, "Schemes");
   if (existsSync(schemesDir)) {
     try {
-      const schemes: Array<{ type: string; name: string }> = [];
+      const schemes: Array<{ type: string; name: string; designTimeId?: string }> = [];
       for (const typeDir of readdirSync(schemesDir)) {
         const typeFullPath = join(schemesDir, typeDir);
         try {
           for (const schemeFile of readdirSync(typeFullPath)) {
             if (!schemeFile.endsWith(".json")) continue;
-            schemes.push({ type: typeDir, name: basename(schemeFile, ".json") });
+            try {
+              const data = readJson(join(typeFullPath, schemeFile));
+              if (data && Array.isArray(data.schemes)) {
+                for (const s of data.schemes) {
+                  if (s && s.name) {
+                    schemes.push({
+                      type: typeDir,
+                      name: s.name,
+                      designTimeId: s.designTimeId
+                    });
+                  }
+                }
+              }
+            } catch {}
           }
         } catch {}
       }

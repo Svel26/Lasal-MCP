@@ -19,6 +19,7 @@ import {
   plcValuesSchema, plcValuesHandler,
 } from "./tools/plcControl.js";
 import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
+import { visuDashboardSchema, visuDashboardHandler } from "./tools/visuDashboard.js";
 import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
 import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
@@ -117,6 +118,13 @@ server.tool(
     "media items (images, video, audio, docs, fonts), code modules, and HMI download.",
   visuProjectSchema,
   visuProjectHandler
+);
+
+server.tool(
+  "visu_dashboard",
+  "Author, modify, and delete dashboards, windows, composite templates, and elements direct via JSON file I/O on .lvp projects.",
+  visuDashboardSchema,
+  visuDashboardHandler
 );
 
 server.tool(
