@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { runVisuOps, VisuOp } from "../utils/visuScript.js";
+import { runVisuOps, type VisuOp } from "../utils/visuScript.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock } from "../utils/engine.js";
 import { preflightHmi } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 
-function visuResultToResponse(r: ReturnType<typeof runVisuOps>, extra?: Record<string, unknown>) {
+function visuResultToResponse(r: Awaited<ReturnType<typeof runVisuOps>>, extra?: Record<string, unknown>) {
   const body: Record<string, unknown> = {
     ok: r.ok,
     durationMs: r.durationMs,
@@ -372,7 +372,7 @@ export async function visuProjectHandler(args: {
       return fail("connection is required for action 'download'", ["Provide the connection parameter."]);
     }
     const m = args.connection.match(/TCPIP:(.+)/i);
-    const ipUsed = m ? m[1].split(":")[0] : args.connection;
+    const ipUsed = m?.[1]?.split(":")[0] ?? args.connection;
 
     const pf = await preflightHmi(resolved.path, args.connection);
     if (!pf.ok) {
@@ -386,7 +386,7 @@ export async function visuProjectHandler(args: {
       });
     }
 
-    const r = runVisuOps(
+    const r = await runVisuOps(
       resolved.path,
       [{ type: "download", connection: args.connection, flags: args.flags ?? 0, add_runtime: args.add_runtime ?? false }],
       false
@@ -405,7 +405,7 @@ export async function visuProjectHandler(args: {
   }
 
   const visuOps: VisuOp[] = parsed.ops.map(toVisuOp);
-  const r = runVisuOps(resolved.path, visuOps);
+  const r = await runVisuOps(resolved.path, visuOps);
   return visuResultToResponse(r, { lvpPath: resolved.path });
   });
 }

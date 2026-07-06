@@ -1,0 +1,5 @@
+<Solution Name="SampleSolution">
+  <SlnStationFiles>
+    <File Path=".\Stations\Station1\Station1.lss"/>
+  </SlnStationFiles>
+</Solution>

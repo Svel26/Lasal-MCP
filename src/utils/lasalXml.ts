@@ -127,18 +127,38 @@ export interface StClassInfo {
 }
 
 function extractStBlock(content: string): { pre: string; xml: string; post: string } {
-  const START = "(*!";
-  const END = "*)";
-  const si = content.indexOf(START);
+  const si = content.indexOf("(*!");
   if (si < 0) throw new Error("No (*! declaration block found in .st file");
-  // Find the *) that closes the (*! block (the first *) after the opening marker)
-  const ei = content.indexOf(END, si + START.length);
-  if (ei < 0) throw new Error("No closing *) found for (*! block in .st file");
-  return {
-    pre: content.slice(0, si + START.length),
-    xml: content.slice(si + START.length, ei),
-    post: content.slice(ei),
-  };
+
+  // Scan forward from after "(*!" tracking nested (* *) pairs to find the
+  // matching *) for this opener. This prevents a plain (* comment *) earlier
+  // in the XML payload or a *) inside a string from breaking extraction.
+  let depth = 1;
+  let pos = si + 3;
+  while (pos < content.length - 1) {
+    if (content[pos] === "(" && content[pos + 1] === "*") {
+      depth++;
+      pos += 2;
+    } else if (content[pos] === "*" && content[pos + 1] === ")") {
+      depth--;
+      if (depth === 0) {
+        const xml = content.slice(si + 3, pos);
+        // Validate: the extracted content must contain at least one XML tag
+        if (!/<\w/.test(xml)) {
+          throw new Error("Extracted (*! ... *) block does not contain valid XML");
+        }
+        return {
+          pre: content.slice(0, si + 3),
+          xml,
+          post: content.slice(pos),
+        };
+      }
+      pos += 2;
+    } else {
+      pos++;
+    }
+  }
+  throw new Error("No closing *) found for (*! block in .st file");
 }
 
 export function parseStClass(stPath: string): StClassInfo {
@@ -317,7 +337,7 @@ function clientXmlLine(c: ClientChannel, indent: string, eol = "\n"): string {
 
 function detectChannelsIndent(xml: string): string {
   const m = xml.match(/(\t+)<(?:Server|Client)\s+Name/);
-  return m ? m[1] : "\t\t";
+  return m?.[1] ?? "\t\t";
 }
 
 export function addServerToSt(stPath: string, server: Omit<ServerChannel, "guid"> & { guid?: string }): void {
@@ -599,7 +619,21 @@ function splitStSections(content: string): {
   const xmlEnd = (() => {
     const si = content.indexOf("(*!");
     if (si < 0) return -1;
-    return content.indexOf("*)", si + 3);
+    let depth = 1;
+    let pos = si + 3;
+    while (pos < content.length - 1) {
+      if (content[pos] === "(" && content[pos + 1] === "*") {
+        depth++;
+        pos += 2;
+      } else if (content[pos] === "*" && content[pos + 1] === ")") {
+        depth--;
+        if (depth === 0) return pos;
+        pos += 2;
+      } else {
+        pos++;
+      }
+    }
+    return -1;
   })();
   if (xmlEnd < 0) return { pre: content, classPart: "", implPart: "" };
 
@@ -773,10 +807,13 @@ export function renameVariableInSt(
       const newSection = section.replace(
         new RegExp(`\\b${escapeRe(oldName)}\\b`, "gi"),
         (m) => {
-          return newName[0] === oldName[0]
+          const newNameFirstChar = newName[0];
+          const oldNameFirstChar = oldName[0];
+          const matchFirstChar = m[0];
+          return newNameFirstChar && oldNameFirstChar && newNameFirstChar === oldNameFirstChar
             ? newName
-            : m[0] === m[0].toUpperCase()
-            ? newName[0].toUpperCase() + newName.slice(1)
+            : matchFirstChar && matchFirstChar === matchFirstChar.toUpperCase()
+            ? (newName[0] ?? "").toUpperCase() + newName.slice(1)
             : newName;
         }
       );
@@ -791,10 +828,13 @@ export function renameVariableInSt(
       newImplPart = implPart.replace(re, (m) => {
         bodyReplacements++;
         // Preserve case of first letter
-        return newName[0] === oldName[0]
+        const newNameFirstChar = newName[0];
+        const oldNameFirstChar = oldName[0];
+        const matchFirstChar = m[0];
+        return newNameFirstChar && oldNameFirstChar && newNameFirstChar === oldNameFirstChar
           ? newName
-          : m[0] === m[0].toUpperCase()
-          ? newName[0].toUpperCase() + newName.slice(1)
+          : matchFirstChar && matchFirstChar === matchFirstChar.toUpperCase()
+          ? (newName[0] ?? "").toUpperCase() + newName.slice(1)
           : newName;
       });
     }

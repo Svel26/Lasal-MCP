@@ -57,7 +57,7 @@ export async function manageVisuDesignerHandler(args: { action: "open" | "close"
         isError: true,
       };
     }
-    if (found.length === 1) {
+    if (found.length === 1 && found[0]) {
       launchDetached(VISUDESIGNER_EXE, [found[0]]);
       return { content: [{ type: "text" as const, text: `VISUDesigner opened with: ${found[0]}` }] };
     }
@@ -110,7 +110,7 @@ export async function manageClass2Handler(args: { action: "open" | "close"; lcp_
         isError: true,
       };
     }
-    if (found.length === 1) {
+    if (found.length === 1 && found[0]) {
       launchDetached(CLASS2_EXE, [found[0]]);
       return { content: [{ type: "text" as const, text: `CLASS 2 opened with: ${found[0]}` }] };
     }

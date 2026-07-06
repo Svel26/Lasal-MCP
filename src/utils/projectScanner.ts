@@ -146,12 +146,12 @@ export function updateLssConnection(
   const m = tcpipRe.exec(content);
   if (!m) throw new Error(`No <TCPIP .../> element found in ${lssPath}`);
 
-  let tag = m[1];
+  let tag = m[1]!;
   if (updates.ip !== undefined) tag = setAttr(tag, "IP", updates.ip);
   if (updates.port !== undefined) tag = setAttr(tag, "PORT", updates.port);
   if (updates.ssltls !== undefined) tag = setAttr(tag, "SSLTLS", updates.ssltls);
 
-  content = content.slice(0, m.index) + tag + content.slice(m.index + m[1].length);
+  content = content.slice(0, m.index!) + tag + content.slice(m.index! + m[1]!.length);
   writeFileSync(lssPath, content, "latin1");
 }
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { existsSync, readFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
-import { runScript, emitPy27String, emitPath, BatchResult } from "../utils/batchScript.js";
+import { runScript, emitPy27String, emitPath, type BatchResult } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { XMLParser } from "fast-xml-parser";
@@ -78,7 +78,7 @@ export async function plcDiagnosticsHandler(args: {
           "batch.CloseProject(prj)",
         ].join("\n") + "\n";
 
-        const br = runScript(script, logPath);
+        const br = await runScript(script, logPath);
         return batchResultToResponse(br, { outputPath: outPath });
       }
 
@@ -97,7 +97,7 @@ export async function plcDiagnosticsHandler(args: {
           `if not ok: raise RuntimeError("UploadFile failed")`,
         ].join("\n") + "\n";
 
-        const br = runScript(script, logPath);
+        const br = await runScript(script, logPath);
         return batchResultToResponse(br);
       }
 
@@ -116,7 +116,7 @@ export async function plcDiagnosticsHandler(args: {
           `if not ok: raise RuntimeError("DownloadFile failed")`,
         ].join("\n") + "\n";
 
-        const br = runScript(script, logPath);
+        const br = await runScript(script, logPath);
         return batchResultToResponse(br);
       }
 
@@ -134,7 +134,7 @@ export async function plcDiagnosticsHandler(args: {
           `if not ok: raise RuntimeError("DeleteFileOnPLC failed")`,
         ].join("\n") + "\n";
 
-        const br = runScript(script, logPath);
+        const br = await runScript(script, logPath);
         return batchResultToResponse(br);
       }
 
@@ -150,7 +150,7 @@ export async function plcDiagnosticsHandler(args: {
           `if not ok: raise RuntimeError("DoCodeAnalysisOnProjekt failed")`,
         ].join("\n") + "\n";
 
-        const br = runScript(script, logPath);
+        const br = await runScript(script, logPath);
         let summary: any = {};
         if (br.ok && existsSync(outPath)) {
           try {

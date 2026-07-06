@@ -1,0 +1,19 @@
+<Network Name="Main">
+  <Components>
+    <Object Name="Motor1" Class="Motor" GUID="{CCCCCCCC-DDDD-EEEE-FFFF-000000000001}" Position="100,200">
+      <Channels>
+        <Server Name="s_Speed" Value="100"/>
+        <Client Name="c_Enable"/>
+      </Channels>
+    </Object>
+    <Object Name="Sensor1" Class="Sensor" GUID="{CCCCCCCC-DDDD-EEEE-FFFF-000000000002}" Position="300,200">
+      <Channels>
+        <Server Name="s_Value"/>
+      </Channels>
+    </Object>
+  </Components>
+  <Connections>
+    <Connection Source="Sensor1.c_Trigger" Destination="Motor1.s_Running"/>
+    <Connection Source="Motor1.c_Enable" Destination="Sensor1.s_Value" Station="Remote1"/>
+  </Connections>
+</Network>

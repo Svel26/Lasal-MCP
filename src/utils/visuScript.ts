@@ -1,8 +1,9 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { VISUDESIGNER_EXE, SCRATCH, killVisuDesigner } from "./engine.js";
-import { runEngineScript, StepOutcome } from "./scriptRunner.js";
+import { runEngineScript, type StepOutcome } from "./scriptRunner.js";
+import { ensureScratch } from "../core/scratch.js";
 
 export interface VisuResult {
   ok: boolean;
@@ -113,9 +114,9 @@ function emitTextElementsForEntry(entry: TextEntry): string[] {
   const { id, ...langs } = entry;
   const langKeys = Object.keys(langs).filter((k) => langs[k] !== undefined);
   if (langKeys.length === 0) {
-    return [`lvd.TextElement(${emitStr(id)})`];
+    return [`lvd.TextElement(${emitStr(id!)})`];
   }
-  return langKeys.map((lang) => `lvd.TextElement(${emitStr(id)}, ${emitStr(lang)}, ${emitStr(langs[lang])})`);
+  return langKeys.map((lang) => `lvd.TextElement(${emitStr(id!)}, ${emitStr(lang)}, ${emitStr(langs[lang]!)})`);
 }
 
 function emitTextList(def: TextListDef): string {
@@ -200,6 +201,7 @@ export function buildVisuScript(
 
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i];
+    if (!op) continue;
     const label = `${i}_${op.type}`;
     expectedSteps.push(label);
 
@@ -368,16 +370,12 @@ export function buildVisuScript(
   };
 }
 
-function ensureScratch() {
-  if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
-}
-
-export function runVisuOps(
+export async function runVisuOps(
   lvpPath: string,
   ops: VisuOp[],
   saveAtEnd = true,
-  timeoutMs = 180_000
-): VisuResult {
+  timeoutMs = 180_000,
+): Promise<VisuResult> {
   ensureScratch();
   const id = randomUUID();
   const scriptPath = join(SCRATCH, `visu_${id}.py`);
@@ -389,15 +387,19 @@ export function runVisuOps(
 
   killVisuDesigner();
 
-  const result = runEngineScript(scriptPath, {
-    exe: VISUDESIGNER_EXE,
-    argsFor: (p) => ["--script", p],
-    timeoutMs,
-    logEncoding: "utf-8",
-    killOnFailure: killVisuDesigner,
-    expectedSteps,
-    stepsPath
-  }, logPath);
+  const result = await runEngineScript(
+    scriptPath,
+    {
+      exe: VISUDESIGNER_EXE,
+      argsFor: (p) => ["--script", p],
+      timeoutMs,
+      logEncoding: "utf-8",
+      killOnFailure: killVisuDesigner,
+      expectedSteps,
+      stepsPath,
+    },
+    logPath,
+  );
 
   return {
     ok: result.ok,
@@ -408,6 +410,6 @@ export function runVisuOps(
     durationMs: result.durationMs,
     steps: result.steps,
     timedOut: result.timedOut,
-    hints: result.hints
+    hints: result.hints,
   };
 }

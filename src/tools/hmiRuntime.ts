@@ -2,12 +2,13 @@ import { z } from "zod";
 import { spawn, execSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, statSync, unlinkSync } from "fs";
 import { join } from "path";
-import { readState, writeState } from "../state.js";
+import { readState, writeState, getHmiForProject, setHmiForProject, clearHmiForProject } from "../state.js";
 import { DATASERVICE_EXE, killDataService, withEngineLock } from "../utils/engine.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { runVisuOps } from "../utils/visuScript.js";
 import { respond, fail } from "../utils/respond.js";
-import * as http from "http";
+import { checkHttpHealth } from "../core/http.js";
+import { isPidRunning, getPortForPid } from "../core/process.js";
 
 export const hmiRuntimeSchema = {
   action: z.enum(["start", "stop", "status"]).describe("Action to perform on the HMI runtime DataService."),
@@ -43,44 +44,6 @@ function createJunction(src: string, dest: string) {
   execSync(`mklink /J "${dest}" "${src}"`, { stdio: "pipe" });
 }
 
-function getPortForPid(pid: number): number {
-  try {
-    const out = execSync(`powershell -Command "(Get-NetTCPConnection -OwningProcess ${pid} -State Listen).Port"`, { encoding: "utf-8" }).trim();
-    const ports = out.split(/[\r\n]+/).map(p => parseInt(p.trim())).filter(p => !isNaN(p) && p > 0);
-    if (ports.length > 0) {
-      ports.sort((a, b) => a - b);
-      return ports[0];
-    }
-  } catch {}
-  return 9980;
-}
-
-function isPidRunning(pid: number): boolean {
-  try {
-    execSync(`tasklist /FI "PID eq ${pid}" | findstr ${pid}`, { stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function checkHttpHealth(url: string, timeoutMs = 1000): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      const req = http.get(url, { timeout: timeoutMs }, (res) => {
-        resolve(res.statusCode === 200 || res.statusCode === 302 || res.statusCode === 301);
-        res.resume();
-      });
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => {
-        req.destroy();
-        resolve(false);
-      });
-    } catch {
-      resolve(false);
-    }
-  });
-}
 
 export async function hmiRuntimeHandler(args: {
   action: "start" | "stop" | "status";
@@ -93,10 +56,10 @@ export async function hmiRuntimeHandler(args: {
     const warnings: string[] = [];
 
     if (args.action === "stop") {
-      const running = state.hmiRuntime;
+      const running = getHmiForProject(state);
       if (running) {
         killDataService(running.pid);
-        state.hmiRuntime = undefined;
+        clearHmiForProject(state);
         writeState(state);
         return respond({ ok: true, message: `HMI runtime DataService (PID ${running.pid}) stopped.` });
       } else {
@@ -106,13 +69,13 @@ export async function hmiRuntimeHandler(args: {
     }
 
     if (args.action === "status") {
-      const running = state.hmiRuntime;
+      const running = getHmiForProject(state);
       if (running && isPidRunning(running.pid)) {
         const healthy = await checkHttpHealth(`http://127.0.0.1:${running.port}/`);
         return respond({ ok: true, running: true, healthy, ...running });
       } else {
         if (running) {
-          state.hmiRuntime = undefined;
+          clearHmiForProject(state);
           writeState(state);
         }
         return respond({ ok: true, running: false });
@@ -128,10 +91,10 @@ export async function hmiRuntimeHandler(args: {
     // 1. Publish first if requested
     if (args.publishFirst ?? true) {
       let debug = args.debugPublish ?? true;
-      let publishResult = runVisuOps(resolved.path, [{ type: "publish", debug }]);
+      let publishResult = await runVisuOps(resolved.path, [{ type: "publish", debug }]);
       if (!publishResult.ok && debug) {
         warnings.push("Debug publish failed (possibly due to disabled TypeScript). Retrying with standard publish...");
-        publishResult = runVisuOps(resolved.path, [{ type: "publish", debug: false }]);
+        publishResult = await runVisuOps(resolved.path, [{ type: "publish", debug: false }]);
       }
       if (!publishResult.ok) {
         return fail(`Failed to publish project before starting HMI runtime: ${publishResult.errors.join("\n")}`, []);
@@ -148,7 +111,8 @@ export async function hmiRuntimeHandler(args: {
     }
 
     // 3. Prepare HMI Dir (with override support)
-    const dataDir = process.env.LASAL_MCP_HMI_DIR || "C:\\lslvisu";
+    const { HMI_DIR } = await import("../utils/config.js");
+    const dataDir = HMI_DIR;
     try {
       if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
       
@@ -209,8 +173,9 @@ export async function hmiRuntimeHandler(args: {
     }
 
     // 6. Kill any existing instance
-    if (state.hmiRuntime) {
-      killDataService(state.hmiRuntime.pid);
+    const existing = getHmiForProject(state);
+    if (existing) {
+      killDataService(existing.pid);
     } else {
       killDataService();
     }
@@ -250,9 +215,9 @@ export async function hmiRuntimeHandler(args: {
         await new Promise(r => setTimeout(r, 500));
       }
 
-      const url = "file:///C:/lslvisu/index.html";
+      const url = `file:///${dataDir.replace(/\\/g, "/")}/index.html`;
 
-      state.hmiRuntime = { pid, port, url, dataDir };
+      setHmiForProject(state, { pid, port, url, dataDir });
       writeState(state);
 
       return respond({

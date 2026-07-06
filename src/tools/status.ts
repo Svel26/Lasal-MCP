@@ -3,30 +3,12 @@ import { dirname } from "path";
 import { z } from "zod";
 import { readState } from "../state.js";
 import { findLsmPath, parseSolution, findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
-import { CLASS2_EXE, VISUDESIGNER_EXE, resolveDataServiceExe, isProcessRunning, getProcessPid } from "../utils/engine.js";
+import { CLASS2_EXE, VISUDESIGNER_EXE, resolveDataServiceExe, DATASERVICE_SEARCHED, isProcessRunning, getProcessPid } from "../utils/engine.js";
 import { pingHost } from "../utils/preflight.js";
 import { respond } from "../utils/respond.js";
-import * as http from "http";
+import { checkHttpHealth } from "../core/http.js";
 
 export const lasalStatusSchema = {};
-
-function checkHttpHealth(url: string, timeoutMs = 1000): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      const req = http.get(url, { timeout: timeoutMs }, (res) => {
-        resolve(res.statusCode === 200 || res.statusCode === 302 || res.statusCode === 301);
-        res.resume();
-      });
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => {
-        req.destroy();
-        resolve(false);
-      });
-    } catch {
-      resolve(false);
-    }
-  });
-}
 
 export async function lasalStatusHandler() {
   const state = readState();
@@ -63,15 +45,16 @@ export async function lasalStatusHandler() {
     }
   }
 
-  const dsExe = resolveDataServiceExe();
+  const dsResult = resolveDataServiceExe();
 
   const engines = {
     class2: { path: CLASS2_EXE, exists: existsSync(CLASS2_EXE) },
     visuDesigner: { path: VISUDESIGNER_EXE, exists: existsSync(VISUDESIGNER_EXE) },
-    dataService: { 
-      path: dsExe, 
-      exists: existsSync(dsExe),
-      resolvedVia: process.env.LASAL_DATASERVICE_EXE ? ("env" as const) : ("glob" as const)
+    dataService: {
+      path: dsResult.path,
+      exists: dsResult.path ? existsSync(dsResult.path) : false,
+      resolvedVia: process.env.LASAL_DATASERVICE_EXE ? ("env" as const) : ("glob" as const),
+      ...(dsResult.path === "" ? { searched: dsResult.searched } : {}),
     }
   };
 

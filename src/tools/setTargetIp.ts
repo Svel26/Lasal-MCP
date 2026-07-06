@@ -71,6 +71,13 @@ export async function setTargetIpHandler(args: {
   }
 
   let targetStation = solution.stations[0];
+  if (!targetStation) {
+    return {
+      content: [{ type: "text" as const, text: "No stations found in solution." }],
+      isError: true,
+    };
+  }
+
   if (args.station) {
     const match = solution.stations.find(
       (s) => s.name.toLowerCase() === args.station!.toLowerCase()
@@ -95,7 +102,7 @@ export async function setTargetIpHandler(args: {
   }
 
   try {
-    updateLssConnection(targetStation.lssPath, {
+    updateLssConnection(targetStation!.lssPath, {
       ip: args.ip,
       port: args.port,
       ssltls: args.ssltls !== undefined ? (args.ssltls ? "1" : "0") : undefined,
@@ -117,8 +124,8 @@ export async function setTargetIpHandler(args: {
       type: "text" as const,
       text: JSON.stringify({
         ok: true,
-        station: targetStation.name,
-        lssPath: targetStation.lssPath,
+        station: targetStation!.name,
+        lssPath: targetStation!.lssPath,
         updated: updates,
       }, null, 2),
     }],

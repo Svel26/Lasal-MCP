@@ -1,0 +1,9 @@
+<SlnStation Name="Station1">
+  <OnlineConnectionInfo>
+    <TCPIP IP="10.195.0.50" PORT="1954" SSLTLS="false"/>
+  </OnlineConnectionInfo>
+  <SlnProjects>
+    <SlnClassProject File="..\..\Class\Sample.lcp"/>
+    <SlnVISUDesignerProject File="..\..\Visu\Sample.lvp"/>
+  </SlnProjects>
+</SlnStation>

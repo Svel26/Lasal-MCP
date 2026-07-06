@@ -1,8 +1,9 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { CLASS2_EXE, SCRATCH, killClass2 } from "./engine.js";
-import { runEngineScript, StepOutcome } from "./scriptRunner.js";
+import { runEngineScript, type StepOutcome } from "./scriptRunner.js";
+import { ensureScratch } from "../core/scratch.js";
 
 export interface BatchResult {
   ok: boolean;
@@ -50,12 +51,21 @@ export interface BatchOp {
   [key: string]: unknown;
 }
 
-function ensureScratch() {
-  if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
+
+export function validateMbcsEncodable(s: string): void {
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code > 0xff) {
+      throw new Error(
+        `String contains character '${s[i]}' (U+${code.toString(16).padStart(4, "0")}) at position ${i} ` +
+        `which is not representable in mbcs/latin1. Path or value: "${s}"`,
+      );
+    }
+  }
 }
 
 export function emitPy27String(s: string): string {
-  // Produce a Python 2.7 string expression encoded with mbcs to match C++ ATL::CStringT expectations
+  validateMbcsEncodable(s);
   return `u"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}".encode('mbcs')`;
 }
 
@@ -90,6 +100,7 @@ export function buildBatchScript(
 
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i];
+    if (!op) continue;
     const label = `${i}_${op.type}`;
     expectedSteps.push(label);
 
@@ -319,13 +330,12 @@ export function buildRawScript(
   return lines.join("\n") + "\n";
 }
 
-/** Run an arbitrary pre-built Python 2.7 script against Lasal2.exe. */
-export function runScript(
+export async function runScript(
   script: string,
   logPath: string,
   timeoutMs = 120_000,
-  expectedSteps: string[] = []
-): BatchResult {
+  expectedSteps: string[] = [],
+): Promise<BatchResult> {
   ensureScratch();
   const id = randomUUID();
   const scriptPath = join(SCRATCH, `${id}.py`);
@@ -333,16 +343,20 @@ export function runScript(
   writeFileSync(scriptPath, script, "utf-8");
 
   const command = `"${CLASS2_EXE}" /script:"${scriptPath}"`;
-  
-  const result = runEngineScript(scriptPath, {
-    exe: CLASS2_EXE,
-    argsFor: (p) => [`/script:${p}`],
-    timeoutMs,
-    logEncoding: "latin1",
-    killOnFailure: killClass2,
-    expectedSteps,
-    stepsPath
-  }, logPath);
+
+  const result = await runEngineScript(
+    scriptPath,
+    {
+      exe: CLASS2_EXE,
+      argsFor: (p) => [`/script:${p}`],
+      timeoutMs,
+      logEncoding: "latin1",
+      killOnFailure: killClass2,
+      expectedSteps,
+      stepsPath,
+    },
+    logPath,
+  );
 
   return {
     ok: result.ok,
@@ -355,15 +369,15 @@ export function runScript(
     command,
     steps: result.steps,
     timedOut: result.timedOut,
-    hints: result.hints
+    hints: result.hints,
   };
 }
 
-export function runBatchOps(
+export async function runBatchOps(
   lcpPath: string,
   ops: BatchOp[],
-  timeoutMs = 120_000
-): BatchResult {
+  timeoutMs = 120_000,
+): Promise<BatchResult> {
   ensureScratch();
   const id = randomUUID();
   const scriptPath = join(SCRATCH, `${id}.py`);
@@ -374,18 +388,22 @@ export function runBatchOps(
   writeFileSync(scriptPath, script, "utf-8");
 
   const command = `"${CLASS2_EXE}" /script:"${scriptPath}"`;
-  
+
   killClass2();
 
-  const result = runEngineScript(scriptPath, {
-    exe: CLASS2_EXE,
-    argsFor: (p) => [`/script:${p}`],
-    timeoutMs,
-    logEncoding: "latin1",
-    killOnFailure: killClass2,
-    expectedSteps,
-    stepsPath
-  }, logPath);
+  const result = await runEngineScript(
+    scriptPath,
+    {
+      exe: CLASS2_EXE,
+      argsFor: (p) => [`/script:${p}`],
+      timeoutMs,
+      logEncoding: "latin1",
+      killOnFailure: killClass2,
+      expectedSteps,
+      stepsPath,
+    },
+    logPath,
+  );
 
   let postDownloadState: Record<string, unknown> | undefined;
   const stateJsonPath = logPath.replace(/\.log$/, ".state.json");
@@ -407,6 +425,6 @@ export function runBatchOps(
     steps: result.steps,
     timedOut: result.timedOut,
     hints: result.hints,
-    postDownloadState
+    postDownloadState,
   };
 }

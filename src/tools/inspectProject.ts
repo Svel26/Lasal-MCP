@@ -4,9 +4,9 @@ import {
   parseLcp,
   parseStClass,
   parseLcn,
-  LcpInfo,
-  StClassInfo,
-  LcnInfo,
+  type LcpInfo,
+  type StClassInfo,
+  type LcnInfo,
 } from "../utils/lasalXml.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 
@@ -159,7 +159,14 @@ export async function inspectProjectHandler(args: {
 
   if (classErrors.length) result.classParseErrors = classErrors;
 
+  const json = JSON.stringify(result, null, 2);
+  const MAX_RESPONSE_CHARS = 100_000;
+  if (json.length > MAX_RESPONSE_CHARS) {
+    result.truncationWarning = `Response truncated from ${json.length} to ${MAX_RESPONSE_CHARS} chars. Use class_names filter or disable include_networks/include_connections to narrow results.`;
+    const truncated = json.slice(0, MAX_RESPONSE_CHARS) + "\n... (truncated)";
+    return { content: [{ type: "text" as const, text: truncated }] };
+  }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    content: [{ type: "text" as const, text: json }],
   };
 }

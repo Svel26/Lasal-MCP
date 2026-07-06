@@ -1,0 +1,12 @@
+<Project Name="SampleProject">
+  <ClassFiles>
+    <File Path=".\Class\Motor.st"/>
+    <File Path=".\Class\Sensor.st"/>
+  </ClassFiles>
+  <NetworkFiles>
+    <File Path=".\Network\Main.lcn"/>
+  </NetworkFiles>
+  <Options>
+    <Directories Class=".\Class\" Network=".\Network\"/>
+  </Options>
+</Project>

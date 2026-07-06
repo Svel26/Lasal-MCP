@@ -2,6 +2,7 @@ import { existsSync, readdirSync, statSync, unlinkSync } from "fs";
 import { execSync } from "child_process";
 import { join } from "path";
 import { tmpdir } from "os";
+import { SCRATCH_MAX_AGE_H } from "./config.js";
 
 // ─── Executable Paths ────────────────────────────────────────────────────────
 
@@ -13,39 +14,64 @@ export const CLASS2_EXE =
   process.env.LASAL_CLASS2_EXE ||
   "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
 
-export function resolveDataServiceExe(): string {
-  if (process.env.LASAL_DATASERVICE_EXE) {
-    return process.env.LASAL_DATASERVICE_EXE;
-  }
-  const root = "C:\\Program Files";
-  if (!existsSync(root)) return "";
-  
-  try {
-    const dirs = readdirSync(root).filter(d => d.startsWith("Lasal VISUDesigner V"));
-    if (dirs.length > 0) {
-      dirs.sort((a, b) => b.localeCompare(a));
-      for (const dir of dirs) {
-        const parentPath = join(root, dir);
-        try {
-          const subDirs = readdirSync(parentPath).filter(d => d.startsWith("Lasal VISUDataService V"));
-          if (subDirs.length > 0) {
-            subDirs.sort((a, b) => b.localeCompare(a));
-            for (const subDir of subDirs) {
-              const exePath = join(parentPath, subDir, "Windows", "LasalVISUDataService.exe");
-              if (existsSync(exePath)) {
-                return exePath;
-              }
-            }
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-  
-  return "C:\\Program Files\\Lasal VISUDesigner V01_04_004_2750\\Lasal VISUDataService V01_04_004_663\\Windows\\LasalVISUDataService.exe";
+function extractVersion(name: string): number[] {
+  const m = name.match(/V(\d+(?:_\d+)*)/);
+  if (!m?.[1]) return [0];
+  return m[1].split("_").map(Number);
 }
 
-export const DATASERVICE_EXE = resolveDataServiceExe();
+function compareVersions(a: number[], b: number[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (b[i] ?? 0) - (a[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function versionSort(names: string[]): string[] {
+  return [...names].sort((a, b) => compareVersions(extractVersion(a), extractVersion(b)));
+}
+
+export function resolveDataServiceExe(): { path: string; searched: string[] } {
+  if (process.env.LASAL_DATASERVICE_EXE) {
+    return { path: process.env.LASAL_DATASERVICE_EXE, searched: [] };
+  }
+  const root = "C:\\Program Files";
+  const searched: string[] = [];
+
+  if (!existsSync(root)) {
+    return { path: "", searched: [`${root} (does not exist)`] };
+  }
+
+  try {
+    const dirs = readdirSync(root).filter(d => d.startsWith("Lasal VISUDesigner V"));
+    const sortedDirs = versionSort(dirs);
+    for (const dir of sortedDirs) {
+      const parentPath = join(root, dir);
+      try {
+        const subDirs = readdirSync(parentPath).filter(d => d.startsWith("Lasal VISUDataService V"));
+        const sortedSubDirs = versionSort(subDirs);
+        for (const subDir of sortedSubDirs) {
+          const exePath = join(parentPath, subDir, "Windows", "LasalVISUDataService.exe");
+          searched.push(exePath);
+          if (existsSync(exePath)) {
+            return { path: exePath, searched };
+          }
+        }
+      } catch {}
+    }
+    if (dirs.length === 0) {
+      searched.push(`${root} (no 'Lasal VISUDesigner V*' directories found)`);
+    }
+  } catch {}
+
+  return { path: "", searched };
+}
+
+const _dsResolved = resolveDataServiceExe();
+export const DATASERVICE_EXE = _dsResolved.path;
+export const DATASERVICE_SEARCHED = _dsResolved.searched;
 
 function findEdgePath(): string {
   const paths = [
@@ -69,7 +95,7 @@ export function cleanupScratch(): void {
   try {
     const files = readdirSync(SCRATCH);
     const now = Date.now();
-    const cutoff = 24 * 60 * 60 * 1000; // 24 hours
+    const cutoff = SCRATCH_MAX_AGE_H * 60 * 60 * 1000;
     for (const file of files) {
       const filePath = join(SCRATCH, file);
       try {
@@ -101,7 +127,7 @@ export function getProcessPid(imageName: string): number | undefined {
   try {
     const out = execSync(`tasklist /FI "IMAGENAME eq ${imageName}" /FO CSV /NH`, { stdio: "pipe", encoding: "utf-8" });
     const m = out.match(/"([^"]+)"\s*,\s*"(\d+)"/);
-    if (m && m[1].toLowerCase() === imageName.toLowerCase()) {
+    if (m && m[1] && m[2] && m[1].toLowerCase() === imageName.toLowerCase()) {
       return parseInt(m[2]);
     }
   } catch {}

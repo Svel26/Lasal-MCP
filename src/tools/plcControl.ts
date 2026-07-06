@@ -1,18 +1,17 @@
-import { existsSync, readFileSync, mkdirSync, lstatSync, readdirSync } from "fs";
+import { existsSync, readFileSync, lstatSync, readdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import { runBatchOps, runScript, emitPy27String, emitPath, BatchResult, buildRawScript } from "../utils/batchScript.js";
+import { runBatchOps, runScript, emitPy27String, emitPath, buildRawScript } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { parseLcn } from "../utils/lasalXml.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { TIMEOUTS } from "../utils/config.js";
 import { preflightPlc, resolveConnection } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
-
-function ensureScratch() {
-  if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
-}
+import { batchResultToResponse } from "../core/response.js";
+import { isTransientError } from "../core/errors.js";
+import { ensureScratch } from "../core/scratch.js";
 
 // Recursively find all project files
 function getProjectFiles(dir: string, files: string[] = []): string[] {
@@ -58,31 +57,13 @@ function resolveChannelType(projDir: string, objectName: string, channelName: st
     const stContent = readFileSync(stFile, "utf-8");
     const re = new RegExp(`//\\s*${channelName}\\s*:\\s*(\\w+)`, "i");
     const m = stContent.match(re);
-    if (m) {
+    if (m?.[1]) {
       return m[1].toUpperCase();
     }
   } catch {}
   return null;
 }
 
-function batchResultToResponse(br: BatchResult, extra?: Record<string, unknown>) {
-  const body: Record<string, unknown> = {
-    ok: br.ok,
-    durationMs: br.durationMs,
-    ...(br.errors.length ? { errors: br.errors } : {}),
-    ...(br.warnings.length ? { warnings: br.warnings } : {}),
-    ...(br.logTail.length ? { logTail: br.logTail } : {}),
-    logPath: br.logPath,
-    ...(br.hints?.length ? { hints: br.hints } : {}),
-    ...extra,
-  };
-  return respond(body as any);
-}
-
-function isTransientError(errors: string[]): boolean {
-  const transientPatterns = [/connect/i, /timeout/i, /offline/i, /socket/i, /1954/i];
-  return errors.some(err => transientPatterns.some(p => p.test(err)));
-}
 
 // ─── build_project ────────────────────────────────────────────────────────────
 
@@ -133,7 +114,7 @@ export async function buildProjectHandler(args: {
 
     if (args.action === "compile") {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
-      const br = runBatchOps(resolved.path, [{ type: "compile", optionName: args.options ?? "RebuildAll" }], timeoutMs);
+      const br = await runBatchOps(resolved.path, [{ type: "compile", optionName: args.options ?? "RebuildAll" }], timeoutMs);
       return batchResultToResponse(br);
     }
 
@@ -157,7 +138,7 @@ export async function buildProjectHandler(args: {
 
     const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
 
-    let br = runBatchOps(
+    let br = await runBatchOps(
       resolved.path,
       [{ type: "download", connection: connectionUsed, addLoaderAnyway: args.add_loader_anyway ?? false }],
       timeoutMs
@@ -166,7 +147,7 @@ export async function buildProjectHandler(args: {
     // Auto-retry transient connection errors once
     if (!br.ok && isTransientError(br.errors)) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      br = runBatchOps(
+      br = await runBatchOps(
         resolved.path,
         [{ type: "download", connection: connectionUsed, addLoaderAnyway: args.add_loader_anyway ?? false }],
         timeoutMs
@@ -256,11 +237,11 @@ export async function controlPlcHandler(args: {
       ];
 
       const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["start"]);
-      let br = runScript(script, logPath, TIMEOUTS.script, ["start"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = runScript(script, logPath, TIMEOUTS.script, ["start"]);
+        br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
         br.hints = [...(br.hints ?? []), "Retried start once due to a transient connection failure."];
       }
 
@@ -297,11 +278,11 @@ export async function controlPlcHandler(args: {
       ];
 
       const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["stop"]);
-      let br = runScript(script, logPath, TIMEOUTS.script, ["stop"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["stop"]);
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = runScript(script, logPath, TIMEOUTS.script, ["stop"]);
+        br = await runScript(script, logPath, TIMEOUTS.script, ["stop"]);
         br.hints = [...(br.hints ?? []), "Retried stop once due to a transient connection failure."];
       }
 
@@ -335,11 +316,11 @@ export async function controlPlcHandler(args: {
     ];
 
     const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["get_state"]);
-    let br = runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
+    let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
 
     if (!br.ok && isTransientError(br.errors)) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      br = runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
+      br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
       br.hints = [...(br.hints ?? []), "Retried get_state once due to a transient connection failure."];
     }
 
@@ -460,7 +441,7 @@ export async function plcValuesHandler(args: {
         const ch = item.channel;
         const parts = ch.split(".");
         let pyVal = `${emitPy27String(item.value)}`;
-        if (parts.length === 2) {
+        if (parts.length === 2 && parts[0] && parts[1]) {
           const type = resolveChannelType(projDir, parts[0], parts[1]);
           if (type) {
             if (type === "BOOL") {
@@ -500,10 +481,10 @@ export async function plcValuesHandler(args: {
       script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["write"]);
     }
 
-    let br = runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"]);
+    let br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"]);
     if (!br.ok && isTransientError(br.errors)) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      br = runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"]);
+      br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"]);
       br.hints = [...(br.hints ?? []), `Retried ${args.action} once due to a transient connection failure.`];
     }
 

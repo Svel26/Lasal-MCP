@@ -3,14 +3,16 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import { existsSync, readFileSync } from "fs";
-import { runBatchOps, runScript, emitPy27String, emitPath, BatchResult, buildRawScript } from "../utils/batchScript.js";
-import { runVisuOps, VisuResult } from "../utils/visuScript.js";
+import { runBatchOps, runScript, emitPy27String, emitPath, buildRawScript } from "../utils/batchScript.js";
+import { runVisuOps } from "../utils/visuScript.js";
 import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock } from "../utils/engine.js";
 import { hmiRuntimeHandler } from "./hmiRuntime.js";
 import { TIMEOUTS } from "../utils/config.js";
 import { preflightPlc, preflightHmi, resolveConnection } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
+import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
+import { isTransientError } from "../core/errors.js";
 
 export const deployAllSchema = {
   lcp_path: z
@@ -87,46 +89,6 @@ export const deployAllSchema = {
     .describe("Timeout override in seconds for compile and download steps."),
 };
 
-type StepResult = {
-  ok: boolean;
-  durationMs: number;
-  errors?: string[];
-  warnings?: string[];
-  logTail?: string[];
-  logPath?: string;
-  hints?: string[];
-  timedOut?: boolean;
-};
-
-function batchToStep(br: BatchResult): StepResult {
-  return {
-    ok: br.ok,
-    durationMs: br.durationMs,
-    ...(br.errors.length ? { errors: br.errors } : {}),
-    ...(br.warnings.length ? { warnings: br.warnings } : {}),
-    ...(br.logTail.length ? { logTail: br.logTail } : {}),
-    logPath: br.logPath,
-    hints: br.hints,
-    timedOut: br.timedOut
-  };
-}
-
-function visuToStep(vr: VisuResult): StepResult {
-  return {
-    ok: vr.ok,
-    durationMs: vr.durationMs,
-    ...(vr.errors.length ? { errors: vr.errors } : {}),
-    ...(vr.warnings.length ? { warnings: vr.warnings } : {}),
-    logPath: vr.logPath,
-    hints: vr.hints,
-    timedOut: vr.timedOut
-  };
-}
-
-function isTransientError(errors: string[]): boolean {
-  const transientPatterns = [/connect/i, /timeout/i, /offline/i, /socket/i, /1954/i];
-  return errors.some(err => transientPatterns.some(p => p.test(err)));
-}
 
 export async function deployAllHandler(args: {
   lcp_path?: string;
@@ -201,14 +163,14 @@ export async function deployAllHandler(args: {
     if (doDownloadVisu) {
       const pfHmi = await preflightHmi(lvpPath!, args.visu_connection!);
       const m = args.visu_connection!.match(/TCPIP:(.+)/i);
-      visuIp = m ? m[1].split(":")[0] : args.visu_connection!;
+      visuIp = m?.[1]?.split(":")[0] ?? args.visu_connection ?? "";
       if (!pfHmi.ok) {
         return respond({
           ok: false,
           preflightHmi: pfHmi,
           connections: {
             plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
-            visu: { ip: visuIp, connection: args.visu_connection }
+            visu: { ip: visuIp, connection: args.visu_connection ?? "" }
           },
           errors: pfHmi.problems.map(p => p.message),
           hints: pfHmi.problems.map(p => p.fix)
@@ -222,7 +184,7 @@ export async function deployAllHandler(args: {
         steps,
         connections: {
           plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
-          ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection } } : {})
+          ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {})
         },
         hints
       };
@@ -233,15 +195,15 @@ export async function deployAllHandler(args: {
     // Step 1: compile
     if (doCompile) {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
-      const br = runBatchOps(lcpPath!, [{ type: "compile", optionName: args.compile_options ?? "RebuildAll" }], timeoutMs);
-      steps.compile = batchToStep(br);
-      if (!br.ok) return failResponse("Compilation step failed.", br.hints);
+      const br = await runBatchOps(lcpPath!, [{ type: "compile", optionName: args.compile_options ?? "RebuildAll" }], timeoutMs);
+      steps.compile = batchToStepResult(br);
+      if (!br.ok) return failResponse("Compilation step failed.", br.hints ?? []);
     }
 
     // Step 2: download PLC
     if (doDownloadPlc) {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
-      let br = runBatchOps(lcpPath!, [{
+      let br = await runBatchOps(lcpPath!, [{
         type: "download",
         connection: plcConnectionUsed,
         addLoaderAnyway: args.add_plc_loader ?? false,
@@ -249,7 +211,7 @@ export async function deployAllHandler(args: {
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = runBatchOps(lcpPath!, [{
+        br = await runBatchOps(lcpPath!, [{
           type: "download",
           connection: plcConnectionUsed,
           addLoaderAnyway: args.add_plc_loader ?? false,
@@ -257,8 +219,8 @@ export async function deployAllHandler(args: {
         br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
       }
 
-      steps.download_plc = batchToStep(br);
-      if (!br.ok) return failResponse("PLC download step failed.", br.hints);
+      steps.download_plc = batchToStepResult(br);
+      if (!br.ok) return failResponse("PLC download step failed.", br.hints ?? []);
     }
 
     // Step 2a: verify PLC after download
@@ -285,7 +247,7 @@ export async function deployAllHandler(args: {
       ];
 
       const script = buildRawScript(lcpPath!, bodyLines, logPath, stepsPath, ["get_state"]);
-      let br = runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
 
       let stateData: Record<string, unknown> = {};
       if (existsSync(resultPath)) {
@@ -293,11 +255,11 @@ export async function deployAllHandler(args: {
       }
 
       steps.verify_plc = {
-        ...batchToStep(br),
+        ...batchToStepResult(br),
         plcState: stateData
       } as any;
 
-      if (!br.ok) return failResponse("PLC verification step failed.", br.hints);
+      if (!br.ok) return failResponse("PLC verification step failed.", br.hints ?? []);
     }
 
     // Step 2b: start PLC after download
@@ -326,11 +288,11 @@ export async function deployAllHandler(args: {
         "f_state.close()"
       ];
       const script = buildRawScript(lcpPath!, bodyLines, logPath, stepsPath, ["start"]);
-      let br = runScript(script, logPath, TIMEOUTS.script, ["start"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = runScript(script, logPath, TIMEOUTS.script, ["start"]);
+        br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
         br.hints = [...(br.hints ?? []), "Retried start once due to a transient connection failure."];
       }
 
@@ -340,11 +302,11 @@ export async function deployAllHandler(args: {
       }
 
       steps.start_plc = {
-        ...batchToStep(br),
+        ...batchToStepResult(br),
         postStartState: stateData
       } as any;
 
-      if (!br.ok) return failResponse("PLC start step failed.", br.hints);
+      if (!br.ok) return failResponse("PLC start step failed.", br.hints ?? []);
     }
 
     // Step 3: update visu stations + optional download
@@ -358,9 +320,9 @@ export async function deployAllHandler(args: {
         add_runtime: args.add_visu_runtime ?? false,
       });
 
-      const vr = runVisuOps(lvpPath!, visuOps, true, TIMEOUTS.visu);
-      steps.visu = visuToStep(vr);
-      if (!vr.ok) return failResponse("Visu designer operations step failed.", vr.hints);
+      const vr = await runVisuOps(lvpPath!, visuOps, true, TIMEOUTS.visu);
+      steps.visu = visuToStepResult(vr);
+      if (!vr.ok) return failResponse("Visu designer operations step failed.", vr.hints ?? []);
     }
 
     // Step 4: start HMI runtime
@@ -370,7 +332,7 @@ export async function deployAllHandler(args: {
       steps.hmi_runtime = {
         ok: !hmiRes.isError,
         durationMs: Date.now() - startStart,
-        ...(hmiRes.isError ? { errors: [ hmiRes.content[0].text ] } : { logTail: [ `HMI started: ${hmiRes.content[0].text}` ] })
+        ...(hmiRes.isError ? { errors: [ hmiRes.content[0]?.text ?? "Unknown error" ] } : { logTail: [ `HMI started: ${hmiRes.content[0]?.text ?? "started"}` ] })
       };
       if (hmiRes.isError) return failResponse("HMI runtime start step failed.");
     }
@@ -380,7 +342,7 @@ export async function deployAllHandler(args: {
       steps,
       connections: {
         plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
-        ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection } } : {})
+        ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {})
       }
     });
   });

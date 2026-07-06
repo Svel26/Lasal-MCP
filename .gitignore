@@ -1,7 +1,5 @@
 # Dependency directories
 node_modules/
-jspm_packages/
-web_modules/
 
 # TypeScript build output
 build/
@@ -28,3 +26,13 @@ Thumbs.db
 
 # Local state file
 lasal-state.json
+
+# Test coverage
+coverage/
+
+# Environment overrides
+.env
+.env.*
+
+# Scratch/temp files
+tmp/

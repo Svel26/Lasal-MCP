@@ -19,7 +19,7 @@ export function resolveLcpPath(lcpPath?: string): { path: string } | { error: st
   // Multi-station layout: search via .lsm → .lss
   const found = findLcpFiles(state.currentProject);
   if (found.length === 0) return { error: `No .lcp files found in ${state.currentProject}` };
-  if (found.length === 1) return { path: found[0] };
+  if (found.length === 1) return { path: found[0]! };
   return {
     error:
       `Multiple .lcp stations found — specify lcp_path:\n` +
@@ -37,7 +37,7 @@ export function resolveLvpPath(lvpPath?: string): { path: string } | { error: st
 
   const found = findLvpFiles(state.currentProject);
   if (found.length === 0) return { error: `No .lvp files found in ${state.currentProject}` };
-  if (found.length === 1) return { path: found[0] };
+  if (found.length === 1) return { path: found[0]! };
   return {
     error:
       `Multiple .lvp stations found — specify lvp_path:\n` +

@@ -26,12 +26,12 @@ export function findLssPath(lcpPath: string): string | null {
 export function resolveConnection(
   lcpPath: string,
   explicit?: string
-): { connection: string; ip?: string; source: "explicit" | "lss" } {
+): { connection: string; ip?: string; source: "explicit" | "lss"; warning?: string } {
   if (explicit) {
     let ip: string | undefined;
     const m = explicit.match(/TCPIP:(.+)/i);
     if (m) {
-      ip = m[1].split(":")[0];
+      ip = m[1]!.split(":")[0] ?? "";
     } else if (explicit.includes(".")) {
       ip = explicit;
     }
@@ -39,14 +39,17 @@ export function resolveConnection(
   }
 
   const lssPath = findLssPath(lcpPath);
-  if (!lssPath || !existsSync(lssPath)) {
-    return { connection: "", source: "lss" };
+  if (!lssPath) {
+    return { connection: "", source: "lss", warning: `No .lss file found near ${lcpPath}` };
+  }
+  if (!existsSync(lssPath)) {
+    return { connection: "", source: "lss", warning: `LSS file not found at ${lssPath}` };
   }
 
   try {
     const raw = readFileSync(lssPath, "latin1");
-    const parser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: false });
-    const doc = parser.parse(raw);
+    const xmlParser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: false });
+    const doc = xmlParser.parse(raw);
     const tcpip = doc.SlnStation?.OnlineConnectionInfo?.TCPIP;
     if (tcpip) {
       const ip = tcpip["@_IP"];
@@ -57,8 +60,11 @@ export function resolveConnection(
         source: "lss",
       };
     }
-  } catch {}
-  return { connection: "", source: "lss" };
+    return { connection: "", source: "lss", warning: `LSS file ${lssPath} has no <TCPIP> element` };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { connection: "", source: "lss", warning: `Failed to parse .lss at ${lssPath}: ${msg}` };
+  }
 }
 
 export function pingHost(ip: string, port = 1954, timeoutMs = 1000): Promise<boolean> {
@@ -173,7 +179,7 @@ export async function preflightHmi(
   let ip: string | undefined;
   const m = explicitConn.match(/TCPIP:(.+)/i);
   if (m) {
-    ip = m[1].split(":")[0];
+    ip = m[1]!.split(":")[0] ?? "";
   } else if (explicitConn.includes(".")) {
     ip = explicitConn;
   }

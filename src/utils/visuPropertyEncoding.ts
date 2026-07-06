@@ -125,7 +125,7 @@ export function encodeProperty(
       propTypeId = 1;
       if (typeof value === "string" && value.includes(":")) {
         const [listName, aliasName] = value.split(":");
-        refId = resolveTextRef(projectDir, listName, aliasName) || undefined;
+        refId = resolveTextRef(projectDir, listName!, aliasName!) || undefined;
       }
       break;
 

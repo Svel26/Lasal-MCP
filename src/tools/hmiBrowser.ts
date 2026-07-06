@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { chromium, Browser, BrowserContext, Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { readState } from "../state.js";
 import { EDGE_EXE } from "../utils/engine.js";
 

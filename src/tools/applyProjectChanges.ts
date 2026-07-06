@@ -29,7 +29,7 @@ import {
   removeMethodFromSt,
   renameMethodInSt,
 } from "../utils/lasalXml.js";
-import { runBatchOps, BatchOp } from "../utils/batchScript.js";
+import { runBatchOps, type BatchOp } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, killClass2, killVisuDesigner } from "../utils/engine.js";
 import { EditTransaction } from "../utils/editTransaction.js";
@@ -351,6 +351,11 @@ export const applyProjectChangesSchema = {
     .optional()
     .default(false)
     .describe("Run compile changes after applying modifications to verify project syntax validity."),
+  dry_run: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Validate operations without applying them. Returns what would be changed."),
 };
 
 const DIRECT_EDIT_TYPES = new Set([
@@ -391,6 +396,7 @@ export async function applyProjectChangesHandler(args: {
   lcp_path?: string;
   operations: unknown[];
   validate_compile?: boolean;
+  dry_run?: boolean;
 }) {
   return withEngineLock(async () => {
     const resolved = resolveLcpPath(args.lcp_path);
@@ -423,6 +429,22 @@ export async function applyProjectChangesHandler(args: {
           "Split your changes into two separate tool calls: first send direct edits (e.g. add_server, add_client), then send batch operations (e.g. add_object, create_connection)."
         ]
       );
+    }
+
+    if (args.dry_run) {
+      const plan = ops.map((op, i) => ({
+        index: i,
+        type: op.type,
+        target: (op as any).className ?? (op as any).network ?? (op as any).objectName ?? "",
+        mode: DIRECT_EDIT_TYPES.has(op.type) ? "direct_edit" : "batch",
+      }));
+      return respond({
+        ok: true,
+        dryRun: true,
+        operationCount: ops.length,
+        plan,
+        hints: ["Pass dry_run: false (or omit it) to apply these operations."],
+      });
     }
 
     let lcpInfo;
@@ -650,7 +672,7 @@ export async function applyProjectChangesHandler(args: {
 
         // Optional post-edit compilation check
         if (args.validate_compile) {
-          const br = runBatchOps(resolved.path, [{ type: "compile", optionName: "BuildChanges" }]);
+          const br = await runBatchOps(resolved.path, [{ type: "compile", optionName: "BuildChanges" }]);
           if (!br.ok) {
             throw new Error(`Compilation check failed: ${br.errors.join("; ")}`);
           }
@@ -802,7 +824,7 @@ export async function applyProjectChangesHandler(args: {
 
       let batchResult: Record<string, unknown> | null = null;
       if (batchOps.length > 0) {
-        const br = runBatchOps(resolved.path, batchOps);
+        const br = await runBatchOps(resolved.path, batchOps);
         batchResult = {
           ok: br.ok,
           exitCode: br.exitCode,

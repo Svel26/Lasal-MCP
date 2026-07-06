@@ -43,7 +43,7 @@ async function scanDatapointsStream(
 
   const results: Array<{ path: string; datatype: string }> = [];
   const nameStack: string[] = [];
-  
+
   let currentName: string | null = null;
   let currentDatatype: string | null = null;
   let inDatatype = false;
@@ -66,20 +66,20 @@ async function scanDatapointsStream(
     }
 
     const nameMatch = line.match(/"name"\s*:\s*"([^"]+)"/);
-    if (nameMatch) {
+    if (nameMatch?.[1]) {
       currentName = nameMatch[1];
     }
 
     if (line.includes('"datatype"')) {
       inDatatype = true;
       const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
-      if (valMatch) {
+      if (valMatch?.[1]) {
         currentDatatype = valMatch[1];
         inDatatype = false;
       }
     } else if (inDatatype) {
       const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
-      if (valMatch) {
+      if (valMatch?.[1]) {
         currentDatatype = valMatch[1];
         inDatatype = false;
       }
@@ -89,7 +89,7 @@ async function scanDatapointsStream(
       if (currentName) {
         const fullPath = [...nameStack, currentName].join(".");
         if (filterRegex.test(fullPath)) {
-          results.push({ path: fullPath, datatype: currentDatatype || "unknown" });
+          results.push({ path: fullPath, datatype: currentDatatype ?? "unknown" });
           if (results.length >= limit) {
             rl.close();
             fileStream.destroy();
@@ -117,7 +117,7 @@ async function getDatapointSummary(
   const roots: Array<{ name: string; datatype: string }> = [];
   let total = 0;
   const nameStack: string[] = [];
-  
+
   let currentName: string | null = null;
   let currentDatatype: string | null = null;
   let inDatatype = false;
@@ -140,20 +140,20 @@ async function getDatapointSummary(
     }
 
     const nameMatch = line.match(/"name"\s*:\s*"([^"]+)"/);
-    if (nameMatch) {
+    if (nameMatch?.[1]) {
       currentName = nameMatch[1];
     }
 
     if (line.includes('"datatype"')) {
       inDatatype = true;
       const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
-      if (valMatch) {
+      if (valMatch?.[1]) {
         currentDatatype = valMatch[1];
         inDatatype = false;
       }
     } else if (inDatatype) {
       const valMatch = line.match(/"value"\s*:\s*"([^"]+)"/);
-      if (valMatch) {
+      if (valMatch?.[1]) {
         currentDatatype = valMatch[1];
         inDatatype = false;
       }
@@ -163,7 +163,7 @@ async function getDatapointSummary(
       if (currentName) {
         total++;
         if (nameStack.length === 0) {
-          roots.push({ name: currentName, datatype: currentDatatype || "unknown" });
+          roots.push({ name: currentName, datatype: currentDatatype ?? "unknown" });
         }
       }
       currentName = null;

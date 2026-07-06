@@ -46,7 +46,7 @@ function resolveStPath(
   const available = lcpInfo.classFiles
     .filter((f) => f.absPath.endsWith(".st") && existsSync(f.absPath))
     .map((f) => { try { return parseStClass(f.absPath).name; } catch { return null; } })
-    .filter(Boolean);
+    .filter((x): x is string => x !== null);
   return { error: `Class "${className}" not found.\nAvailable classes: ${available.join(", ")}` };
 }
 
@@ -55,7 +55,7 @@ function validateLatin1(s: string): { ok: boolean; offending?: { char: string; c
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
     if (code > 0xff) {
-      offending.push({ char: s[i], code, index: i });
+      offending.push({ char: s[i]!, code, index: i });
       if (offending.length >= 10) break;
     }
   }
