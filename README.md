@@ -1,33 +1,22 @@
 # Sigmatek LASAL MCP Server
 
-A Model Context Protocol (MCP) server for automating the **Sigmatek LASAL** software suite. It enables AI coding assistants (like Claude, Gemini, or Cursor) to inspect projects, apply structural CLASS 2 or VISUDesigner HMI changes, compile, download to hardware, read/write live PLC values, and control PLC execution.
+A Model Context Protocol (MCP) server for automating the **Sigmatek LASAL** software suite. It gives AI coding assistants (Claude, Gemini, Cursor, etc.) the ability to compile, deploy to hardware, control PLCs, read/write live values, run HMI simulations, and automate a headless browser — while the agent edits project files directly.
 
 > **Warning:** This is NOT an official Sigmatek product. This project is in active development — bugs and unpredictable behavior are likely. **Do not use on production projects** without backups or version control.
 
+## Design Philosophy
+
+The MCP only exposes tools for operations that **require an external engine or hardware** — compiling, deploying, PLC control, browser automation. For everything else (reading/editing `.st`, `.lcp`, `.lcn`, `.lss`, `.lvp`, dashboard JSON), the AI agent works with the files directly using its native file tools. This keeps the tool set small, reliable, and focused.
+
 ## Features
 
-- **Project Navigation**: Select the active project directory and auto-resolve `.lcp` and `.lvp` paths.
-- **CLASS 2 Automation**:
-  - Inspect project structure (classes, networks, connections, server/client channels).
-  - Open and close the CLASS 2 IDE.
-  - Apply structural edits (create/delete/rename networks, add/remove/rename objects, connect/disconnect channels, set init values).
-  - Read and write class `.st` source files directly.
-  - Compile projects and read compiler logs (errors and warnings).
-- **VISUDesigner Automation**:
-  - Inspect HMI projects (stations, datapoints, text lists, schemes).
-  - Open and close VISUDesigner.
-  - Apply changes headlessly (sync datapoints, edit properties, configure schemes, manage media assets, add code modules).
-  - CSV translation import and export.
-  - Direct dashboard/window/style editing via JSON.
-- **PLC Runtime & Live Connection**:
-  - Configure target online IP addresses.
-  - Download projects to the target PLC or HMI.
-  - Read and write live channel values from a running PLC.
-  - Start, stop, or query the current PLC runtime state.
-  - PLC diagnostics (tracing, file transfer, static code analysis).
-- **HMI Simulation**:
-  - Local HMI web runtime via LasalVISUDataService.
-  - Headless Edge browser automation for testing.
+- **Build & Deploy**: Compile CLASS 2 projects, download to PLC, full deploy pipelines.
+- **PLC Control**: Start/stop PLC runtime, read/write live channel values, query state.
+- **CLASS 2 Batch Engine**: Create/delete networks, add/remove objects, manage connections, configure tasks — operations that require the CLASS 2 scripting engine.
+- **VISUDesigner Engine**: Sync datapoints, manage text lists/schemes/media, publish, download to HMI.
+- **HMI Simulation**: Local web runtime via LasalVISUDataService with headless Edge browser automation for visual verification.
+- **PLC Diagnostics**: Tracing, file transfer, static code analysis.
+- **Project Guide**: Built-in resource (`lasal://guide`) documenting all LASAL file formats so the agent can edit project files directly.
 
 ## Prerequisites
 
@@ -101,26 +90,39 @@ Add to `.claude/settings.json` or run `claude mcp add`:
 
 ## Available Tools
 
+### Engine & Hardware Tools (MCP)
+
 | Tool | Description |
 |---|---|
 | `select_project` | Set the active project root directory. |
 | `lasal_status` | Check project, stations, engines, processes, HMI health. |
 | `manage_class2` | Open or close the CLASS 2 IDE. |
 | `manage_visudesigner` | Open or close VISUDesigner. |
-| `inspect_project` | Scan CLASS 2 structure (classes, networks, connections). |
-| `inspect_visu_project` | Scan HMI config (stations, datapoints, schemes). |
-| `class_source` | Read or write Structured Text (.st) source code. |
-| `set_target_ip` | Set the target PLC/HMI IP in the .lss file. |
-| `apply_project_changes` | Structural edits with transactional rollback. Supports `dry_run`. |
 | `build_project` | Compile or download to PLC. |
 | `control_plc` | Start, stop, or query PLC runtime state. |
 | `plc_values` | Read/write live channel values on a running PLC. |
-| `visu_project` | Apply VISUDesigner changes or download to HMI. |
-| `visu_dashboard` | Direct read/write of dashboards, windows, styles in LVP JSON. |
+| `apply_project_changes` | CLASS 2 batch engine operations (networks, objects, connections, tasks). |
+| `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
 | `hmi_runtime` | Start/stop local HMI web simulation (DataService). |
-| `hmi_browser` | Headless Edge browser for HMI testing. |
+| `hmi_browser` | Headless Edge browser for HMI testing and screenshots. |
 | `plc_diagnostics` | Tracing, file transfer, static code analysis. |
-| `deploy_all` | Full pipeline: compile, download, start PLC, sync visu, start HMI. |
+| `deploy_all` | Full pipeline: compile → download → start PLC → sync visu → start HMI. |
+
+### Direct File Editing (no MCP needed)
+
+The agent edits these files directly with its native file tools:
+
+| File | Format | Encoding | What it contains |
+|---|---|---|---|
+| `.lsm` | XML | latin1 | Solution — lists all stations |
+| `.lss` | XML | latin1 | Station settings — target IP, project references |
+| `.lcp` | XML | latin1 | CLASS 2 project manifest — class and network file paths |
+| `.st` | XML + ST | latin1 | Class source — XML header + Structured Text body |
+| `.lcn` | XML | latin1 | Network definitions — objects, connections, init values |
+| `.lvp` | Mixed | utf-8 | VISUDesigner project manifest |
+| Dashboard JSON | JSON | utf-8 | HMI dashboards, windows, controls, property bindings |
+
+See the built-in `lasal://guide` resource for detailed file format documentation.
 
 ## Development
 
@@ -132,7 +134,3 @@ npm run lint         # ESLint
 npm run format       # Prettier
 npm run inspector    # MCP Inspector for interactive debugging
 ```
-
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full codebase layout, key patterns (engine mutex, script execution, file encoding, transactional edits), and environment variable reference.

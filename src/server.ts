@@ -8,11 +8,7 @@ import {
   manageClass2Schema,
   manageClass2Handler,
 } from "./tools/lasalApps.js";
-import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
-import { inspectVisuProjectSchema, inspectVisuProjectHandler } from "./tools/inspectVisuProject.js";
-import { classSourceSchema, classSourceHandler } from "./tools/readClassSource.js";
 import { deployAllSchema, deployAllHandler } from "./tools/deployAll.js";
-import { setTargetIpSchema, setTargetIpHandler } from "./tools/setTargetIp.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 import {
   buildProjectSchema, buildProjectHandler,
@@ -20,7 +16,6 @@ import {
   plcValuesSchema, plcValuesHandler,
 } from "./tools/plcControl.js";
 import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
-import { visuDashboardSchema, visuDashboardHandler } from "./tools/visuDashboard.js";
 import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
 import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
@@ -28,184 +23,117 @@ import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
-  version: "0.1.0",
+  version: "0.2.0",
 });
+
+// ─── Project management ──────────────────────────────────────────────────────
 
 server.tool(
   "select_project",
-  "Purpose: Set the active LASAL project by its full directory path. All subsequent tools default to using this project.\n" +
-  "Prerequisites: None.\n" +
-  "Result shape: { ok: true, projectDir: string }\n" +
-  "Typical call order: Call first to define the active project workspace.",
+  "Set the active LASAL project by directory path. Call first — all other tools default to this project.",
   selectProjectSchema,
   selectProjectHandler
 );
 
 server.tool(
   "lasal_status",
-  "Purpose: Check project selection, discover stations, verify connection settings/cabling reachability, discover engine paths, detect running processes, and report HMI health.\n" +
-  "Prerequisites: None (does not spawn engines).\n" +
-  "Result shape: { ok: true, project: {...}, stations: [...], engines: {...}, processes: {...}, hmiRuntime: {...}, hints: [...] }\n" +
-  "Typical call order: Call first to orient, and whenever connection errors or engine lock errors are returned.",
+  "Check project selection, station discovery, PLC/HMI reachability, engine paths, running processes, and HMI runtime health. Call to orient or diagnose connection issues.",
   lasalStatusSchema,
   lasalStatusHandler
 );
 
 server.tool(
-  "manage_visudesigner",
-  "Purpose: Open or close the VISUDesigner GUI app.\n" +
-  "Prerequisites: Requires a selected project (unless lvp_path is specified). Action 'open' launches the GUI; action 'close' kills the process (unsaved work lost).\n" +
-  "Result shape: { ok: boolean, message: string }\n" +
-  "Typical call order: Call when manual visual editing of LVP is required, or close before running automated batch modifications.",
-  manageVisuDesignerSchema,
-  manageVisuDesignerHandler
-);
-
-server.tool(
   "manage_class2",
-  "Purpose: Open or close the LASAL CLASS 2 IDE GUI app.\n" +
-  "Prerequisites: Requires a selected project (unless lcp_path is specified). Action 'open' launches the GUI; action 'close' kills the process (unsaved work lost).\n" +
-  "Result shape: { ok: boolean, message: string }\n" +
-  "Typical call order: Call when manual visual editing of the project is required, or close before compile/download batch scripts run.",
+  "Open or close the LASAL CLASS 2 IDE GUI. Close before running batch operations.",
   manageClass2Schema,
   manageClass2Handler
 );
 
 server.tool(
-  "inspect_project",
-  "Purpose: Scan and return the structural inventory (classes, servers, clients, networks, connections) of the CLASS 2 project.\n" +
-  "Prerequisites: Requires a selected project (unless lcp_path is specified). Works offline.\n" +
-  "Result shape: { ok: true, project: { name, lcpPath, classFiles: [...], networkFiles: [...], classes: [...], networks: [...] } }\n" +
-  "Typical call order: Call before making any project structural changes to understand what elements exist.",
-  inspectProjectSchema,
-  inspectProjectHandler
+  "manage_visudesigner",
+  "Open or close the VISUDesigner GUI. Close before running automated visu operations.",
+  manageVisuDesignerSchema,
+  manageVisuDesignerHandler
 );
 
-server.tool(
-  "inspect_visu_project",
-  "Purpose: Read and return the current LVP configuration (stations, datapoints, text lists, schemes).\n" +
-  "Prerequisites: Requires a selected project (unless lvp_path is specified). Works offline.\n" +
-  "Result shape: { ok: true, stations: [...], datapoints: [...] }\n" +
-  "Typical call order: Call to check HMI configuration before applying visual changes or download requests.",
-  inspectVisuProjectSchema,
-  inspectVisuProjectHandler
-);
-
-server.tool(
-  "class_source",
-  "Purpose: Read or write Structured Text class source code (.st files).\n" +
-  "Prerequisites: Requires a selected project. Writing requires CLASS 2 IDE to be closed. Content must be ISO-8859-1 (latin1) compatible.\n" +
-  "Result shape: { ok: boolean, className: string, stPath: string, source: string, [headers] }\n" +
-  "Typical call order: Read class source before modifying it, modify, and write it back.",
-  classSourceSchema,
-  classSourceHandler
-);
-
-server.tool(
-  "set_target_ip",
-  "Purpose: surgically update the TCP connection IP for a station in the station's .lss file.\n" +
-  "Prerequisites: Requires a selected project. Works offline, byte-preserving.\n" +
-  "Result shape: { ok: true, lssPath: string, ip: string }\n" +
-  "Typical call order: Set target IP before running download or deploy tasks.",
-  setTargetIpSchema,
-  setTargetIpHandler
-);
-
-server.tool(
-  "apply_project_changes",
-  "Purpose: Apply structural modifications (variable additions, server/client channel additions, network adjustments) in transaction mode.\n" +
-  "Prerequisites: Requires a selected project. Kills open CLASS 2 automatically. Direct edits (.st) and batch operations (.lcn) cannot be mixed in one call.\n" +
-  "Result shape: { ok: boolean, operations: [...] }\n" +
-  "Typical call order: Run after structural adjustments, then call build_project to compile.",
-  applyProjectChangesSchema,
-  applyProjectChangesHandler
-);
+// ─── Build, deploy, PLC control ──────────────────────────────────────────────
 
 server.tool(
   "build_project",
-  "Purpose: Compile CLASS 2 project or download to PLC.\n" +
-  "Prerequisites: Requires a selected project. Compile kills open CLASS 2. Download checks PLC reachability first, and returns PLC state. If connection is omitted, uses .lss IP and returns as ipUsed.\n" +
-  "Result shape: { ok: boolean, exitCode: number, postDownloadState?: {...}, connectionUsed?: string, ipUsed?: string }\n" +
-  "Typical call order: After apply_project_changes, run compile, then download.",
+  "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first.",
   buildProjectSchema,
   buildProjectHandler
 );
 
 server.tool(
   "control_plc",
-  "Purpose: Control PLC runtime state (start, stop, get_state) with state verification.\n" +
-  "Prerequisites: Requires a selected project. Pings target PLC. Omitted connection uses .lss IP.\n" +
-  "Result shape: { ok: boolean, stateValue: number, stateName: string, connectionUsed, ipUsed }\n" +
-  "Typical call order: Stop PLC before download, start it after download, and poll get_state.",
+  "Start, stop, or query PLC runtime state. Pings the target PLC before start/stop.",
   controlPlcSchema,
   controlPlcHandler
 );
 
 server.tool(
   "plc_values",
-  "Purpose: Read or write live channel values on a running PLC with channel-level verification.\n" +
-  "Prerequisites: Requires a selected project. Target PLC must be running and reachable.\n" +
-  "Result shape: { ok: boolean, channels: {...}, writes: {...}, failedChannels?: [...], connectionUsed, ipUsed }\n" +
-  "Typical call order: Verify PLC state, then read/write values.",
+  "Read or write live channel values on a running PLC. Channels use 'ObjectName.ChannelName' format. Auto-coerces types based on ST declarations.",
   plcValuesSchema,
   plcValuesHandler
 );
 
 server.tool(
+  "apply_project_changes",
+  "Run CLASS 2 batch engine operations that cannot be done by editing files directly: create/delete/rename networks, add/remove/rename objects, create/delete connections, set init values, configure tasks, compile, download. Kills CLASS 2 IDE before running.",
+  applyProjectChangesSchema,
+  applyProjectChangesHandler
+);
+
+server.tool(
+  "plc_diagnostics",
+  "Run PLC diagnostics: trace recording, file upload/download/delete on PLC, or static code analysis.",
+  plcDiagnosticsSchema,
+  plcDiagnosticsHandler
+);
+
+// ─── VISUDesigner engine operations ──────────────────────────────────────────
+
+server.tool(
   "visu_project",
-  "Purpose: Modify VISUDesigner LVP structure, or download to HMI target.\n" +
-  "Prerequisites: Requires a selected project. Apply_changes kills VISUDesigner. Download pings HMI first.\n" +
-  "Result shape: { ok: boolean, durationMs: number, connectionUsed?, ipUsed? }\n" +
-  "Typical call order: Run apply_changes, then download, or use deploy_all.",
+  "Run VISUDesigner engine operations: update stations, publish, manage text lists/schemes/media/code modules, set datapoint properties, or download to HMI. These need the VISUDesigner engine — for direct dashboard JSON editing, edit the files in the project directly.",
   visuProjectSchema,
   visuProjectHandler
 );
 
+// ─── Deploy pipeline ─────────────────────────────────────────────────────────
+
 server.tool(
-  "visu_dashboard",
-  "Purpose: Directly read/write dashboards, windows, composite controls, and styles in the LVP project JSON in transaction mode.\n" +
-  "Prerequisites: Requires a selected project. VISUDesigner must be closed.\n" +
-  "Result shape: { ok: boolean, results: [...], backups: [...] }\n" +
-  "Typical call order: Modify UI panels offline before compiling and publishing.",
-  visuDashboardSchema,
-  visuDashboardHandler
+  "deploy_all",
+  "Full deploy pipeline: compile → download PLC → start PLC → verify state → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags.",
+  deployAllSchema,
+  deployAllHandler
 );
+
+// ─── HMI runtime & browser ──────────────────────────────────────────────────
 
 server.tool(
   "hmi_runtime",
-  "Purpose: Run HMI web simulation server locally using LasalVISUDataService.exe.\n" +
-  "Prerequisites: Requires a selected project. Engine lock is acquired during publish. Glob-resolves the latest installed DataService version.\n" +
-  "Result shape: { ok: boolean, pid: number, port: number, url: string, healthy: boolean }\n" +
-  "Typical call order: Start simulation after build, then launch hmi_browser.",
+  "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Use hmi_browser to interact with it afterwards.",
   hmiRuntimeSchema,
   hmiRuntimeHandler
 );
 
 server.tool(
   "hmi_browser",
-  "Purpose: Automate a headless Edge browser instance to test the HMI interface.\n" +
-  "Prerequisites: Local HMI runtime must be active.\n" +
-  "Result shape: { ok: boolean }\n" +
-  "Typical call order: Start simulation, open browser, evaluate variables/interact, close.",
+  "Automate a headless Edge browser to test the HMI. Actions: open (navigate), screenshot (capture viewport or element), console (read logs/errors), eval (run JS), click, type, wait, close. ALWAYS use this after deploy to visually verify the HMI works.",
   hmiBrowserSchema,
   hmiBrowserHandler
 );
 
-server.tool(
-  "plc_diagnostics",
-  "Purpose: Perform diagnostic tasks (tracing, file up/down, static code analysis).\n" +
-  "Prerequisites: Requires a selected project.\n" +
-  "Result shape: { ok: boolean }\n" +
-  "Typical call order: Use during run-time debugging.",
-  plcDiagnosticsSchema,
-  plcDiagnosticsHandler
-);
+// ─── Resource: LASAL file format guide ───────────────────────────────────────
 
 server.resource(
-  "LASAL HMI Debugging and JS API Guide",
+  "LASAL Project Guide",
   "lasal://guide",
   {
-    description: "Guide for debugging LASAL web HMIs and using the runtime JS API",
+    description: "Complete guide to LASAL file formats, file editing, HMI debugging, and the runtime JS API",
     mimeType: "text/markdown"
   },
   async () => {
@@ -213,47 +141,180 @@ server.resource(
       contents: [{
         uri: "lasal://guide",
         mimeType: "text/markdown",
-        text: `# LASAL HMI Debugging and JS API Guide
-
-## Recommended Workflow
-1. **Status**: Call \`lasal_status\` to see the selected project and check reachability of your PLC/HMI targets.
-2. **Setup**: Call \`select_project\` with your project path, then call \`set_target_ip\` to assign correct IPs if needed.
-3. **Build & Deploy**: Call \`deploy_all\` to compile class changes, download to PLC, sync stations, and run simulation.
-4. **Interact**: Use \`plc_values\` to read/write live PLC tags, or start the runtime with \`hmi_runtime\` and test via \`hmi_browser\`.
-
-## Runtime JavaScript API Cheat-sheet
-Within the HMI web environment, you can interact with the runtime using the global \`sig\` or Polymer elements API.
-- **Read a Datapoint**:
-  \`\`\`javascript
-  sig.datapoint.get('Palletizer.s_BoxWidth')
-  \`\`\`
-- **Write a Datapoint**:
-  \`\`\`javascript
-  sig.datapoint.set('Palletizer.s_BoxWidth', 150)
-  \`\`\`
-- **Get Active Alarms**:
-  \`\`\`javascript
-  sig.alarm.getActiveAlarms()
-  \`\`\`
-- **Read Active View/Dashboard**:
-  \`\`\`javascript
-  document.querySelector('sig-app').activeView
-  \`\`\`
-`
+        text: LASAL_GUIDE,
       }]
     };
   }
 );
 
-server.tool(
-  "deploy_all",
-  "Purpose: Run full deploy pipeline (compile -> download PLC -> start PLC -> verify state -> update Visu stations -> download Visu -> start HMI runtime).\n" +
-  "Prerequisites: Requires selected project. Omitted connections resolve to .lss IPs. Pings targets first.\n" +
-  "Result shape: { ok: boolean, steps: {...}, connections: {...} }\n" +
-  "Typical call order: Call to push all local changes to the target rig in one single command.",
-  deployAllSchema,
-  deployAllHandler
-);
+const LASAL_GUIDE = `# LASAL Project Guide
+
+## File Format Reference
+
+All LASAL project files use **ISO-8859-1 (latin1)** encoding unless otherwise noted.
+
+### Solution file (.lsm)
+XML file at the project root. Lists all stations in the project.
+
+\`\`\`xml
+<Solution>
+  <SlnStation Name="PLC">
+    <StationFile Path="PLC\\PLC.lss"/>
+  </SlnStation>
+  <SlnStation Name="HMI">
+    <StationFile Path="HMI\\HMI.lss"/>
+  </SlnStation>
+</Solution>
+\`\`\`
+
+### Station settings (.lss)
+XML file per station. Contains connection settings and project file references.
+
+Key elements:
+- \`<TCPIP IP="10.195.0.50" PORT="1954" SSLTLS="0"/>\` — target IP for downloads
+- \`<ClassProject Path="PLC.lcp"/>\` — link to the CLASS 2 project
+- \`<VisualProject Path="HMI.lvp"/>\` — link to the VISUDesigner project
+
+To change the target IP, surgically edit the \`IP\` attribute in the \`<TCPIP>\` element.
+Do NOT rewrite the entire .lss — it contains other settings that must be preserved.
+
+### CLASS 2 project (.lcp)
+XML project manifest. Lists all class files and network files in the project.
+
+\`\`\`xml
+<ClassProject Version="...">
+  <Header>...</Header>
+  <ClassFiles>
+    <File Path="Motor.st"/>
+    <File Path="Sensor.st"/>
+  </ClassFiles>
+  <NetworkFiles>
+    <File Path="Main.lcn"/>
+  </NetworkFiles>
+</ClassProject>
+\`\`\`
+
+Use it to discover which .st and .lcn files belong to the project.
+Paths are relative to the .lcp file's directory.
+
+### Class source (.st)
+Structured Text class files. Each .st file defines one class. The format has two parts:
+
+1. **XML header block** (between \`(* BEGIN_CLASS ... END_CLASS *)\` comment markers):
+   Contains class metadata — servers, clients, methods, inheritance.
+
+2. **ST body**: Variable declarations and method implementations in IEC 61131-3 Structured Text.
+
+Example structure:
+\`\`\`
+(* BEGIN_CLASS
+<ClassDef Name="Motor" SuperClass="UserDef0" ...>
+  <Servers>
+    <Server Name="s_Speed" ... />
+  </Servers>
+  <Clients>
+    <Client Name="c_Enable" ... />
+  </Clients>
+  <Methods>
+    <Method Name="CyWork" ... />
+  </Methods>
+</ClassDef>
+END_CLASS *)
+
+//Variables:
+  s_Speed : SvrCh_DINT;
+  c_Enable : CltCh_BOOL;
+  localVar : DINT;
+
+//Methods:
+FUNCTION Motor::CyWork
+  IF c_Enable THEN
+    s_Speed := 100;
+  END_IF;
+END_FUNCTION
+\`\`\`
+
+**Server channels** (outputs): Prefixed \`s_\` by convention. Types like \`SvrCh_DINT\`, \`SvrCh_BOOL\`, \`SvrCh_REAL\`.
+**Client channels** (inputs): Prefixed \`c_\` by convention. Types like \`CltCh_DINT\`, \`CltChCmd_General2\`.
+
+When adding a server/client:
+1. Add the XML element in the header block (\`<Server>\` or \`<Client>\`)
+2. Add the variable declaration in the \`//Variables:\` section
+3. Both must match in name
+
+When editing .st files, always use **latin1** encoding. Non-latin1 characters will corrupt the file.
+
+### Network files (.lcn)
+XML files defining object networks — instances of classes and their connections.
+
+\`\`\`xml
+<Network Name="Main">
+  <Objects>
+    <Object Name="Motor1" ClassName="Motor" ...>
+      <InitValues>
+        <InitValue Server="s_Speed" Value="50"/>
+      </InitValues>
+    </Object>
+  </Objects>
+  <Connections>
+    <Connection FromObject="Sensor1" FromClient="c_MotorSpeed" ToObject="Motor1" ToServer="s_Speed"/>
+  </Connections>
+</Network>
+\`\`\`
+
+Network operations (create/delete networks, add/remove objects, create connections) **require the CLASS 2 batch engine** — use \`apply_project_changes\` for these.
+Init values and connections reference object instances, not class definitions.
+
+### Class header (.h)
+Auto-generated companion to .st files. Contains C-like declarations. Usually read-only — changes are made to .st files.
+
+### VISUDesigner project (.lvp)
+Binary/text project manifest for the HMI side. References dashboard JSON files, datapoint configurations, text lists, schemes, and media.
+
+### Dashboard JSON files
+Located in subdirectories of the .lvp project folder. These are UTF-8 JSON files defining HMI dashboard layouts with controls, properties, and data bindings.
+
+Dashboard files can be edited directly — they are standard JSON. Each element has:
+- \`controlId\`: the control type (e.g. "sigTextField", "sigButton")
+- \`name\`: unique element name within the dashboard
+- Properties bound to datapoints, constants, schemes, or text references
+
+## Recommended Workflow
+
+1. **Orient**: Call \`lasal_status\` to check project state and connectivity.
+2. **Select**: Call \`select_project\` with your project path.
+3. **Edit code**: Read and edit .st files directly using file tools. Use latin1 encoding.
+4. **Structural changes**: Use \`apply_project_changes\` for network/object/connection operations that need the CLASS 2 engine.
+5. **Build & Deploy**: Call \`build_project\` to compile, then \`deploy_all\` to push everything.
+6. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then \`hmi_browser\` to open, screenshot, and interact.
+7. **Live debug**: Use \`plc_values\` to read/write PLC channels in real time.
+
+## HMI Runtime JavaScript API
+
+Within the HMI web environment (via \`hmi_browser\` eval):
+\`\`\`javascript
+// Read a datapoint
+sig.datapoint.get('Motor1.s_Speed')
+
+// Write a datapoint
+sig.datapoint.set('Motor1.s_Speed', 150)
+
+// Get active alarms
+sig.alarm.getActiveAlarms()
+
+// Get current view
+document.querySelector('sig-app').activeView
+\`\`\`
+
+## Important Notes
+
+- All .st/.lcp/.lcn/.lss files are **latin1** encoded — always read/write with latin1
+- The CLASS 2 IDE must be **closed** before batch operations or .st file writes
+- VISUDesigner must be **closed** before visu engine operations
+- Network operations (create network, add object, create connection) **require the batch engine** — you cannot do these by editing files alone
+- Dashboard JSON files **can** be edited directly — no engine needed
+- After any code changes, **always compile** to check for errors before deploying
+`;
 
 cleanupScratch();
 
