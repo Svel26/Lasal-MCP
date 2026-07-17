@@ -1,18 +1,18 @@
 import { z } from "zod";
 import { join } from "path";
-import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import { existsSync, readFileSync } from "fs";
 import { runBatchOps, runScript, emitPy27String, emitPath, buildRawScript } from "../utils/batchScript.js";
 import { runVisuOps } from "../utils/visuScript.js";
 import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
-import { withEngineLock } from "../utils/engine.js";
-import { hmiRuntimeHandler } from "./hmiRuntime.js";
+import { withEngineLock, SCRATCH } from "../utils/engine.js";
+import { startHmiRuntime } from "./hmiRuntime.js";
 import { TIMEOUTS } from "../utils/config.js";
 import { preflightPlc, preflightHmi, resolveConnection } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
+import { ensureScratch } from "../core/scratch.js";
 
 export const deployAllSchema = {
   lcp_path: z
@@ -225,10 +225,11 @@ export async function deployAllHandler(args: {
 
     // Step 2a: verify PLC after download
     if (doDownloadPlc) {
+      ensureScratch();
       const id = randomUUID();
-      const logPath = join(tmpdir(), "lasal-mcp", `${id}.log`);
-      const stepsPath = join(tmpdir(), "lasal-mcp", `${id}.steps`);
-      const resultPath = join(tmpdir(), "lasal-mcp", `${id}.state.json`);
+      const logPath = join(SCRATCH, `${id}.log`);
+      const stepsPath = join(SCRATCH, `${id}.steps`);
+      const resultPath = join(SCRATCH, `${id}.state.json`);
       const conn = plcConnectionUsed;
       const bodyLines = [
         "state_map = {}",
@@ -247,7 +248,7 @@ export async function deployAllHandler(args: {
       ];
 
       const script = buildRawScript(lcpPath!, bodyLines, logPath, stepsPath, ["get_state"]);
-      let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"], stepsPath);
 
       let stateData: Record<string, unknown> = {};
       if (existsSync(resultPath)) {
@@ -264,10 +265,11 @@ export async function deployAllHandler(args: {
 
     // Step 2b: start PLC after download
     if (doStartPlc) {
+      ensureScratch();
       const id = randomUUID();
-      const logPath = join(tmpdir(), "lasal-mcp", `${id}.log`);
-      const stepsPath = join(tmpdir(), "lasal-mcp", `${id}.steps`);
-      const resultPath = join(tmpdir(), "lasal-mcp", `${id}.state.json`);
+      const logPath = join(SCRATCH, `${id}.log`);
+      const stepsPath = join(SCRATCH, `${id}.steps`);
+      const resultPath = join(SCRATCH, `${id}.state.json`);
       const conn = plcConnectionUsed;
       const bodyLines = [
         `batch.Start(prj, ${emitPy27String(conn)})`,
@@ -288,11 +290,11 @@ export async function deployAllHandler(args: {
         "f_state.close()"
       ];
       const script = buildRawScript(lcpPath!, bodyLines, logPath, stepsPath, ["start"]);
-      let br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
+        br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
         br.hints = [...(br.hints ?? []), "Retried start once due to a transient connection failure."];
       }
 
@@ -328,7 +330,7 @@ export async function deployAllHandler(args: {
     // Step 4: start HMI runtime
     if (args.start_hmi_runtime) {
       const startStart = Date.now();
-      const hmiRes = await hmiRuntimeHandler({ action: "start", lvp_path: lvpPath });
+      const hmiRes = await startHmiRuntime({ action: "start", lvp_path: lvpPath });
       steps.hmi_runtime = {
         ok: !hmiRes.isError,
         durationMs: Date.now() - startStart,

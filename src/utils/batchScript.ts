@@ -305,6 +305,7 @@ export function buildRawScript(
     "# -*- coding: utf-8 -*-",
     "import sigmatek.lasal.batch as batch",
     "import sys",
+    "import json",
     "import traceback",
     "batch.SetExceptionOnError(True)",
     `batch.OpenLogfile(${emitPath(logPath)})`,
@@ -335,11 +336,12 @@ export async function runScript(
   logPath: string,
   timeoutMs = 120_000,
   expectedSteps: string[] = [],
+  stepsPath?: string,
 ): Promise<BatchResult> {
   ensureScratch();
   const id = randomUUID();
   const scriptPath = join(SCRATCH, `${id}.py`);
-  const stepsPath = join(SCRATCH, `${id}.steps`);
+  if (!stepsPath) stepsPath = join(SCRATCH, `${id}.steps`);
   writeFileSync(scriptPath, script, "utf-8");
 
   const command = `"${CLASS2_EXE}" /script:"${scriptPath}"`;

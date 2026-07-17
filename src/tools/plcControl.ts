@@ -54,8 +54,8 @@ function resolveChannelType(projDir: string, objectName: string, channelName: st
   if (!stFile) return null;
 
   try {
-    const stContent = readFileSync(stFile, "utf-8");
-    const re = new RegExp(`//\\s*${channelName}\\s*:\\s*(\\w+)`, "i");
+    const stContent = readFileSync(stFile, "latin1");
+    const re = new RegExp(`\\b${channelName}\\s*:\\s*(\\w+)`, "i");
     const m = stContent.match(re);
     if (m?.[1]) {
       return m[1].toUpperCase();
@@ -237,11 +237,11 @@ export async function controlPlcHandler(args: {
       ];
 
       const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["start"]);
-      let br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = await runScript(script, logPath, TIMEOUTS.script, ["start"]);
+        br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
         br.hints = [...(br.hints ?? []), "Retried start once due to a transient connection failure."];
       }
 
@@ -278,11 +278,11 @@ export async function controlPlcHandler(args: {
       ];
 
       const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["stop"]);
-      let br = await runScript(script, logPath, TIMEOUTS.script, ["stop"]);
+      let br = await runScript(script, logPath, TIMEOUTS.script, ["stop"], stepsPath);
 
       if (!br.ok && isTransientError(br.errors)) {
         await new Promise(resolve => setTimeout(resolve, 1000));
-        br = await runScript(script, logPath, TIMEOUTS.script, ["stop"]);
+        br = await runScript(script, logPath, TIMEOUTS.script, ["stop"], stepsPath);
         br.hints = [...(br.hints ?? []), "Retried stop once due to a transient connection failure."];
       }
 
@@ -316,11 +316,11 @@ export async function controlPlcHandler(args: {
     ];
 
     const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["get_state"]);
-    let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
+    let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"], stepsPath);
 
     if (!br.ok && isTransientError(br.errors)) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"]);
+      br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"], stepsPath);
       br.hints = [...(br.hints ?? []), "Retried get_state once due to a transient connection failure."];
     }
 
@@ -413,19 +413,40 @@ export async function plcValuesHandler(args: {
         "batch.SetExceptionOnError(False)",
         `conn_ok = batch.OpenPlcConnection(prj, ${emitPy27String(conn)})`,
         "if conn_ok:",
+        "    import time",
         `    channels = ${channelListPy}`,
         "    results = {}",
+        // Composite objects expose their channels on internal implementation
+        // objects, addressed as Object\_base.Channel — try those variants too.
+        // Reads can fail right after connecting, so retry failed channels
+        // with short delays until the connection is fully usable.
+        "    def read_channel(ch):",
+        "        variants = [ch]",
+        "        if '.' in ch and '\\\\' not in ch:",
+        "            obj_part, chan_part = ch.split('.', 1)",
+        "            variants.append(obj_part + '\\\\_base.' + chan_part)",
+        "            variants.append(obj_part + '\\\\_base\\\\_base.' + chan_part)",
+        "        for variant in variants:",
+        "            dic = {}",
+        "            ok = batch.ReadPlcValue(variant, dic)",
+        "            if ok:",
+        "                return ok, dic, variant",
+        "        return 0, {}, ch",
         "    for ch in channels:",
-        "        dic = {}",
-        "        ok = batch.ReadPlcValue(ch, dic)",
+        "        ok, dic, used = read_channel(ch)",
+        "        attempt = 0",
+        "        while not ok and attempt < 3:",
+        "            time.sleep(1.0)",
+        "            ok, dic, used = read_channel(ch)",
+        "            attempt += 1",
         "        data = {}",
-        "        for k, v in dic.items():",
-        "            data[str(k)] = str(v)",
-        "        results[ch] = {'ok': bool(ok), 'data': data}",
+        "        for k, dv in dic.items():",
+        "            data[str(k)] = str(dv)",
+        "        results[ch] = {'ok': bool(ok), 'data': data, 'path': used}",
         "    batch.ClosePlcConnection()",
         "    result = {'ok': True, 'channels': results}",
         "else:",
-        "    result = {'ok': False, 'error': 'Failed to open PLC connection — check connection string and PLC state'}",
+        "    result = {'ok': False, 'error': 'Failed to open PLC connection - check connection string and PLC state'}",
         `f = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f)",
         "f.close()"
@@ -465,15 +486,32 @@ export async function plcValuesHandler(args: {
         "batch.SetExceptionOnError(False)",
         `conn_ok = batch.OpenPlcConnection(prj, ${emitPy27String(conn)})`,
         "if conn_ok:",
+        "    import time",
         `    write_ops = ${writeOpsPy}`,
         "    results = {}",
+        "    def write_channel(ch, val):",
+        "        variants = [ch]",
+        "        if '.' in ch and '\\\\' not in ch:",
+        "            obj_part, chan_part = ch.split('.', 1)",
+        "            variants.append(obj_part + '\\\\_base.' + chan_part)",
+        "            variants.append(obj_part + '\\\\_base\\\\_base.' + chan_part)",
+        "        for variant in variants:",
+        "            ok = batch.WritePlcValue(variant, val)",
+        "            if ok:",
+        "                return ok, variant",
+        "        return 0, ch",
         "    for ch, val in write_ops:",
-        "        ok = batch.WritePlcValue(ch, val)",
-        "        results[ch] = {'ok': bool(ok)}",
+        "        ok, used = write_channel(ch, val)",
+        "        attempt = 0",
+        "        while not ok and attempt < 3:",
+        "            time.sleep(1.0)",
+        "            ok, used = write_channel(ch, val)",
+        "            attempt += 1",
+        "        results[ch] = {'ok': bool(ok), 'path': used}",
         "    batch.ClosePlcConnection()",
         "    result = {'ok': True, 'writes': results}",
         "else:",
-        "    result = {'ok': False, 'error': 'Failed to open PLC connection — check connection string and PLC state'}",
+        "    result = {'ok': False, 'error': 'Failed to open PLC connection - check connection string and PLC state'}",
         `f = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f)",
         "f.close()"
@@ -481,10 +519,10 @@ export async function plcValuesHandler(args: {
       script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["write"]);
     }
 
-    let br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"]);
+    let br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"], stepsPath);
     if (!br.ok && isTransientError(br.errors)) {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"]);
+      br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"], stepsPath);
       br.hints = [...(br.hints ?? []), `Retried ${args.action} once due to a transient connection failure.`];
     }
 

@@ -2,11 +2,31 @@ import { z } from "zod";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { readState } from "../state.js";
 import { EDGE_EXE } from "../utils/engine.js";
+import { checkHttpHealth } from "../core/http.js";
+import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
+
+/** Find the live HMI panel URL: the station that owns an .lvp project, served on port 80. */
+async function findLiveHmiUrl(): Promise<string | null> {
+  const state = readState();
+  if (!state.currentProject) return null;
+  try {
+    const lsmPath = findLsmPath(state.currentProject);
+    if (!lsmPath) return null;
+    const solution = parseSolution(lsmPath);
+    const hmiStation = solution.stations.find((s) => s.lvpPaths.length > 0 && s.ip);
+    if (!hmiStation?.ip) return null;
+    const url = `http://${hmiStation.ip}/`;
+    const reachable = await checkHttpHealth(url, 2000, true);
+    return reachable ? url : null;
+  } catch {
+    return null;
+  }
+}
 
 export const hmiBrowserSchema = {
   action: z.enum(["open", "screenshot", "console", "eval", "click", "type", "wait", "close"])
     .describe("Action to perform in the HMI browser session."),
-  url: z.string().optional().describe("URL to navigate to (open action only). Defaults to the active HMI runtime URL."),
+  url: z.string().optional().describe("URL to navigate to (open action only). Defaults to the live HMI panel (http://<hmi-station-ip>/) when reachable, else the local HMI runtime URL."),
   viewport: z.object({
     width: z.number().int(),
     height: z.number().int()
@@ -85,7 +105,8 @@ export async function hmiBrowserHandler(args: {
     switch (args.action) {
       case "open": {
         const state = readState();
-        const targetUrl = args.url || state.hmiRuntime?.url || "file:///C:/lslvisu/index.html";
+        // Default: live HMI panel if reachable, else the local simulation runtime
+        const targetUrl = args.url || (await findLiveHmiUrl()) || state.hmiRuntime?.url || "file:///C:/lslvisu/index.html";
         const width = args.viewport?.width ?? 1200;
         const height = args.viewport?.height ?? 800;
 

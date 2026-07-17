@@ -194,13 +194,16 @@ export async function runEngineScript(
       "Timed out — for large projects raise the timeout via the tool's timeout_s argument or LASAL_MCP_TIMEOUT_* environment variables.",
     );
   }
-  for (const mapping of HINT_TABLE) {
-    const matched =
-      errors.some((err) => mapping.pattern.test(err)) ||
-      log.warnings.some((warn) => mapping.pattern.test(warn)) ||
-      mapping.pattern.test(log.logContent);
-    if (matched && !hints.includes(mapping.hint)) {
-      hints.push(mapping.hint);
+  const hasFailed2 = exitCode !== 0 || errors.length > 0 || timedOut || !allConfirmed;
+  if (hasFailed2) {
+    for (const mapping of HINT_TABLE) {
+      const matched =
+        errors.some((err) => mapping.pattern.test(err)) ||
+        log.warnings.some((warn) => mapping.pattern.test(warn)) ||
+        log.logTail.some((line) => mapping.pattern.test(line));
+      if (matched && !hints.includes(mapping.hint)) {
+        hints.push(mapping.hint);
+      }
     }
   }
 

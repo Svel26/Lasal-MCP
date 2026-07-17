@@ -9,6 +9,7 @@ import { runVisuOps } from "../utils/visuScript.js";
 import { respond, fail } from "../utils/respond.js";
 import { checkHttpHealth } from "../core/http.js";
 import { isPidRunning, getPortForPid } from "../core/process.js";
+import { startStaticServer, stopStaticServer } from "../core/staticServer.js";
 
 export const hmiRuntimeSchema = {
   action: z.enum(["start", "stop", "status"]).describe("Action to perform on the HMI runtime DataService."),
@@ -45,17 +46,17 @@ function createJunction(src: string, dest: string) {
 }
 
 
-export async function hmiRuntimeHandler(args: {
+export async function startHmiRuntime(args: {
   action: "start" | "stop" | "status";
   lvp_path?: string;
   debugPublish?: boolean;
   publishFirst?: boolean;
 }) {
-  return withEngineLock(async () => {
     const state = readState();
     const warnings: string[] = [];
 
     if (args.action === "stop") {
+      stopStaticServer();
       const running = getHmiForProject(state);
       if (running) {
         killDataService(running.pid);
@@ -71,8 +72,14 @@ export async function hmiRuntimeHandler(args: {
     if (args.action === "status") {
       const running = getHmiForProject(state);
       if (running && isPidRunning(running.pid)) {
-        const healthy = await checkHttpHealth(`http://127.0.0.1:${running.port}/`);
-        return respond({ ok: true, running: true, healthy, ...running });
+        const healthy = await checkHttpHealth(`http://127.0.0.1:${running.port}/`, 1000, true);
+        // Make sure the static web server is up (it dies with the MCP process, unlike the DataService)
+        let url = running.url;
+        try {
+          const httpPort = await startStaticServer(running.dataDir);
+          url = `http://127.0.0.1:${httpPort}/index.html`;
+        } catch {}
+        return respond({ ok: true, running: true, healthy, ...running, url });
       } else {
         if (running) {
           clearHmiForProject(state);
@@ -155,6 +162,16 @@ export async function hmiRuntimeHandler(args: {
         } catch {}
       }
 
+      // 4b. Point the HMI frontend's WebSocket at the local DataService instead of the real panel
+      const dsconfigPath = join(dataDir, "res", "data", "dsconfig.json");
+      if (existsSync(dsconfigPath)) {
+        try {
+          const dsconfig = JSON.parse(readFileSync(dsconfigPath, "utf-8"));
+          dsconfig.ip = "127.0.0.1";
+          writeFileSync(dsconfigPath, JSON.stringify(dsconfig), "utf-8");
+        } catch {}
+      }
+
       // 5. Patch config.json
       const configPath = join(dataDir, "dataservice", "config.json");
       const dataConfigPath = join(dataDir, "dataservice", "data", "config.json");
@@ -207,7 +224,7 @@ export async function hmiRuntimeHandler(args: {
         if (discoveredPort) {
           port = discoveredPort;
         }
-        const isHealthy = await checkHttpHealth(`http://127.0.0.1:${port}/`);
+        const isHealthy = await checkHttpHealth(`http://127.0.0.1:${port}/`, 1000, true);
         if (isHealthy) {
           healthy = true;
           break;
@@ -215,7 +232,16 @@ export async function hmiRuntimeHandler(args: {
         await new Promise(r => setTimeout(r, 500));
       }
 
-      const url = `file:///${dataDir.replace(/\\/g, "/")}/index.html`;
+      // The DataService only speaks WebSocket (9980) and a binary protocol (9981), and the
+      // webroot can't be opened via file:// (ES-module CORS) — serve it over local HTTP.
+      let url: string;
+      try {
+        const httpPort = await startStaticServer(dataDir);
+        url = `http://127.0.0.1:${httpPort}/index.html`;
+      } catch (e: any) {
+        warnings.push(`Failed to start static web server: ${e.message}. Falling back to file:// URL.`);
+        url = `file:///${dataDir.replace(/\\/g, "/")}/index.html`;
+      }
 
       setHmiForProject(state, { pid, port, url, dataDir });
       writeState(state);
@@ -232,5 +258,13 @@ export async function hmiRuntimeHandler(args: {
     } catch (e: any) {
       return fail(`Failed to launch HMI runtime: ${e.message}`, []);
     }
-  });
+}
+
+export async function hmiRuntimeHandler(args: {
+  action: "start" | "stop" | "status";
+  lvp_path?: string;
+  debugPublish?: boolean;
+  publishFirst?: boolean;
+}) {
+  return withEngineLock(() => startHmiRuntime(args));
 }
