@@ -11,10 +11,25 @@ export interface HmiRuntimeInfo {
   dataDir: string;
 }
 
+export interface LarsInstanceInfo {
+  name: string;
+  onlinePort: number;
+  stationName?: string;
+  stationLssPath?: string;
+  lcpPath?: string;
+  projectDir?: string;
+  role?: "plc" | "hmi" | "unknown";
+  originalIp?: string;
+  originalPort?: string;
+  originalTargetTag?: string;
+  pid?: number;
+}
+
 export interface LasalState {
   currentProject: string | null;
   hmiRuntime?: HmiRuntimeInfo;
   hmiRuntimes?: Record<string, HmiRuntimeInfo>;
+  larsInstances?: Record<string, LarsInstanceInfo>;
 }
 
 const DEFAULT_STATE: LasalState = {
@@ -54,5 +69,21 @@ export function clearHmiForProject(state: LasalState, projectDir?: string): void
   state.hmiRuntime = undefined;
   if (key && state.hmiRuntimes) {
     delete state.hmiRuntimes[key];
+  }
+}
+
+export function getLarsInstance(state: LasalState, name: string): LarsInstanceInfo | undefined {
+  return state.larsInstances?.[name];
+}
+
+export function setLarsInstance(state: LasalState, info: LarsInstanceInfo): void {
+  if (!state.larsInstances) state.larsInstances = {};
+  state.larsInstances[info.name] = info;
+}
+
+export function removeLarsInstance(state: LasalState, name: string): void {
+  if (state.larsInstances) {
+    delete state.larsInstances[name];
+    if (Object.keys(state.larsInstances).length === 0) state.larsInstances = undefined;
   }
 }

@@ -402,9 +402,6 @@ function editObjectsOfClass(
 
   while (true) {
     // Find the next <Object...> tag with this class
-    const classAttrRe = new RegExp(
-      `<Object(?=[^>]*\\bClass\\s*=\\s*"${escapeRe(className)}"[^>]*>)`
-    );
     const objTagRe = new RegExp(
       `<Object(?=[^>]*\\bClass\\s*=\\s*"${escapeRe(className)}"[^>]*)([^>]*)>`,
       "s"  // dotAll

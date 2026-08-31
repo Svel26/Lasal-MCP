@@ -19,6 +19,7 @@ import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
 import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
 import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
+import { larsRuntimeSchema, larsRuntimeHandler } from "./tools/larsRuntime.js";
 import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
@@ -91,6 +92,19 @@ server.tool(
   "Run PLC diagnostics: trace recording, file upload/download/delete on PLC, or static code analysis.",
   plcDiagnosticsSchema,
   plcDiagnosticsHandler
+);
+
+// ─── LARS local runtime simulation ───────────────────────────────────────────
+
+server.tool(
+  "lars_runtime",
+  "Manage local LARS (LASAL Runtime System) simulation instances. LARS runs one program per instance — " +
+    "use one workspace per station (PLC + HMI) so both run simultaneously on separate ports. " +
+    "Actions: list, setup (create workspaces for all stations), start, stop, remove, " +
+    "set_station_target (point a station's .lss at its LARS instance), restore (revert .lss to the real target). " +
+    "After set_station_target, build_project/control_plc/plc_values/deploy_all operate on the LARS instance automatically.",
+  larsRuntimeSchema,
+  larsRuntimeHandler
 );
 
 // ─── VISUDesigner engine operations ──────────────────────────────────────────

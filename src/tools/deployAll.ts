@@ -8,7 +8,7 @@ import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { startHmiRuntime } from "./hmiRuntime.js";
 import { TIMEOUTS } from "../utils/config.js";
-import { preflightPlc, preflightHmi, resolveConnection } from "../utils/preflight.js";
+import { preflightPlc, preflightHmi, resolveConnection, isLoopbackTarget } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
@@ -140,7 +140,9 @@ export async function deployAllHandler(args: {
     }
 
     // Resolve connections and preflight upfront
-    const plcConnectionInfo = resolveConnection(lcpPath!, args.plc_connection);
+    const plcConnectionInfo = lcpPath
+      ? resolveConnection(lcpPath, args.plc_connection)
+      : { connection: "", source: "none" as const, ip: undefined, port: undefined };
     const plcIp = plcConnectionInfo.ip ?? "";
     const plcConnectionUsed = plcConnectionInfo.connection;
 
@@ -203,10 +205,12 @@ export async function deployAllHandler(args: {
     // Step 2: download PLC
     if (doDownloadPlc) {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
+      // LARS (local runtime) targets need the PC loader or the download ends in "Linker_Error".
+      const addLoaderAnyway = args.add_plc_loader ?? isLoopbackTarget(plcConnectionInfo);
       let br = await runBatchOps(lcpPath!, [{
         type: "download",
         connection: plcConnectionUsed,
-        addLoaderAnyway: args.add_plc_loader ?? false,
+        addLoaderAnyway,
       }], timeoutMs);
 
       if (!br.ok && isTransientError(br.errors)) {
@@ -214,7 +218,7 @@ export async function deployAllHandler(args: {
         br = await runBatchOps(lcpPath!, [{
           type: "download",
           connection: plcConnectionUsed,
-          addLoaderAnyway: args.add_plc_loader ?? false,
+          addLoaderAnyway,
         }], timeoutMs);
         br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
       }

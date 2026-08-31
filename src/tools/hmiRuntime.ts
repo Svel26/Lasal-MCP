@@ -148,16 +148,24 @@ export async function startHmiRuntime(args: {
       const logDir = join(dataDir, "dataservice", "logs");
       if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
 
-      // 4. Ensure stations.json is Intern
+      // 4. Map hardware-targeted stations to running LARS instances (if any),
+      //    otherwise keep the published connection config as-is.
       const stationsJsonPath = join(dataDir, "dataservice", "data", "stations.json");
       if (existsSync(stationsJsonPath)) {
         try {
           const stations = JSON.parse(readFileSync(stationsJsonPath, "utf-8"));
-          if (Array.isArray(stations.stations)) {
-            for (const s of stations.stations) {
-              s.conType = "INTERN";
+          const list = Array.isArray(stations.stations) ? (stations.stations as any[]) : null;
+          if (list) {
+            const { mapStationsToLars } = await import("../utils/lars.js");
+            const mapping = mapStationsToLars(list as any, state.larsInstances ?? {});
+            if (mapping.length > 0) {
+              writeFileSync(stationsJsonPath, JSON.stringify(stations, null, 2), "utf-8");
+              warnings.push(
+                `DataService stations mapped to local LARS: ${mapping
+                  .map((m) => `${m.station} ${m.from} -> ${m.to}`)
+                  .join(", ")}`
+              );
             }
-            writeFileSync(stationsJsonPath, JSON.stringify(stations, null, 2), "utf-8");
           }
         } catch {}
       }

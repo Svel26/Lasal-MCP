@@ -136,6 +136,24 @@ function findFilesDeep(dir: string, ext: string): string[] {
   return results;
 }
 
+/** Read the current TCPIP connection from a .lss file (IP + port). */
+export function readLssConnection(
+  lssPath: string
+): { ip: string; port: string } | { error: string } {
+  if (!existsSync(lssPath)) return { error: `LSS file not found: ${lssPath}` };
+  try {
+    const content = readLatin1(lssPath);
+    const m = content.match(/<TCPIP\s[^>]*?IP="([^"]*)"[^>]*?PORT="([^"]*)"/);
+    if (m?.[1] && m?.[2]) return { ip: m[1]!, port: m[2]! };
+    const m2 = content.match(/<TCPIP\s[^>]*?IP="([^"]*)"/);
+    if (m2?.[1]) return { ip: m2[1]!, port: "1954" };
+    return { error: `No <TCPIP .../> element found in ${lssPath}` };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { error: `Failed to parse ${lssPath}: ${msg}` };
+  }
+}
+
 /** Surgically update the TCPIP IP (and optionally port/ssltls) in a .lss file, byte-preserving everything else. */
 export function updateLssConnection(
   lssPath: string,
@@ -144,7 +162,18 @@ export function updateLssConnection(
   let content = readLatin1(lssPath);
   const tcpipRe = /(<TCPIP\s[^>]*?>)/s;
   const m = tcpipRe.exec(content);
-  if (!m) throw new Error(`No <TCPIP .../> element found in ${lssPath}`);
+  if (!m) {
+    // No <TCPIP> element yet (e.g. a Local/simulation station) — insert one
+    // right after the <SlnStation ...> opening tag.
+    const stationRe = /(<SlnStation\s[^>]*>)/s;
+    const sm = stationRe.exec(content);
+    if (!sm) throw new Error(`No <SlnStation ...> element found in ${lssPath}`);
+    const tag =
+      `<OnlineConnectionInfo>\n\t\t<TCPIP ConfigName="MCP" BUS="3" Password="" IP="${updates.ip ?? "127.0.0.1"}" PORT="${updates.port ?? "1954"}" SomeFlags="0" PLCID="" Repeater="0" SSLTLS="${updates.ssltls ?? "0"}" Favorite="0"/>\n\t</OnlineConnectionInfo>`;
+    content = content.slice(0, sm.index! + sm[1]!.length) + "\n\t" + tag + content.slice(sm.index! + sm[1]!.length);
+    writeFileSync(lssPath, content, "latin1");
+    return;
+  }
 
   let tag = m[1]!;
   if (updates.ip !== undefined) tag = setAttr(tag, "IP", updates.ip);

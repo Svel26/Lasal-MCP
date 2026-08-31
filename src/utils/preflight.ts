@@ -23,19 +23,47 @@ export function findLssPath(lcpPath: string): string | null {
   return null;
 }
 
+export interface ConnectionInfo {
+  connection: string;
+  ip?: string;
+  port?: number;
+  source: "explicit" | "lss";
+  warning?: string;
+}
+
+/** True when the connection targets a local LARS (or other local) runtime. */
+export function isLoopbackTarget(conn: ConnectionInfo | { ip?: string }): boolean {
+  const ip = conn.ip;
+  if (!ip) return false;
+  return ip === "127.0.0.1" || ip === "localhost" || ip.startsWith("127.");
+}
+
+/** Extract the IP and optional port from a connection string like 'TCPIP:10.0.0.5:1964'. */
+export function parseConnectionTarget(conn: string): { ip?: string; port?: number } {
+  let target = conn;
+  const m = conn.match(/TCPIP:(.+)/i);
+  if (m) target = m[1]!;
+  if (target.includes(":")) {
+    const [ipPart, portPart] = target.split(":");
+    if (ipPart && portPart) {
+      const port = parseInt(portPart, 10);
+      if (!isNaN(port) && port > 0 && port <= 65535) {
+        return { ip: ipPart, port };
+      }
+    }
+    return { ip: target.split(":")[0] };
+  }
+  if (target.includes(".")) return { ip: target };
+  return { ip: target };
+}
+
 export function resolveConnection(
   lcpPath: string,
   explicit?: string
-): { connection: string; ip?: string; source: "explicit" | "lss"; warning?: string } {
+): ConnectionInfo {
   if (explicit) {
-    let ip: string | undefined;
-    const m = explicit.match(/TCPIP:(.+)/i);
-    if (m) {
-      ip = m[1]!.split(":")[0] ?? "";
-    } else if (explicit.includes(".")) {
-      ip = explicit;
-    }
-    return { connection: explicit, ip, source: "explicit" };
+    const { ip, port } = parseConnectionTarget(explicit);
+    return { connection: explicit, ip, port, source: "explicit" };
   }
 
   const lssPath = findLssPath(lcpPath);
@@ -54,9 +82,11 @@ export function resolveConnection(
     if (tcpip) {
       const ip = tcpip["@_IP"];
       const port = tcpip["@_PORT"] ?? "1954";
+      const portNum = parseInt(port, 10);
       return {
         connection: `TCPIP:${ip}${port && port !== "1954" ? `:${port}` : ""}`,
         ip,
+        port: !isNaN(portNum) ? portNum : undefined,
         source: "lss",
       };
     }
@@ -135,11 +165,12 @@ export async function preflightPlc(
     return { ok: false, problems, connection: connInfo.connection };
   }
 
-  const reachable = await pingHost(connInfo.ip, 1954, 2000);
+  const port = connInfo.port ?? 1954;
+  const reachable = await pingHost(connInfo.ip, port, 2000);
   if (!reachable) {
     problems.push({
       code: "HOST_UNREACHABLE",
-      message: `PLC host at ${connInfo.ip} is unreachable on port 1954.`,
+      message: `PLC host at ${connInfo.ip} is unreachable on port ${port}.`,
       fix: "Ensure the PLC is powered on and connected to the network. Verify the IP using lasal_status or set the correct IP."
     });
   }
@@ -177,12 +208,10 @@ export async function preflightHmi(
   }
 
   let ip: string | undefined;
-  const m = explicitConn.match(/TCPIP:(.+)/i);
-  if (m) {
-    ip = m[1]!.split(":")[0] ?? "";
-  } else if (explicitConn.includes(".")) {
-    ip = explicitConn;
-  }
+  let port = 1954;
+  const { ip: parsedIp, port: parsedPort } = parseConnectionTarget(explicitConn);
+  ip = parsedIp;
+  if (parsedPort) port = parsedPort;
 
   if (!ip) {
     problems.push({
@@ -193,11 +222,11 @@ export async function preflightHmi(
     return { ok: false, problems, connection: explicitConn };
   }
 
-  const reachable = await pingHost(ip, 1954, 2000);
+  const reachable = await pingHost(ip, port, 2000);
   if (!reachable) {
     problems.push({
       code: "HMI_UNREACHABLE",
-      message: `HMI host at ${ip} is unreachable on port 1954.`,
+      message: `HMI host at ${ip} is unreachable on port ${port}.`,
       fix: "Ensure the HMI is powered on and connected to the network. Verify the IP using lasal_status."
     });
   }

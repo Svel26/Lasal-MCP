@@ -4,6 +4,7 @@ MCP server wrapping three Sigmatek LASAL headless engines:
 - **Lasal2.exe** (CLASS 2 PLC IDE) — `/script:path.py` with Python 2.7 batch API
 - **VISUDesigner.exe** (HMI IDE) — `--script path.py` with Python scripting API
 - **LasalVISUDataService.exe** — local HMI web runtime (no scripting, spawned as child process)
+- **Lars.exe** (LARS runtime) — local PC soft-runtime; one program per instance, spawned as a detached window with a unique workspace (`lasalos2.xml`)
 
 ## Directory Layout
 
@@ -25,12 +26,13 @@ src/
     hmiBrowser.ts    — headless Edge automation
     inspectProject.ts — read-only project scanning
     inspectVisuProject.ts — read-only LVP scanning
+    larsRuntime.ts   — local LARS simulation (setup/start/stop/target/target_pc)
     plcControl.ts    — compile, download, start/stop/get_state, plc_values
     plcDiagnostics.ts — tracing, file transfer, code analysis
     readClassSource.ts — read/write .st files
     selectProject.ts — set active project directory
     setTargetIp.ts   — surgical .lss IP edit
-    status.ts        — system status (engines, processes, stations, HMI health)
+    status.ts        — system status (engines, processes, stations, HMI health, LARS)
     visuControl.ts   — VISUDesigner batch ops and download
     visuDashboard.ts — direct LVP JSON editing (dashboards, windows, styles)
     lasalApps.ts     — open/close CLASS 2 and VISUDesigner GUIs
@@ -41,6 +43,7 @@ src/
     engine.ts        — exe paths, process management, scratch dir, engine mutex
     config.ts        — Zod-validated environment config (timeouts, paths)
     lasalXml.ts      — .lcp/.st/.lcn XML parsing, ST editing, round-trip safe
+    lars.ts          — LARS workspace config (lasalos2.xml), spawn/kill, ports, station targeting, ARM→PC target switch
     preflight.ts     — connection resolution, ping, preflight checks
     projectScanner.ts — .lsm/.lss parsing, station discovery
     resolvePaths.ts  — .lcp/.lvp path resolution from state
@@ -49,6 +52,38 @@ src/
   test/              — Vitest tests
     fixtures/        — sample .lcp/.st/.lcn/.lsm/.lss files
 ```
+
+## LARS (local simulation) design
+
+LARS runs one LASAL program per instance. To simulate a whole solution
+(PLC + HMI + Local), the MCP creates one LARS **workspace per station** in
+`%APPDATA%\lasalos2.xml`, each with distinct ports:
+
+| Workspace | ONLINE | COMLINK_SRVR | COMLINK | ALARM |
+|---|---|---|---|---|
+| first | 1954 | 1955 | 1000 | 1957 |
+| second | 1964 | 1965 | 1010 | 1967 |
+| third | 1974 | 1975 | 1020 | 1977 |
+
+The workspace records the station's `.lcp` as `CLASS_PRJ_PATH` so LARS
+auto-loads the project. `set_station_target` surgically rewrites the station's
+`.lss` `<TCPIP>` to `127.0.0.1:<ONLINE>` (recording the original so `restore`
+can revert), which makes `build_project`/`control_plc`/`plc_values`/`deploy_all`
+operate on the LARS instance with no extra arguments.
+
+Key gotchas handled by the code:
+- **Spawn quoting** — Node `spawn` does not escape embedded quotes; args must
+  be passed without inner quotes (`/c<path>`, not `/c"<path>"`).
+- **PC loader** — LARS rejects downloads without the PC loader (`Linker_Error`).
+  Loopback targets automatically set `addLoaderAnyway=true`.
+- **ARM vs PC target** — machine PLCs compile for `Processor="ARM"` which LARS
+  rejects ("checksum error"). `lars_runtime target_pc` switches the `.lcp`
+  `<Target Processor="ARM">` to PC (restored via `restore`).
+- **Stale SRAM** — `C:\Lars\SRAM.DAT`/`SRAM.SAV` from a previous project cause
+  `SRAM_Error`; `lars_runtime stop` + deleting those files resets the runtime.
+- **HMI DataService** — published `stations.json` entries with real IPs are
+  remapped to running LARS instances (`127.0.0.1:<port>`) when `hmi_runtime`
+  starts, so the web HMI talks to the local simulation instead of the panel.
 
 ## Key Patterns
 
@@ -75,6 +110,8 @@ Tools that need a PLC/HMI connection first try the explicit `connection` paramet
 | `LASAL_VISUDESIGNER_EXE` | `C:\Program Files\...\VISUDesigner.exe` | VISUDesigner path |
 | `LASAL_DATASERVICE_EXE` | auto-discovered | DataService path |
 | `LASAL_EDGE_EXE` | auto-discovered | Edge browser path |
+| `LASAL_LARS_EXE` | `C:\Program Files (x86)\Sigmatek\Lars\Lars.exe` | LARS runtime path |
+| `LASAL_LARS_CONFIG` | `%APPDATA%\lasalos2.xml` | LARS workspace config path |
 | `LASAL_MCP_TIMEOUT_COMPILE` | 600000 | Compile timeout (ms) |
 | `LASAL_MCP_TIMEOUT_DOWNLOAD` | 600000 | Download timeout (ms) |
 | `LASAL_MCP_TIMEOUT_VISU` | 300000 | Visu operation timeout (ms) |

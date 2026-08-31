@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import { writeFileSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { VISUDESIGNER_EXE, SCRATCH, killVisuDesigner } from "./engine.js";
@@ -190,8 +190,6 @@ export function buildVisuScript(
   const lines: string[] = [];
   const expectedSteps: string[] = ["LoadProject"];
 
-  const pyStepsPath = stepsPath.replace(/\\/g, "\\\\");
-
   lines.push(
     "    f_step = open(r\"" + stepsPath + "\", \"a\", encoding=\"utf-8\")",
     "    f_step.write(\"STEP LoadProject OK\\n\")",
@@ -338,8 +336,6 @@ export function buildVisuScript(
     `    f_step.close()`,
     ""
   );
-
-  const indentedBody = lines.map(line => line ? `    ${line}` : "").join("\n");
 
   const finalScript = [
     "import sys",

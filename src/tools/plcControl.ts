@@ -7,7 +7,7 @@ import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { parseLcn } from "../utils/lasalXml.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { TIMEOUTS } from "../utils/config.js";
-import { preflightPlc, resolveConnection } from "../utils/preflight.js";
+import { preflightPlc, resolveConnection, isLoopbackTarget } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 import { batchResultToResponse } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
@@ -122,6 +122,9 @@ export async function buildProjectHandler(args: {
     const connectionInfo = resolveConnection(resolved.path, args.connection);
     const ipUsed = connectionInfo.ip ?? "";
     const connectionUsed = connectionInfo.connection;
+    // LARS (local runtime) instances need the PC loader sent along or the
+    // download ends in "Linker_Error" on the target.
+    const addLoaderAnyway = args.add_loader_anyway ?? isLoopbackTarget(connectionInfo);
 
     // Preflight PLC target
     const pf = await preflightPlc(resolved.path, args.connection);
@@ -140,7 +143,7 @@ export async function buildProjectHandler(args: {
 
     let br = await runBatchOps(
       resolved.path,
-      [{ type: "download", connection: connectionUsed, addLoaderAnyway: args.add_loader_anyway ?? false }],
+      [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
       timeoutMs
     );
 
@@ -149,7 +152,7 @@ export async function buildProjectHandler(args: {
       await new Promise(resolve => setTimeout(resolve, 1000));
       br = await runBatchOps(
         resolved.path,
-        [{ type: "download", connection: connectionUsed, addLoaderAnyway: args.add_loader_anyway ?? false }],
+        [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
         timeoutMs
       );
       br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];

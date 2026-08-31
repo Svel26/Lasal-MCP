@@ -12,6 +12,7 @@ The MCP only exposes tools for operations that **require an external engine or h
 
 - **Build & Deploy**: Compile CLASS 2 projects, download to PLC, full deploy pipelines.
 - **PLC Control**: Start/stop PLC runtime, read/write live channel values, query state.
+- **Local Simulation (LARS)**: Run one LASAL program per LARS instance — one workspace per station (PLC + HMI) so both run simultaneously on separate ports. Point stations at the local runtime with a single call, compile/download/start/read values exactly like a real PLC, and browse the HMI via DataService. No hardware needed.
 - **CLASS 2 Batch Engine**: Create/delete networks, add/remove objects, manage connections, configure tasks — operations that require the CLASS 2 scripting engine.
 - **VISUDesigner Engine**: Sync datapoints, manage text lists/schemes/media, publish, download to HMI.
 - **HMI Simulation**: Local web runtime via LasalVISUDataService with headless Edge browser automation for visual verification.
@@ -49,6 +50,8 @@ npm run build
 | `LASAL_MCP_TIMEOUT_DOWNLOAD` | `600000` | Download timeout (ms) |
 | `LASAL_MCP_TIMEOUT_VISU` | `300000` | Visu operation timeout (ms) |
 | `LASAL_MCP_TIMEOUT_SCRIPT` | `120000` | Script execution timeout (ms) |
+| `LASAL_LARS_EXE` | `C:\Program Files (x86)\Sigmatek\Lars\Lars.exe` | LARS runtime path |
+| `LASAL_LARS_CONFIG` | `%APPDATA%\lasalos2.xml` | LARS workspace config file |
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
 | `LASAL_MCP_SCRATCH_MAX_AGE_H` | `24` | Hours before temp files are cleaned |
 
@@ -101,6 +104,7 @@ Add to `.claude/settings.json` or run `claude mcp add`:
 | `build_project` | Compile or download to PLC. |
 | `control_plc` | Start, stop, or query PLC runtime state. |
 | `plc_values` | Read/write live channel values on a running PLC. |
+| `lars_runtime` | Local LARS simulation: list/setup workspaces per station, start/stop, point stations at LARS (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
 | `apply_project_changes` | CLASS 2 batch engine operations (networks, objects, connections, tasks). |
 | `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
 | `hmi_runtime` | Start/stop local HMI web simulation (DataService). |
@@ -134,3 +138,22 @@ npm run lint         # ESLint
 npm run format       # Prettier
 npm run inspector    # MCP Inspector for interactive debugging
 ```
+
+## Simulating without hardware (LARS)
+
+LARS (LASAL Runtime System) runs LASAL programs on a normal PC. Since each LARS
+instance runs one program, the MCP creates one workspace per station:
+
+1. `lars_runtime setup` — creates workspaces for every station in the selected solution (distinct ports per instance).
+2. `lars_runtime start <station>` — launches the LARS window for that station.
+3. `lars_runtime set_station_target <station>` — points the station's `.lss` at the LARS instance.
+4. Now `build_project`, `control_plc`, and `plc_values` work unchanged against the local runtime.
+5. `lars_runtime restore <station>` — reverts the `.lss` to the real hardware target.
+
+Notes:
+- Projects compiled for `Processor="ARM"` (most machine PLCs) need
+  `lars_runtime target_pc` first — LARS is an x86 runtime and rejects ARM images.
+- HMI panel / Local stations are already PC-targeted and work directly.
+- Downloads to LARS automatically include the PC loader (`addLoaderAnyway`).
+- `hmi_runtime` remaps published stations.json entries to running LARS instances,
+  so the web HMI talks to the local simulation.
