@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join, dirname } from "path";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { parseConnectionTarget } from "../src/utils/preflight.js";
 import {
@@ -10,6 +10,8 @@ import {
   removeLarsWorkspace,
   allocateLarsPorts,
   pointStationAtLars,
+  gcLarsWorkspaces,
+  type LarsInstanceInfo,
 } from "../src/utils/lars.js";
 import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
 
@@ -142,6 +144,198 @@ describe("LARS workspace config", () => {
   it("creates a backup before the first write", () => {
     upsertLarsWorkspace("Proj_PLC", {});
     expect(existsSync(`${configPath}.bak`)).toBe(true);
+  });
+});
+
+describe("gcLarsWorkspaces", () => {
+  let configPath: string;
+  let tempDir: string;
+  let lssPath: string;
+
+  const notRunning = () => false;
+  const emptyInstances: Record<string, LarsInstanceInfo> = {};
+
+  function makeInstance(over: Partial<LarsInstanceInfo> = {}): Record<string, LarsInstanceInfo> {
+
+    return {
+      Proj_PLC: {
+        name: "Proj_PLC",
+        onlinePort: 1964,
+        ...over,
+      },
+    };
+  }
+
+  function makeLss(ip: string, port: string = "1964"): string {
+
+
+    const sample = `<?xml version="1.0" encoding="ISO-8859-1" ?>
+<SlnStation Name="PLC" OnlineConnection="PLC50 (Project)" Color="12813661">
+\t<OnlineConnectionInfo>
+\t\t<TCPIP ConfigName="PLC50" BUS="3" Password="" IP="${ip}" PORT="${port}" SomeFlags="129" PLCID="" Repeater="0" SSLTLS="0" Favorite="0"/>
+\t</OnlineConnectionInfo>
+</SlnStation>
+`;
+
+    writeFileSync(lssPath, sample, "latin1");
+    return lssPath;
+
+  }
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-gc-"));
+    configPath = join(tempDir, "lasalos2.xml");
+    process.env.LASAL_LARS_CONFIG = configPath;
+    writeFileSync(configPath, `<?xml version="1.0" encoding="UTF-8"?>
+<LARSCONFIGURATIONS ConfigVersion="2">
+  <WORKSPACE Name="DEFAULT">
+    <MEMORY>
+      <DATALEN Unit="MiB">40</DATALEN>
+      <CODELEN Unit="MiB">8</CODELEN>
+    </MEMORY>
+    <PATH>
+      <ACTIVEDAT>C:\\</ACTIVEDAT>
+      <AUTOEXEC>C:\\Autoexec.lsl</AUTOEXEC>
+      <LSLWORK>C:\\LSLWORK</LSLWORK>
+      <SRAMDAT>C:\\</SRAMDAT>
+    </PATH>
+    <COMTCP>
+      <ONLINE>1954</ONLINE>
+      <COMLINK_SRVR>1955</COMLINK_SRVR>
+      <COMLINK>1000</COMLINK>
+      <ALARM>1957</ALARM>
+    </COMTCP>
+    <RESOLUTION />
+    <DRIVEMAP>
+      <DRIVEMAP_ELEMENT>
+        <DRIVE>C:</DRIVE>
+        <PATH>C:\\Lars</PATH>
+      </DRIVEMAP_ELEMENT>
+    </DRIVEMAP>
+    <IP_MAP>
+    </IP_MAP>
+  </WORKSPACE>
+</LARSCONFIGURATIONS>
+`, "utf-8");
+    lssPath = join(tempDir, "PLC.lss");
+  });
+
+  afterEach(() => {
+    delete process.env.LASAL_LARS_CONFIG;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("never collects manually configured workspaces", () => {
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: notRunning,
+      instances: emptyInstances,
+      larsGc: {},
+    });
+    expect(result.removed).toHaveLength(0);
+    expect(result.kept.map((k) => k.name)).toContain("DEFAULT");
+    expect(readLarsWorkspaces()).toHaveLength(1);
+  });
+
+
+  it("removes an auto-created workspace that is unreferenced", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    makeLss("10.195.0.50");
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: notRunning,
+      instances: makeInstance({ stationLssPath: lssPath }),
+      larsGc: {},
+    });
+    expect(result.removed.map((r) => r.name)).toEqual(["Proj_PLC"]);
+    expect(readLarsWorkspaces().map((w) => w.name)).toEqual(["DEFAULT"]);
+  });
+
+
+  it("keeps a workspace whose station .lss still points at it", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    makeLss("127.0.0.1");
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: notRunning,
+      instances: makeInstance({ stationLssPath: lssPath }),
+      larsGc: {},
+    });
+    expect(result.removed).toHaveLength(0);
+    expect(result.kept.map((k) => k.name)).toContain("Proj_PLC");
+    expect(readLarsWorkspaces()).toHaveLength(2);
+  });
+
+
+  it("keeps a workspace referenced by a published DataService stations.json", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    const dataDir = join(tempDir, "dataservice");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "stations.json"), JSON.stringify({ stations: [{ name: "PLC", connection: "127.0.0.1:1964" }] }), "utf-8");
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: notRunning,
+      dataDirs: [dataDir],
+      instances: makeInstance({ stationName: "PLC" }),
+      larsGc: {},
+    });
+    expect(result.removed).toHaveLength(0);
+    expect(result.kept.map((k) => k.name)).toContain("Proj_PLC");
+  });
+
+
+  it("keeps running workspaces even when unreferenced", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    makeLss("10.195.0.50");
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: (name) => name === "Proj_PLC",
+      instances: makeInstance({ stationLssPath: lssPath }),
+      larsGc: {},
+    });
+    expect(result.removed).toHaveLength(0);
+    expect(readLarsWorkspaces()).toHaveLength(2);
+  });
+
+
+  it("defers removal until the min age is reached, tracking candidates", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    makeLss("10.195.0.50");
+    const now = Date.now();
+    const young = gcLarsWorkspaces({
+      minAgeH: 24,
+      isRunning: notRunning,
+      instances: makeInstance({ stationLssPath: lssPath }),
+      larsGc: {},
+    });
+    expect(young.removed).toHaveLength(0);
+    expect(young.candidates.map((c) => c.name)).toEqual(["Proj_PLC"]);
+    expect(readLarsWorkspaces()).toHaveLength(2);
+
+    const aged = gcLarsWorkspaces({
+      minAgeH: 24,
+      isRunning: notRunning,
+      instances: makeInstance({ stationLssPath: lssPath }),
+      larsGc: { Proj_PLC: { since: now - 25 * 3_600_000 } },
+    });
+    expect(aged.candidates).toHaveLength(0);
+    expect(aged.removed.map((r) => r.name)).toEqual(["Proj_PLC"]);
+    expect(readLarsWorkspaces().map((w) => w.name)).toEqual(["DEFAULT"]);
+  });
+
+
+  it("dry run reports removals without deleting", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    makeLss("10.195.0.50");
+    const result = gcLarsWorkspaces({
+      dryRun: true,
+      minAgeH: 0,
+      isRunning: notRunning,
+      instances: makeInstance({ stationLssPath: lssPath }),
+      larsGc: {},
+    });
+    expect(result.removed.map((r) => r.name)).toEqual(["Proj_PLC"]);
+    expect(readLarsWorkspaces()).toHaveLength(2);
   });
 });
 

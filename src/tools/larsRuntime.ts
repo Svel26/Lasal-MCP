@@ -13,19 +13,22 @@ import {
   isLarsHealthy,
   pointStationAtLars,
   safeWorkspaceName,
+  gcLarsWorkspaces,
   type LarsWorkspace,
 } from "../utils/lars.js";
-import { readState, writeState, getLarsInstance, setLarsInstance, removeLarsInstance, type LarsInstanceInfo } from "../state.js";
-import { findLsmPath, parseSolution, readLssConnection } from "../utils/projectScanner.js";
+import { readState, writeState, getLarsInstance, setLarsInstance, removeLarsInstance, type LarsInstanceInfo, type LasalState } from "../state.js";
+import { HMI_DIR, LARS_GC_MIN_AGE_H, LARS_GC_STATIONS_DIRS } from "../utils/config.js";
+import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
 import { respond, fail } from "../utils/respond.js";
 
 export const larsRuntimeSchema = {
   action: z
-    .enum(["list", "setup", "start", "stop", "remove", "set_station_target", "restore", "target_pc"])
+    .enum(["list", "setup", "start", "stop", "remove", "set_station_target", "restore", "target_pc", "gc"])
     .describe(
-      "'list' shows all configured LARS workspaces and their state. " +
-        "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp). " +
-        "'start' launches a LARS instance, 'stop' terminates it, 'remove' deletes its workspace config. " +
+      "'list' shows all configured LARS workspaces and their state (auto-cleans stale ones). " +
+        "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp. " +
+        "'start' launches a LARS instance (auto-creates the workspace first if the station is known but unconfigured), 'stop' terminates it, 'remove' deletes its workspace config. " +
+        "'gc' runs lazy garbage collection: deletes auto-created workspaces that are not running and no longer referenced by any station .lss or published DataService stations.json. " +
         "'set_station_target' points a station's .lss at its LARS instance (127.0.0.1:<port>); 'restore' reverts to the saved real target. " +
         "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore')."
     ),
@@ -44,10 +47,20 @@ export const larsRuntimeSchema = {
   project_dir: z
     .string()
     .optional()
-    .describe("Solution directory to auto-detect stations from (setup/list only). Defaults to the selected project."),
+    .describe("Solution directory to auto-detect stations from (setup/list only. Defaults to the selected project."),
+  dry_run: z
+    .boolean()
+    .optional()
+    .describe("With action 'gc': report what would be removed without deleting anything. Default false."),
+  min_age_h: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("With action 'gc': only delete workspaces unreferenced for at least this many hours (overrides LASAL_MCP_LARS_GC_MIN_AGE_H; 0 = immediately."),
 };
 
-type LarsAction = "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc";
+type LarsAction = "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc" | "gc";
 
 function detectRole(lcpPath: string): "plc" | "hmi" | "unknown" {
   try {
@@ -149,17 +162,103 @@ function requireWorkspace(args: { name?: string; station?: string }): { workspac
   return { error: "Provide either 'name' (workspace name) or 'station' (station name)." };
 }
 
+function runAutoGc(state: LasalState, dryRun: boolean = false) {
+  const result = gcLarsWorkspaces({
+    dryRun,
+    minAgeH: LARS_GC_MIN_AGE_H,
+    dataDirs: [HMI_DIR, ...LARS_GC_STATIONS_DIRS],
+    larsGc: state.larsGc,
+    instances: state.larsInstances,
+  });
+  if (!dryRun) {
+    state.larsGc = result.larsGc;
+    writeState(state);
+  }
+  return result;
+}
+
+/**
+ * 'start' auto-creates the workspace whenthe the station is known but not yet configured:
+ * eitherthe instance bookkeeping (state) still knows its .lcp, or the station can be
+ * detected from the solution. Ports stay stable as long as the workspace exists; a recreated
+ * workspace may get a new port block, which is fine since nothing points at it yet.
+ */
+function ensureWorkspaceForStart(
+  args: { name?: string; station?: string; project_dir?: string },
+  state: LasalState
+): { workspace?: LarsWorkspace; instance?: LarsInstanceInfo; autoCreated?: boolean; error?: string } {
+  const workspaces = readLarsWorkspaces();
+
+  if (args.name) {
+    const existing = workspaces.find((w) => w.name === args.name);
+    if (existing) return { workspace: existing, instance: state.larsInstances?.[args.name] };
+    const inst = state.larsInstances?.[args.name];
+    if (inst) {
+      const { workspace } = upsertLarsWorkspace(args.name, {
+        ...(inst.lcpPath ? { classProjectPath: inst.lcpPath } : {}),
+      });
+      return { workspace, instance: inst, autoCreated: true };
+    }
+    return { error: `No LARS workspace named '${args.name}' found and no instance bookkeeping exists — run lars_runtime setup first.` };
+  }
+
+  if (args.station) {
+    const inst = Object.values(state.larsInstances ?? {}).find((i) => i.stationName === args.station);
+    if (inst) {
+      const existing = workspaces.find((w) => w.name === inst.name);
+      if (existing) return { workspace: existing, instance: inst };
+      const { workspace } = upsertLarsWorkspace(inst.name, {
+        ...(inst.lcpPath ? { classProjectPath: inst.lcpPath } : {}),
+      });
+      return { workspace, instance: inst, autoCreated: true };
+    }
+
+    // No bookkeeping — try to detectthe station from the solution and set it up now
+    const projectDir = args.project_dir ?? state.currentProject;
+
+    if (projectDir) {
+      const projectName = projectDir.split(/[\\/]/).filter(Boolean).pop() ?? "project";
+      const stations = detectStations(projectDir);
+      const station = stations.find((s) => s.stationName === args.station);
+      if (station) {
+        const name = safeWorkspaceName(projectName, station.stationName);
+        const { workspace } = upsertLarsWorkspace(name, { classProjectPath: station.lcpPath });
+        const info: LarsInstanceInfo = {
+          name: workspace.name,
+          onlinePort: workspace.onlinePort,
+          stationName: station.stationName,
+          stationLssPath: station.lssPath,
+          lcpPath: station.lcpPath,
+          projectDir,
+          role: station.role,
+        };
+        setLarsInstance(state, info);
+        writeState(state);
+        return { workspace, instance: info, autoCreated: true };
+      }
+    }
+    return { error: `No LARS instance for station '${args.station}' found and none detectable in the solution — run lars_runtime setup first.` };
+  }
+
+  return { error: "Provide either 'name' (workspace name) or 'station' (station name." };
+}
+
 export async function larsRuntimeHandler(args: {
   action: LarsAction;
   name?: string;
   station?: string;
   lcp_path?: string;
   project_dir?: string;
+  dry_run?: boolean;
+  min_age_h?: number;
 }) {
   const state = readState();
   const action = args.action;
 
   if (action === "list") {
+    // Lazy cleanup first: stale auto-created workspaces (not running, nothing points at them) are dropped automatically.
+
+    const gcResult = runAutoGc(state);
     const projectDir = args.project_dir ?? state.currentProject;
     const workspaces = readLarsWorkspaces();
     const projectName = projectDir ? (projectDir.split(/[\\/]/).filter(Boolean).pop() ?? "project") : null;
@@ -180,16 +279,25 @@ export async function larsRuntimeHandler(args: {
       exists: existsSync(LARS_EXE),
       configPath: larsConfigPath(),
       workspaces: workspaces.map((w) => workspaceSummary(w, state.larsInstances)),
+      gc: {
+        checked: gcResult.kept.length + gcResult.removed.length + gcResult.candidates.length,
+        removed: gcResult.removed,
+        candidates: gcResult.candidates,
+      },
       ...(unconfigured.length ? { unconfiguredStations: unconfigured } : {}),
-      hint: "Call lars_runtime setup to create workspaces for all stations, then start + set_station_target per station.",
+      hint: "Call lars_runtime setup to create workspaces for all stations, then start + set_station_target per station. Unreferenced auto-created workspaces are cleaned up automatically.",
     });
   }
-
-  if (action === "setup") {
+if (action === "setup") {
     const projectDir = args.project_dir ?? state.currentProject;
+
     if (!projectDir) {
       return fail("No project selected.", ["Call select_project first or pass project_dir."]);
     }
+
+    // Drop stale auto-created workspaces first, so port allocation sees the current set.
+
+    runAutoGc(state);
 
     const projectName = projectDir.split(/[\\/]/).filter(Boolean).pop() ?? "project";
     const stations = detectStations(projectDir);
@@ -261,10 +369,42 @@ export async function larsRuntimeHandler(args: {
     });
   }
 
+if (action === "gc") {
+    const dryRun = args.dry_run ?? false;
+    const gcResult = gcLarsWorkspaces({
+      dryRun,
+      minAgeH: args.min_age_h ?? LARS_GC_MIN_AGE_H,
+      dataDirs: [HMI_DIR, ...LARS_GC_STATIONS_DIRS],
+      larsGc: state.larsGc,
+      instances: state.larsInstances,
+    });
+    if (!dryRun) {
+      state.larsGc = gcResult.larsGc;
+      writeState(state);
+    }
+    return respond({
+      ok: true,
+      dryRun,
+      gc: {
+        checked: gcResult.kept.length + gcResult.removed.length + gcResult.candidates.length,
+        removed: gcResult.removed,
+        kept: gcResult.kept,
+        candidates: gcResult.candidates,
+      },
+      hint: dryRun
+        ? "Dry run — nothing deleted. Remove dry_run:false to actually clean up."
+        : "Unreferenced auto-created workspaces were removed. 'start' will auto-recreate one on demand if a station needs it again.",
+    });
+  }
+
   if (action === "start" || action === "stop" || action === "remove" || action === "set_station_target" || action === "restore" || action === "target_pc") {
-    const req = requireWorkspace(args);
+    // 'start' auto-creates the workspace when the station is known but unconfigured;
+    // all other actions require an existing configured workspace.
+
+    const req = action === "start" ? ensureWorkspaceForStart(args, state) : requireWorkspace(args);
     if (req.error) return fail(req.error, []);
     const workspace = req.workspace!;
+    const autoCreated = (req as { autoCreated?: boolean }).autoCreated ?? false;
 
     if (action === "stop") {
       killLars(workspace.name);
@@ -303,20 +443,24 @@ export async function larsRuntimeHandler(args: {
       const inst = req.instance ?? getLarsInstance(state, workspace.name);
       if (inst) {
         inst.pid = result.pid ?? inst.pid;
+        inst.onlinePort = workspace.onlinePort;
         setLarsInstance(state, inst);
         writeState(state);
       }
 
-      return respond({
+return respond({
         ok: true,
         name: workspace.name,
         onlinePort: workspace.onlinePort,
         running: true,
         healthy,
         pid: result.pid,
-        hint: healthy
-          ? "LARS is up. Next: lars_runtime set_station_target <workspace> so build_project/control_plc/plc_values target it."
-          : "LARS launched but the online port is not answering yet — check the LARS window or lasal_status.",
+        ...(autoCreated ? { autoCreated: true } : {}),
+        hint: autoCreated
+          ? "Workspace was auto-created on demand (station known but unconfigured), then LARS started. Next: set_station_target to point the station's .lss at it."
+          : healthy
+            ? "LARS is up. Next: lars_runtime set_station_target <workspace> so build_project/control_plc/plc_values target it."
+            : "LARS launched but the online port is not answering yet — check the LARS window or lasal_status.",
       });
     }
 

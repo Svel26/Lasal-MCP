@@ -30,6 +30,7 @@ export interface LasalState {
   hmiRuntime?: HmiRuntimeInfo;
   hmiRuntimes?: Record<string, HmiRuntimeInfo>;
   larsInstances?: Record<string, LarsInstanceInfo>;
+  larsGc?: Record<string, { since: number }>;
 }
 
 const DEFAULT_STATE: LasalState = {

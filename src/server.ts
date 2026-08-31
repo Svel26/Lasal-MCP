@@ -100,8 +100,9 @@ server.tool(
   "lars_runtime",
   "Manage local LARS (LASAL Runtime System) simulation instances. LARS runs one program per instance — " +
     "use one workspace per station (PLC + HMI) so both run simultaneously on separate ports. " +
-    "Actions: list, setup (create workspaces for all stations), start, stop, remove, " +
-    "set_station_target (point a station's .lss at its LARS instance), restore (revert .lss to the real target). " +
+    "Actions: list (auto-cleans stale workspaces), setup (create workspaces for all stations), start (auto-creates the workspace " +
+    "if the station is known but unconfigured), stop, remove, gc (lazy cleanup of unreferenced workspaces), " +
+    "set_station_target (point a station's .lss at its LARS instance), restore (revert .lss to the real target. " +
     "After set_station_target, build_project/control_plc/plc_values/deploy_all operate on the LARS instance automatically.",
   larsRuntimeSchema,
   larsRuntimeHandler

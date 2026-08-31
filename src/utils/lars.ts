@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
 import { spawn, execSync } from "child_process";
 import { join, basename } from "path";
 import { homedir } from "os";
@@ -239,6 +239,134 @@ export function removeLarsWorkspace(name: string): LarsWorkspace[] {
   const workspaces = readLarsWorkspaces().filter((w) => w.name !== name);
   writeLarsWorkspaces(workspaces);
   return workspaces;
+}
+
+// ─── Garbage collection ────────────────────────────────────────────────────────
+// Lazy cleanup for auto-created workspaces: a workspace is only GC-eligible
+// when it was created by us (tracked in larsInstances state), is not running, and
+// nothing points at it anymore — neither the station .lss nor any published DataService
+// stations.json. Manually configured workspaces (e.g. DEFAULT from the config tool)
+// are never touched.
+
+export interface LarsGcEntry {
+  since: number;
+}
+
+export interface LarsGcResult {
+  removed: Array<{ name: string; onlinePort: number; reason: string }>;
+  kept: Array<{ name: string; onlinePort: number; reason: string }>;
+  candidates: Array<{ name: string; unreferencedForH: number }>;
+  larsGc: Record<string, LarsGcEntry>;
+}
+
+export interface LarsGcOptions {
+  dryRun?: boolean;
+  minAgeH?: number;
+  isRunning?: (name: string) => boolean;
+  dataDirs?: string[];
+  larsGc?: Record<string, LarsGcEntry>;
+  instances?: Record<string, LarsInstanceInfo>;
+}
+
+function stationTargetsLars(value: string | undefined, onlinePort: number): boolean {
+  if (!value) return false;
+  const stripped = value.replace(/^TCPIP:/i, "");
+  return stripped === `127.0.0.1:${onlinePort}` || stripped.startsWith(`127.0.0.1:${onlinePort}:`);
+}
+
+function findStationsJsonFiles(dirs: string[]): string[] {
+  const out: string[] = [];
+  for (const dir of dirs) {
+    if (!dir || !existsSync(dir)) continue;
+    const walk = (d: string, depth: number): void => {
+      let entries: Array<import("fs").Dirent>;
+      try { entries = readdirSync(d, { withFileTypes: true }) as unknown as Array<import("fs").Dirent>; } catch { return; }
+      for (const e of entries) {
+        const p = join(d, e.name);
+        if (e.isDirectory() && depth > 0) walk(p, depth - 1);
+        else if (e.isFile() && e.name === "stations.json") out.push(p);
+      }
+    };
+    walk(dir, 3);
+  }
+  return out;
+}
+
+function stationsJsonPointsAt(file: string, stationName: string, onlinePort: number): boolean {
+  try {
+    const doc: { stations?: unknown[] } = JSON.parse(readFileSync(file, "utf-8"));
+    if (!Array.isArray(doc?.stations)) return false;
+    for (const st of doc.stations) {
+      if (!st || typeof st !== "object") continue;
+      const stRec = st as Record<string, unknown>;
+      if (stRec.name !== stationName) continue;
+      const v = typeof stRec.connection === "string" ? stRec.connection : typeof stRec.conType === "string" ? stRec.conType : undefined;
+      if (stationTargetsLars(v, onlinePort)) return true;
+    }
+  } catch {}
+  return false;
+}
+
+export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
+
+  const workspaces = readLarsWorkspaces();
+  const instances = opts.instances ?? {};
+  const isRunning = opts.isRunning ?? ((name: string) => getLarsPids(name).length > 0);
+  const minAgeH = opts.minAgeH ?? 0;
+  const now = Date.now();
+  const larsGc = { ...(opts.larsGc ?? {}) };
+  const removed: LarsGcResult["removed"] = [];
+  const kept: LarsGcResult["kept"] = [];
+  const candidates: LarsGcResult["candidates"] = [];
+  const stationsJsonFiles = findStationsJsonFiles(opts.dataDirs ?? []);
+
+  for (const ws of workspaces) {
+
+
+
+    const inst = instances[ws.name];
+    let reason: string;
+    if (!inst) {
+      reason = "manual (no instance bookkeeping) — kept";
+    } else if (isRunning(ws.name)) {
+
+      reason = "running";
+    } else {
+      const lssPoints = inst.stationLssPath
+        ? (() => {
+          const conn = readLssConnection(inst.stationLssPath);
+          return !("error" in conn) && conn.ip === "127.0.0.1" && conn.port === String(ws.onlinePort);
+        })()
+        : false;
+      const dsPoints = inst.stationName
+        ? stationsJsonFiles.some((f) => stationsJsonPointsAt(f, inst.stationName!, ws.onlinePort))
+        : false;
+      reason = lssPoints || dsPoints ? "referenced (station .lss or DataService stations.json points at it)" : "unreferenced";
+    }
+
+    if (reason !== "unreferenced") {
+
+      delete larsGc[ws.name];
+      kept.push({ name: ws.name, onlinePort: ws.onlinePort, reason });
+    } else {
+      const since = larsGc[ws.name]?.since ?? now;
+      const ageH = (now - since) / 3_600_000;
+      if (ageH >= minAgeH) {
+
+        if (!opts.dryRun) {
+
+          removeLarsWorkspace(ws.name);
+          delete larsGc[ws.name];
+        }
+        removed.push({ name: ws.name, onlinePort: ws.onlinePort, reason: `unreferenced for ${ageH.toFixed(1)}h` });
+      } else {
+        if (!opts.dryRun) larsGc[ws.name] = { since };
+        candidates.push({ name: ws.name, unreferencedForH: Number(ageH.toFixed(2)) });
+        kept.push({ name: ws.name, onlinePort: ws.onlinePort, reason: "unreferenced — below min age" });
+      }
+    }
+  }
+  return { removed, kept, candidates, larsGc };
 }
 
 // ─── Process management ───────────────────────────────────────────────────────
