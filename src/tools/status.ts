@@ -105,7 +105,7 @@ export async function lasalStatusHandler() {
   const larsWorkspaces = readLarsWorkspaces();
   const larsInstances = state.larsInstances ?? {};
   const lars = {
-    configured: larsWorkspaces.map((w) => {
+    configured: await Promise.all(larsWorkspaces.map(async (w) => {
       const inst = larsInstances[w.name];
       const pids = getLarsPids(w.name);
       const running = pids.length > 0;
@@ -114,12 +114,12 @@ export async function lasalStatusHandler() {
         onlinePort: w.onlinePort,
         running,
         pid: pids[0] ?? inst?.pid ?? null,
-        healthy: running ? isLarsHealthy(w.onlinePort) : false,
+        healthy: running ? await isLarsHealthy(w.onlinePort) : false,
         stationName: inst?.stationName ?? null,
         lcpPath: inst?.lcpPath ?? null,
         targetedAtLars: inst?.originalIp ? true : false,
       };
-    }),
+    })),
   };
 
   const hints: string[] = [];

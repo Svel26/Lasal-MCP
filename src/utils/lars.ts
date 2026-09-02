@@ -292,14 +292,28 @@ function findStationsJsonFiles(dirs: string[]): string[] {
   return out;
 }
 
-function stationsJsonPointsAt(file: string, stationName: string, onlinePort: number): boolean {
+function stationsJsonPointsAt(
+  file: string,
+  stationName: string | undefined,
+  stationId: number | undefined,
+  onlinePort: number
+): boolean {
   try {
     const doc: { stations?: unknown[] } = JSON.parse(readFileSync(file, "utf-8"));
     if (!Array.isArray(doc?.stations)) return false;
     for (const st of doc.stations) {
       if (!st || typeof st !== "object") continue;
       const stRec = st as Record<string, unknown>;
-      if (stRec.name !== stationName) continue;
+      const nameOk = stationName !== undefined && stRec.name === stationName;
+      const num = typeof stRec.station === "number" ? stRec.station : typeof stRec.station === "string" ? parseInt(stRec.station, 10) : NaN;
+      const idOk = stationId !== undefined && stRec.station !== undefined && !isNaN(num) && num === stationId;
+      if (!nameOk && !idOk) continue;
+
+      // Published layout: { ip: "127.0.0.1", port: <onlinePort> }
+      const ip = typeof stRec.ip === "string" ? stRec.ip : undefined;
+      if (ip === "127.0.0.1" && String(stRec.port) === String(onlinePort)) return true;
+
+      // Design-time layout: connection/conType = "127.0.0.1:<onlinePort>"
       const v = typeof stRec.connection === "string" ? stRec.connection : typeof stRec.conType === "string" ? stRec.conType : undefined;
       if (stationTargetsLars(v, onlinePort)) return true;
     }
@@ -338,8 +352,8 @@ export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
           return !("error" in conn) && conn.ip === "127.0.0.1" && conn.port === String(ws.onlinePort);
         })()
         : false;
-      const dsPoints = inst.stationName
-        ? stationsJsonFiles.some((f) => stationsJsonPointsAt(f, inst.stationName!, ws.onlinePort))
+      const dsPoints = (inst.stationName !== undefined || inst.stationId !== undefined)
+        ? stationsJsonFiles.some((f) => stationsJsonPointsAt(f, inst.stationName, inst.stationId, ws.onlinePort))
         : false;
       reason = lssPoints || dsPoints ? "referenced (station .lss or DataService stations.json points at it)" : "unreferenced";
     }
@@ -418,9 +432,12 @@ export async function startLars(workspace: LarsWorkspace): Promise<LarsStartResu
   // NOTE: no embedded quotes in the args — Node's spawn does not escape inner
   // quotes and would mangle `/c"C:\...xml"`; pass the raw path and let libuv quote.
   const args = [`/c${config}`, `/n${workspace.name}`, "/sWIN"];
+  // LARS locates its runtime files (autoexec.lsl, lsldata, ...) relative to the
+  // install directory — NOT the workspace's data dir. Use the exe's dir as cwd.
+  const installDir = LARS_EXE.substring(0, LARS_EXE.lastIndexOf("\\"));
   try {
     const child = spawn(LARS_EXE, args, {
-      cwd: workspace.activeData || undefined,
+      cwd: installDir,
       detached: true,
       stdio: "ignore",
       windowsHide: false,
@@ -473,6 +490,8 @@ export function projectDisplayName(projectDir: string): string {
 interface DataServiceStation {
   name?: unknown;
   station?: unknown;
+  ip?: unknown;
+  port?: unknown;
   connection?: unknown;
   conType?: unknown;
   [key: string]: unknown;
@@ -487,38 +506,58 @@ export interface LarsStationMapping {
 /**
  * Rewrite a published DataService stations.json so hardware-targeted stations
  * point at a running local LARS instance (127.0.0.1:<onlinePort>).
+ *
+ * Two layouts are handled:
+ *  - design-time layout: `{ name, connection: "TCPIP:10.0.0.5:1964" }` (or `conType`)
+ *  - published runtime layout: `{ station: 10, ip: "10.195.0.10", conType: "TCP" }`
+ *    (the DataService stores the target IP in `ip`; the port is carried separately)
+ *
  * "INTERN"/"LOCAL" connections and stations without a matching LARS instance
- * are left untouched. Entries may use either the design-time `connection` field
- * or the runtime `conType` field.
+ * are left untouched.
  */
 export function mapStationsToLars(
   stations: Array<DataServiceStation>,
-  larsInstances: Record<string, LarsInstanceInfo>
+  larsInstances: Record<string, LarsInstanceInfo>,
+  isRunning: (name: string) => boolean = (name) => getLarsPids(name).length > 0
 ): LarsStationMapping[] {
   const runningByName = new Map<string, LarsInstanceInfo>();
+  const runningById = new Map<number, LarsInstanceInfo>();
   for (const inst of Object.values(larsInstances)) {
-    if (inst.stationName && getLarsPids(inst.name).length > 0) {
-      runningByName.set(inst.stationName, inst);
-    }
+    if (!isRunning(inst.name)) continue;
+    if (inst.stationName) runningByName.set(inst.stationName, inst);
+    if (inst.stationId !== undefined) runningById.set(inst.stationId, inst);
   }
-  if (runningByName.size === 0) return [];
+  if (runningByName.size === 0 && runningById.size === 0) return [];
 
   const changed: LarsStationMapping[] = [];
   for (const st of stations) {
     const name = typeof st.name === "string" ? st.name : undefined;
-    if (!name) continue;
-    const inst = runningByName.get(name);
+    const num = typeof st.station === "number" ? st.station : typeof st.station === "string" ? parseInt(st.station, 10) : NaN;
+    const inst = (name && runningByName.get(name)) ?? (!isNaN(num) && runningById.get(num));
     if (!inst) continue;
 
+    const to = `127.0.0.1:${inst.onlinePort}`;
+
+    // Published runtime layout: { station, ip, conType }
+    const ip = typeof st.ip === "string" ? st.ip : undefined;
+    if (ip !== undefined) {
+      const isHardwareIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !ip.startsWith("127.");
+      if (!isHardwareIp) continue;
+      st.ip = "127.0.0.1";
+      st.port = inst.onlinePort;
+      changed.push({ station: name ?? String(num), from: ip, to });
+      continue;
+    }
+
+    // Design-time layout: { name, connection | conType }
     const field = typeof st.connection === "string" ? "connection" : typeof st.conType === "string" ? "conType" : undefined;
     if (!field) continue;
     const value = String(st[field]);
     const isHardwareTarget = /^TCPIP:/i.test(value) || /^\d{1,3}(\.\d{1,3}){3}/.test(value);
     if (!isHardwareTarget) continue;
 
-    const to = `127.0.0.1:${inst.onlinePort}`;
     st[field] = to;
-    changed.push({ station: name, from: value, to });
+    changed.push({ station: name ?? String(num), from: value, to });
   }
   return changed;
 }

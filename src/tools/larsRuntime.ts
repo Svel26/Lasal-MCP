@@ -18,7 +18,7 @@ import {
 } from "../utils/lars.js";
 import { readState, writeState, getLarsInstance, setLarsInstance, removeLarsInstance, type LarsInstanceInfo, type LasalState } from "../state.js";
 import { HMI_DIR, LARS_GC_MIN_AGE_H, LARS_GC_STATIONS_DIRS } from "../utils/config.js";
-import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
+import { findLsmPath, parseSolution, readVisuStationIds } from "../utils/projectScanner.js";
 import { respond, fail } from "../utils/respond.js";
 
 export const larsRuntimeSchema = {
@@ -88,7 +88,19 @@ interface DetectedStation {
   stationName: string;
   lssPath: string;
   lcpPath: string;
+  lvpPath?: string;
   role: "plc" | "hmi" | "unknown";
+}
+
+/** Read the VISU stationId map (station name -> id) for a project's first HMI station. */
+function resolveVisuStationIds(projectDir: string): Record<string, number> {
+  for (const stn of detectStations(projectDir)) {
+    if (stn.role === "hmi" && stn.lvpPath) {
+      const ids = readVisuStationIds(stn.lvpPath);
+      if (Object.keys(ids).length > 0) return ids;
+    }
+  }
+  return {};
 }
 
 function detectStations(projectDir: string): DetectedStation[] {
@@ -104,6 +116,7 @@ function detectStations(projectDir: string): DetectedStation[] {
         stationName: stn.name,
         lssPath: stn.lssPath,
         lcpPath: lcp,
+        lvpPath: stn.lvpPaths[0],
         role: detectStationRole(stn),
       });
     }
@@ -113,7 +126,7 @@ function detectStations(projectDir: string): DetectedStation[] {
   }
 }
 
-function workspaceSummary(
+async function workspaceSummary(
   ws: LarsWorkspace,
   instances: Record<string, LarsInstanceInfo> | undefined
 ) {
@@ -130,7 +143,7 @@ function workspaceSummary(
     screenProjectPath: ws.screenProjectPath ?? null,
     running,
     pid: pids[0] ?? inst?.pid ?? null,
-    healthy: running ? isLarsHealthy(ws.onlinePort) : false,
+    healthy: running ? await isLarsHealthy(ws.onlinePort) : false,
     stationName: inst?.stationName ?? null,
     lcpPath: inst?.lcpPath ?? null,
     lssPath: inst?.stationLssPath ?? null,
@@ -219,6 +232,7 @@ function ensureWorkspaceForStart(
     if (projectDir) {
       const projectName = projectDir.split(/[\\/]/).filter(Boolean).pop() ?? "project";
       const stations = detectStations(projectDir);
+      const visuStationIds = resolveVisuStationIds(projectDir);
       const station = stations.find((s) => s.stationName === args.station);
       if (station) {
         const name = safeWorkspaceName(projectName, station.stationName);
@@ -227,6 +241,7 @@ function ensureWorkspaceForStart(
           name: workspace.name,
           onlinePort: workspace.onlinePort,
           stationName: station.stationName,
+          stationId: visuStationIds?.[station.stationName],
           stationLssPath: station.lssPath,
           lcpPath: station.lcpPath,
           projectDir,
@@ -278,7 +293,7 @@ export async function larsRuntimeHandler(args: {
       larsExe: LARS_EXE,
       exists: existsSync(LARS_EXE),
       configPath: larsConfigPath(),
-      workspaces: workspaces.map((w) => workspaceSummary(w, state.larsInstances)),
+      workspaces: await Promise.all(workspaces.map((w) => workspaceSummary(w, state.larsInstances))),
       gc: {
         checked: gcResult.kept.length + gcResult.removed.length + gcResult.candidates.length,
         removed: gcResult.removed,
@@ -302,6 +317,11 @@ if (action === "setup") {
     const projectName = projectDir.split(/[\\/]/).filter(Boolean).pop() ?? "project";
     const stations = detectStations(projectDir);
     const created: Array<Record<string, unknown>> = [];
+
+    // Map station names to their VISU stationIds (e.g. PLC -> 10, HMI -> 255) so the
+    // published DataService stations.json (numeric `station` field) can be pointed at
+    // the right LARS instance. Read from the first HMI/lvp station's Stations.json.
+    const visuStationIds = resolveVisuStationIds(projectDir);
 
     if (args.lcp_path) {
       // Single lcp: build a workspace named after the project + lcp base
@@ -331,6 +351,7 @@ if (action === "setup") {
         name: workspace.name,
         onlinePort: workspace.onlinePort,
         stationName: station.stationName,
+        stationId: visuStationIds[station.stationName],
         stationLssPath: station.lssPath,
         lcpPath: station.lcpPath,
         projectDir,
@@ -348,6 +369,7 @@ if (action === "setup") {
           name: workspace.name,
           onlinePort: workspace.onlinePort,
           stationName: station.stationName,
+          stationId: visuStationIds[station.stationName],
           stationLssPath: station.lssPath,
           lcpPath: station.lcpPath,
           projectDir,

@@ -136,6 +136,29 @@ function findFilesDeep(dir: string, ext: string): string[] {
   return results;
 }
 
+/**
+ * Read the VISUDesigner station manager mapping (name -> stationId) from a .lvp's
+ * Stations/Stations.json. Returns e.g. { PLC: 10, HMI: 255, Local: 0 }.
+ */
+export function readVisuStationIds(lvpPath: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  try {
+    const lvpDir = lvpPath.substring(0, lvpPath.lastIndexOf("\\"));
+    const file = join(lvpDir, "Stations", "Stations.json");
+    if (!existsSync(file)) return result;
+    const doc = JSON.parse(readFileSync(file, "utf-8"));
+    if (!Array.isArray(doc?.stations)) return result;
+    for (const st of doc.stations) {
+      if (!st || typeof st !== "object") continue;
+      const stRec = st as Record<string, unknown>;
+      const name = typeof stRec.name === "string" ? stRec.name : undefined;
+      const id = typeof stRec.stationId === "number" ? stRec.stationId : typeof stRec.stationId === "string" ? parseInt(stRec.stationId, 10) : NaN;
+      if (name && !isNaN(id)) result[name] = id;
+    }
+  } catch {}
+  return result;
+}
+
 /** Read the current TCPIP connection from a .lss file (IP + port). */
 export function readLssConnection(
   lssPath: string

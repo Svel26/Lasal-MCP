@@ -15,6 +15,7 @@ export interface LarsInstanceInfo {
   name: string;
   onlinePort: number;
   stationName?: string;
+  stationId?: number;
   stationLssPath?: string;
   lcpPath?: string;
   projectDir?: string;

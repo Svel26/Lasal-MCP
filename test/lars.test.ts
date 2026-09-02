@@ -11,6 +11,7 @@ import {
   allocateLarsPorts,
   pointStationAtLars,
   gcLarsWorkspaces,
+  mapStationsToLars,
   type LarsInstanceInfo,
 } from "../src/utils/lars.js";
 import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
@@ -377,5 +378,56 @@ describe("pointStationAtLars", () => {
     updateLssConnection(lssPath, { ip: "10.195.0.50", port: "1954" });
     const conn = readLssConnection(lssPath);
     expect(conn).toEqual({ ip: "10.195.0.50", port: "1954" });
+  });
+});
+
+describe("mapStationsToLars", () => {
+  const instances: Record<string, LarsInstanceInfo> = {
+    NVeniaFil1057A01_PLC: {
+      name: "NVeniaFil1057A01_PLC",
+      onlinePort: 1984,
+      stationName: "PLC",
+      stationId: 10,
+    },
+    NVeniaFil1057A01_HMI: {
+      name: "NVeniaFil1057A01_HMI",
+      onlinePort: 1964,
+      stationName: "HMI",
+      stationId: 255,
+    },
+  };
+
+  it("remaps the published runtime layout by station id (ip + port)", () => {
+    const stations = [
+      { station: 255, conType: "INTERN" },
+      { station: 10, ip: "10.195.0.10", conType: "TCP" },
+      { station: 0, conType: "LOCAL" },
+    ];
+    const changed = mapStationsToLars(stations as any, instances, () => true);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toEqual({ station: "10", from: "10.195.0.10", to: "127.0.0.1:1984" });
+    expect((stations[1] as any).ip).toBe("127.0.0.1");
+    expect((stations[1] as any).port).toBe(1984);
+    // untouched
+    expect((stations[0] as any).conType).toBe("INTERN");
+    expect((stations[2] as any).conType).toBe("LOCAL");
+  });
+
+  it("remaps the design-time layout by name (connection string)", () => {
+    const stations = [
+      { name: "PLC", connection: "TCPIP:10.195.0.10" },
+      { name: "HMI", connection: "INTERN" },
+    ];
+    const changed = mapStationsToLars(stations as any, instances, () => true);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toEqual({ station: "PLC", from: "TCPIP:10.195.0.10", to: "127.0.0.1:1984" });
+    expect((stations[0] as any).connection).toBe("127.0.0.1:1984");
+  });
+
+  it("leaves stations without a matching running instance untouched", () => {
+    const stations = [{ station: 10, ip: "10.195.0.10", conType: "TCP" }];
+    const changed = mapStationsToLars(stations as any, {});
+    expect(changed).toHaveLength(0);
+    expect((stations[0] as any).ip).toBe("10.195.0.10");
   });
 });

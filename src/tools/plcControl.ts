@@ -253,6 +253,19 @@ export async function controlPlcHandler(args: {
         try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
       }
 
+      // LARS resets SRAM on first boot after a fresh download, leaving the runtime in
+      // SRAM_Error until the project is started again. Retry once so callers see Run_RAM.
+      const stateName = stateData.stateName as string | undefined;
+      if (br.ok && stateName === "SRAM_Error") {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
+        br.hints = [...(br.hints ?? []), "SRAM was reset on first start (fresh LARS download). Retried start automatically."];
+        stateData = {};
+        if (existsSync(resultPath)) {
+          try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+        }
+      }
+
       return batchResultToResponse(br, {
         connectionUsed: conn,
         ipUsed,
