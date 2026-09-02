@@ -137,8 +137,9 @@ export async function startHmiRuntime(args: {
       if (existsSync(rtSrc)) {
         try {
           createJunction(rtSrc, join(dataDir, "rt"));
-        } catch (e: any) {
-          warnings.push(`Warning: Failed to create junction for 'rt' directory: ${e.message}`);
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          warnings.push(`Warning: Failed to create junction for 'rt' directory: ${msg}`);
         }
       } else {
         warnings.push(`Warning: VISUDesigner Runtime 'rt' directory not found at ${rtSrc}. Paths starting with 'rt/' might fail to resolve.`);
@@ -153,11 +154,11 @@ export async function startHmiRuntime(args: {
       const stationsJsonPath = join(dataDir, "dataservice", "data", "stations.json");
       if (existsSync(stationsJsonPath)) {
         try {
-          const stations = JSON.parse(readFileSync(stationsJsonPath, "utf-8"));
-          const list = Array.isArray(stations.stations) ? (stations.stations as any[]) : null;
+          const stations = JSON.parse(readFileSync(stationsJsonPath, "utf-8")) as { stations?: Array<Record<string, unknown>> };
+          const list = Array.isArray(stations.stations) ? stations.stations : null;
           if (list) {
             const { mapStationsToLars } = await import("../utils/lars.js");
-            const mapping = mapStationsToLars(list as any, state.larsInstances ?? {});
+            const mapping = mapStationsToLars(list, state.larsInstances ?? {});
             if (mapping.length > 0) {
               writeFileSync(stationsJsonPath, JSON.stringify(stations, null, 2), "utf-8");
               warnings.push(
@@ -193,8 +194,9 @@ export async function startHmiRuntime(args: {
       if (existsSync(join(dataDir, "dataservice", "data"))) {
         writeFileSync(dataConfigPath, JSON.stringify(configContent, null, 2), "utf-8");
       }
-    } catch (e: any) {
-      return fail(`Failed to set up HMI runtime directory ${dataDir}: ${e.message}`, []);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return fail(`Failed to set up HMI runtime directory ${dataDir}: ${msg}`, []);
     }
 
     // 6. Kill any existing instance
@@ -246,8 +248,9 @@ export async function startHmiRuntime(args: {
       try {
         const httpPort = await startStaticServer(dataDir);
         url = `http://127.0.0.1:${httpPort}/index.html`;
-      } catch (e: any) {
-        warnings.push(`Failed to start static web server: ${e.message}. Falling back to file:// URL.`);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        warnings.push(`Failed to start static web server: ${msg}. Falling back to file:// URL.`);
         url = `file:///${dataDir.replace(/\\/g, "/")}/index.html`;
       }
 
@@ -263,8 +266,9 @@ export async function startHmiRuntime(args: {
         healthy,
         ...(warnings.length ? { warnings } : {})
       });
-    } catch (e: any) {
-      return fail(`Failed to launch HMI runtime: ${e.message}`, []);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return fail(`Failed to launch HMI runtime: ${msg}`, []);
     }
 }
 
