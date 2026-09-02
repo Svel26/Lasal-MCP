@@ -10,7 +10,7 @@ import {
   statSync,
   unlinkSync,
 } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { readState, writeState, getHmiForProject, setHmiForProject, clearHmiForProject } from "../state.js";
 import { DATASERVICE_EXE, killDataService, withEngineLock } from "../utils/engine.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
@@ -130,7 +130,7 @@ export async function startHmiRuntime(args: {
   }
 
   // 2. Discover published folders
-  const visuDir = resolved.path.substring(0, resolved.path.lastIndexOf("\\"));
+  const visuDir = dirname(resolved.path);
   const webrootSrc = join(visuDir, "TempPreview", "Publish", "webroot");
   const dataSrc = join(visuDir, "TempPreview", "Publish", "dataservice", "data");
 

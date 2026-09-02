@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, lstatSync, readdirSync } from "fs";
-import { join } from "path";
+import { join, dirname, basename, extname } from "path";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { runBatchOps, runScript, emitPy27String, emitPath, buildRawScript } from "../utils/batchScript.js";
@@ -48,7 +48,7 @@ function resolveChannelType(projDir: string, objectName: string, channelName: st
   if (!className) return null;
 
   const stFile = stFiles.find((f) => {
-    const base = f.substring(f.lastIndexOf("\\") + 1, f.lastIndexOf("."));
+    const base = basename(f, extname(f));
     return base.toLowerCase() === className?.toLowerCase();
   });
   if (!stFile) return null;
@@ -474,7 +474,7 @@ export async function plcValuesHandler(args: {
         return fail("values is required for action 'write'", ["Provide values to write."]);
       }
       const writeOpsList: string[] = [];
-      const projDir = resolved.path.substring(0, resolved.path.lastIndexOf("\\"));
+      const projDir = dirname(resolved.path);
       for (const item of args.values ?? []) {
         const ch = item.channel;
         const parts = ch.split(".");

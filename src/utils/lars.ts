@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
 import { spawn, execSync } from "child_process";
-import { join, basename } from "path";
+import { join, basename, dirname } from "path";
 import { homedir } from "os";
 import { XMLParser } from "fast-xml-parser";
 import { pingHost } from "./preflight.js";
@@ -103,8 +103,8 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
 
 export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
   const path = larsConfigPath();
-  const dir = path.substring(0, path.lastIndexOf("\\"));
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const dir = dirname(path);
+  if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   const blocks = workspaces.map((ws) => {
     const mem =
@@ -429,7 +429,7 @@ export async function startLars(workspace: LarsWorkspace): Promise<LarsStartResu
   const args = [`/c${config}`, `/n${workspace.name}`, "/sWIN"];
   // LARS locates its runtime files (autoexec.lsl, lsldata, ...) relative to the
   // install directory — NOT the workspace's data dir. Use the exe's dir as cwd.
-  const installDir = LARS_EXE.substring(0, LARS_EXE.lastIndexOf("\\"));
+  const installDir = dirname(LARS_EXE);
   try {
     const child = spawn(LARS_EXE, args, {
       cwd: installDir,

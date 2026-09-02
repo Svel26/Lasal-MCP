@@ -147,7 +147,7 @@ function findFilesDeep(dir: string, ext: string): string[] {
 export function readVisuStationIds(lvpPath: string): Record<string, number> {
   const result: Record<string, number> = {};
   try {
-    const lvpDir = lvpPath.substring(0, lvpPath.lastIndexOf("\\"));
+    const lvpDir = dirname(lvpPath);
     const file = join(lvpDir, "Stations", "Stations.json");
     if (!existsSync(file)) return result;
     const doc = JSON.parse(readFileSync(file, "utf-8"));

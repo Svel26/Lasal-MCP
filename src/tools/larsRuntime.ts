@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { existsSync, readdirSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import {
   LARS_EXE,
   larsConfigPath,
@@ -79,7 +79,7 @@ type LarsAction =
 
 function detectRole(lcpPath: string): "plc" | "hmi" | "unknown" {
   try {
-    const lcpDir = lcpPath.substring(0, lcpPath.lastIndexOf("\\"));
+    const lcpDir = dirname(lcpPath);
     const classDir = join(lcpDir, "Class");
     if (existsSync(classDir)) {
       const entries = readdirSync(classDir);
