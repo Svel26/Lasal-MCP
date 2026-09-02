@@ -1,7 +1,13 @@
 import { existsSync } from "fs";
 import { readState, getHmiForProject } from "../state.js";
 import { findLsmPath, parseSolution, findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
-import { CLASS2_EXE, VISUDESIGNER_EXE, resolveDataServiceExe, isProcessRunning, getProcessPid } from "../utils/engine.js";
+import {
+  CLASS2_EXE,
+  VISUDESIGNER_EXE,
+  resolveDataServiceExe,
+  isProcessRunning,
+  getProcessPid,
+} from "../utils/engine.js";
 import { pingHost } from "../utils/preflight.js";
 import { LARS_EXE, readLarsWorkspaces, getLarsPids, isLarsHealthy, larsConfigPath } from "../utils/lars.js";
 import { respond } from "../utils/respond.js";
@@ -16,7 +22,7 @@ export async function lasalStatusHandler() {
   const projectInfo = {
     selected: projDir,
     lcpPaths: projDir ? findLcpFiles(projDir) : [],
-    lvpPaths: projDir ? findLvpFiles(projDir) : []
+    lvpPaths: projDir ? findLvpFiles(projDir) : [],
   };
 
   const stations: Array<Record<string, unknown>> = [];
@@ -37,7 +43,7 @@ export async function lasalStatusHandler() {
             port: stn.port ?? "1954",
             reachable,
             lcp: stn.lcpPaths[0] ?? null,
-            lvp: stn.lvpPaths[0] ?? null
+            lvp: stn.lvpPaths[0] ?? null,
           });
         }
       } catch {}
@@ -59,13 +65,13 @@ export async function lasalStatusHandler() {
       path: LARS_EXE,
       exists: existsSync(LARS_EXE),
       configPath: larsConfigPath(),
-    }
+    },
   };
 
   const processes = {
     class2Running: isProcessRunning("Lasal2.exe"),
     visuDesignerRunning: isProcessRunning("VISUDesigner.exe"),
-    dataServicePid: getProcessPid("LasalVISUDataService.exe")
+    dataServicePid: getProcessPid("LasalVISUDataService.exe"),
   };
 
   // Check HMI runtime health (per project)
@@ -87,7 +93,7 @@ export async function lasalStatusHandler() {
         pid,
         port,
         url,
-        healthy
+        healthy,
       };
     }
     if (processes.dataServicePid) {
@@ -95,7 +101,7 @@ export async function lasalStatusHandler() {
       return {
         running: true,
         pid: processes.dataServicePid,
-        healthy: await checkHttpHealth(`http://127.0.0.1:9980/`) // Try standard port
+        healthy: await checkHttpHealth(`http://127.0.0.1:9980/`), // Try standard port
       };
     }
     return { running: false };
@@ -105,21 +111,23 @@ export async function lasalStatusHandler() {
   const larsWorkspaces = readLarsWorkspaces();
   const larsInstances = state.larsInstances ?? {};
   const lars = {
-    configured: await Promise.all(larsWorkspaces.map(async (w) => {
-      const inst = larsInstances[w.name];
-      const pids = getLarsPids(w.name);
-      const running = pids.length > 0;
-      return {
-        name: w.name,
-        onlinePort: w.onlinePort,
-        running,
-        pid: pids[0] ?? inst?.pid ?? null,
-        healthy: running ? await isLarsHealthy(w.onlinePort) : false,
-        stationName: inst?.stationName ?? null,
-        lcpPath: inst?.lcpPath ?? null,
-        targetedAtLars: inst?.originalIp ? true : false,
-      };
-    })),
+    configured: await Promise.all(
+      larsWorkspaces.map(async (w) => {
+        const inst = larsInstances[w.name];
+        const pids = getLarsPids(w.name);
+        const running = pids.length > 0;
+        return {
+          name: w.name,
+          onlinePort: w.onlinePort,
+          running,
+          pid: pids[0] ?? inst?.pid ?? null,
+          healthy: running ? await isLarsHealthy(w.onlinePort) : false,
+          stationName: inst?.stationName ?? null,
+          lcpPath: inst?.lcpPath ?? null,
+          targetedAtLars: inst?.originalIp ? true : false,
+        };
+      }),
+    ),
   };
 
   const hints: string[] = [];
@@ -129,21 +137,21 @@ export async function lasalStatusHandler() {
     if (stations.length === 0) {
       hints.push("No stations found. Check if the project is structured correctly with an .lsm file.");
     } else {
-      const unreachable = stations.filter(s => !s.reachable);
+      const unreachable = stations.filter((s) => !s.reachable);
       if (unreachable.length > 0) {
-        const larsHints = lars.configured
-          .filter((l) => l.running && l.stationName)
-          .map((l) => l.stationName);
+        const larsHints = lars.configured.filter((l) => l.running && l.stationName).map((l) => l.stationName);
         hints.push(
-          `Some stations are unreachable (${unreachable.map(u => u.name).join(", ")}). ` +
+          `Some stations are unreachable (${unreachable.map((u) => u.name).join(", ")}). ` +
             (larsHints.length
               ? `LARS is running for: ${larsHints.join(", ")} — use lars_runtime set_station_target to point those stations at LARS.`
-              : "No real PLC/HMI on the network? Use lars_runtime setup + start to simulate stations locally.")
+              : "No real PLC/HMI on the network? Use lars_runtime setup + start to simulate stations locally."),
         );
       }
     }
     if (processes.class2Running) {
-      hints.push("CLASS 2 IDE is open. Close it manually or call manage_class2 close before running batch operations (compile/download).");
+      hints.push(
+        "CLASS 2 IDE is open. Close it manually or call manage_class2 close before running batch operations (compile/download).",
+      );
     }
   }
 
@@ -155,6 +163,6 @@ export async function lasalStatusHandler() {
     processes,
     hmiRuntime: hmiRuntimeInfo,
     lars,
-    hints
+    hints,
   });
 }

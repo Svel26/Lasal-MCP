@@ -24,13 +24,22 @@ async function findLiveHmiUrl(): Promise<string | null> {
 }
 
 export const hmiBrowserSchema = {
-  action: z.enum(["open", "screenshot", "console", "eval", "click", "type", "wait", "close"])
+  action: z
+    .enum(["open", "screenshot", "console", "eval", "click", "type", "wait", "close"])
     .describe("Action to perform in the HMI browser session."),
-  url: z.string().optional().describe("URL to navigate to (open action only). Defaults to the live HMI panel (http://<hmi-station-ip>/) when reachable, else the local HMI runtime URL."),
-  viewport: z.object({
-    width: z.number().int(),
-    height: z.number().int()
-  }).optional().describe("Browser viewport size (open action only). Defaults to 1200x800."),
+  url: z
+    .string()
+    .optional()
+    .describe(
+      "URL to navigate to (open action only). Defaults to the live HMI panel (http://<hmi-station-ip>/) when reachable, else the local HMI runtime URL.",
+    ),
+  viewport: z
+    .object({
+      width: z.number().int(),
+      height: z.number().int(),
+    })
+    .optional()
+    .describe("Browser viewport size (open action only). Defaults to 1200x800."),
   fullPage: z.boolean().optional().default(false).describe("Take a full page screenshot (screenshot action only)."),
   selector: z.string().optional().describe("CSS/Text selector to screenshot, click, type, or wait for."),
   text: z.string().optional().describe("Text content to type, or to find for clicking."),
@@ -38,7 +47,11 @@ export const hmiBrowserSchema = {
   y: z.number().int().optional().describe("Y coordinate for mouse click."),
   expression: z.string().optional().describe("JavaScript expression to evaluate (eval action only)."),
   ms: z.number().int().optional().describe("Milliseconds to wait (wait action only)."),
-  clear: z.boolean().optional().default(false).describe("Clear the console/error buffers after reading them (console action only)."),
+  clear: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Clear the console/error buffers after reading them (console action only)."),
 };
 
 let browser: Browser | null = null;
@@ -106,16 +119,21 @@ export async function hmiBrowserHandler(args: {
       case "open": {
         const state = readState();
         // Default: live HMI panel if reachable, else the local simulation runtime
-        const targetUrl = args.url || (await findLiveHmiUrl()) || state.hmiRuntime?.url || "file:///C:/lslvisu/index.html";
+        const targetUrl =
+          args.url || (await findLiveHmiUrl()) || state.hmiRuntime?.url || "file:///C:/lslvisu/index.html";
         const width = args.viewport?.width ?? 1200;
         const height = args.viewport?.height ?? 800;
 
         await p.setViewportSize({ width, height });
         await p.goto(targetUrl, { waitUntil: "networkidle", timeout: 15000 });
         // Also wait a brief moment for HMI animation to settle
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
 
-        return { content: [{ type: "text" as const, text: `Successfully opened ${targetUrl} with viewport ${width}x${height}` }] };
+        return {
+          content: [
+            { type: "text" as const, text: `Successfully opened ${targetUrl} with viewport ${width}x${height}` },
+          ],
+        };
       }
 
       case "screenshot": {
@@ -126,11 +144,13 @@ export async function hmiBrowserHandler(args: {
           buffer = await p.screenshot({ fullPage: args.fullPage });
         }
         return {
-          content: [{
-            type: "image" as const,
-            data: buffer.toString("base64"),
-            mimeType: "image/png"
-          }]
+          content: [
+            {
+              type: "image" as const,
+              data: buffer.toString("base64"),
+              mimeType: "image/png",
+            },
+          ],
         };
       }
 
@@ -142,23 +162,30 @@ export async function hmiBrowserHandler(args: {
           pageErrors.length = 0;
         }
         return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({ logs, errors }, null, 2)
-          }]
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ logs, errors }, null, 2),
+            },
+          ],
         };
       }
 
       case "eval": {
         if (!args.expression) {
-          return { content: [{ type: "text" as const, text: "expression is required for action 'eval'" }], isError: true };
+          return {
+            content: [{ type: "text" as const, text: "expression is required for action 'eval'" }],
+            isError: true,
+          };
         }
         const res = await p.evaluate(args.expression);
         return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify(res, null, 2)
-          }]
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(res, null, 2),
+            },
+          ],
         };
       }
 
@@ -170,16 +197,24 @@ export async function hmiBrowserHandler(args: {
         } else if (args.x !== undefined && args.y !== undefined) {
           await p.mouse.click(args.x, args.y);
         } else {
-          return { content: [{ type: "text" as const, text: "selector, text, or coordinates (x, y) required for action 'click'" }], isError: true };
+          return {
+            content: [
+              { type: "text" as const, text: "selector, text, or coordinates (x, y) required for action 'click'" },
+            ],
+            isError: true,
+          };
         }
         // Give time for click events/transitions to resolve
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 500));
         return { content: [{ type: "text" as const, text: "Click executed successfully." }] };
       }
 
       case "type": {
         if (!args.selector) {
-          return { content: [{ type: "text" as const, text: "selector is required for action 'type'" }], isError: true };
+          return {
+            content: [{ type: "text" as const, text: "selector is required for action 'type'" }],
+            isError: true,
+          };
         }
         const val = args.text ?? "";
         await p.fill(args.selector, val, { timeout: 10000 });
@@ -191,10 +226,13 @@ export async function hmiBrowserHandler(args: {
           await p.waitForSelector(args.selector, { timeout: args.ms ?? 10000 });
           return { content: [{ type: "text" as const, text: `Selector ${args.selector} appeared.` }] };
         } else if (args.ms) {
-          await new Promise(resolve => setTimeout(resolve, args.ms));
+          await new Promise((resolve) => setTimeout(resolve, args.ms));
           return { content: [{ type: "text" as const, text: `Waited for ${args.ms} ms.` }] };
         } else {
-          return { content: [{ type: "text" as const, text: "selector or ms is required for action 'wait'" }], isError: true };
+          return {
+            content: [{ type: "text" as const, text: "selector or ms is required for action 'wait'" }],
+            isError: true,
+          };
         }
       }
 

@@ -15,10 +15,7 @@ import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
 
 export const deployAllSchema = {
-  lcp_path: z
-    .string()
-    .optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
+  lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
   lvp_path: z
     .string()
     .optional()
@@ -26,16 +23,14 @@ export const deployAllSchema = {
   plc_connection: z
     .string()
     .optional()
-    .describe("PLC connection string (e.g. 'TCPIP:192.168.1.100'). Omit to use the connection saved in the project's .lss file."),
+    .describe(
+      "PLC connection string (e.g. 'TCPIP:192.168.1.100'). Omit to use the connection saved in the project's .lss file.",
+    ),
   visu_connection: z
     .string()
     .optional()
     .describe("HMI connection string (e.g. 'TCPIP:192.168.1.100'). Required when download_visu is true."),
-  compile: z
-    .boolean()
-    .optional()
-    .default(true)
-    .describe("Compile the CLASS 2 project. Default true."),
+  compile: z.boolean().optional().default(true).describe("Compile the CLASS 2 project. Default true."),
   compile_options: z
     .enum(["RebuildAll", "BuildChanges"])
     .optional()
@@ -50,12 +45,16 @@ export const deployAllSchema = {
     .boolean()
     .optional()
     .default(true)
-    .describe("Run update_all_stations on the VISUDesigner project to sync datapoints after CLASS 2 changes. Default true."),
+    .describe(
+      "Run update_all_stations on the VISUDesigner project to sync datapoints after CLASS 2 changes. Default true.",
+    ),
   download_visu: z
     .boolean()
     .optional()
     .default(false)
-    .describe("Download the VISUDesigner project to the HMI after updating stations. Requires visu_connection. Default false."),
+    .describe(
+      "Download the VISUDesigner project to the HMI after updating stations. Requires visu_connection. Default false.",
+    ),
   visu_download_flags: z
     .number()
     .int()
@@ -81,14 +80,11 @@ export const deployAllSchema = {
     .boolean()
     .optional()
     .default(false)
-    .describe("Start the local HMI runtime (DataService) and copy HMI files after a successful compilation/update. Default false."),
-  timeout_s: z
-    .number()
-    .int()
-    .optional()
-    .describe("Timeout override in seconds for compile and download steps."),
+    .describe(
+      "Start the local HMI runtime (DataService) and copy HMI files after a successful compilation/update. Default false.",
+    ),
+  timeout_s: z.number().int().optional().describe("Timeout override in seconds for compile and download steps."),
 };
-
 
 export async function deployAllHandler(args: {
   lcp_path?: string;
@@ -153,10 +149,10 @@ export async function deployAllHandler(args: {
           ok: false,
           preflightPlc: pfPlc,
           connections: {
-            plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed }
+            plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
           },
-          errors: pfPlc.problems.map(p => p.message),
-          hints: pfPlc.problems.map(p => p.fix)
+          errors: pfPlc.problems.map((p) => p.message),
+          hints: pfPlc.problems.map((p) => p.fix),
         });
       }
     }
@@ -172,10 +168,10 @@ export async function deployAllHandler(args: {
           preflightHmi: pfHmi,
           connections: {
             plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
-            visu: { ip: visuIp, connection: args.visu_connection ?? "" }
+            visu: { ip: visuIp, connection: args.visu_connection ?? "" },
           },
-          errors: pfHmi.problems.map(p => p.message),
-          hints: pfHmi.problems.map(p => p.fix)
+          errors: pfHmi.problems.map((p) => p.message),
+          hints: pfHmi.problems.map((p) => p.fix),
         });
       }
     }
@@ -186,9 +182,9 @@ export async function deployAllHandler(args: {
         steps,
         connections: {
           plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
-          ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {})
+          ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {}),
         },
-        hints
+        hints,
       };
       if (msg) body.error = msg;
       return respond(body as any);
@@ -197,7 +193,11 @@ export async function deployAllHandler(args: {
     // Step 1: compile
     if (doCompile) {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
-      const br = await runBatchOps(lcpPath!, [{ type: "compile", optionName: args.compile_options ?? "RebuildAll" }], timeoutMs);
+      const br = await runBatchOps(
+        lcpPath!,
+        [{ type: "compile", optionName: args.compile_options ?? "RebuildAll" }],
+        timeoutMs,
+      );
       steps.compile = batchToStepResult(br);
       if (!br.ok) return failResponse("Compilation step failed.", br.hints ?? []);
     }
@@ -207,19 +207,31 @@ export async function deployAllHandler(args: {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
       // LARS (local runtime) targets need the PC loader or the download ends in "Linker_Error".
       const addLoaderAnyway = args.add_plc_loader ?? isLoopbackTarget(plcConnectionInfo);
-      let br = await runBatchOps(lcpPath!, [{
-        type: "download",
-        connection: plcConnectionUsed,
-        addLoaderAnyway,
-      }], timeoutMs);
+      let br = await runBatchOps(
+        lcpPath!,
+        [
+          {
+            type: "download",
+            connection: plcConnectionUsed,
+            addLoaderAnyway,
+          },
+        ],
+        timeoutMs,
+      );
 
       if (!br.ok && isTransientError(br.errors)) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        br = await runBatchOps(lcpPath!, [{
-          type: "download",
-          connection: plcConnectionUsed,
-          addLoaderAnyway,
-        }], timeoutMs);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        br = await runBatchOps(
+          lcpPath!,
+          [
+            {
+              type: "download",
+              connection: plcConnectionUsed,
+              addLoaderAnyway,
+            },
+          ],
+          timeoutMs,
+        );
         br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
       }
 
@@ -248,7 +260,7 @@ export async function deployAllHandler(args: {
         "import json",
         `f_state = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f_state)",
-        "f_state.close()"
+        "f_state.close()",
       ];
 
       const script = buildRawScript(lcpPath!, bodyLines, logPath, stepsPath, ["get_state"]);
@@ -256,12 +268,14 @@ export async function deployAllHandler(args: {
 
       let stateData: Record<string, unknown> = {};
       if (existsSync(resultPath)) {
-        try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+        try {
+          stateData = JSON.parse(readFileSync(resultPath, "utf-8"));
+        } catch {}
       }
 
       steps.verify_plc = {
         ...batchToStepResult(br),
-        plcState: stateData
+        plcState: stateData,
       } as any;
 
       if (!br.ok) return failResponse("PLC verification step failed.", br.hints ?? []);
@@ -291,25 +305,27 @@ export async function deployAllHandler(args: {
         "import json",
         `f_state = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f_state)",
-        "f_state.close()"
+        "f_state.close()",
       ];
       const script = buildRawScript(lcpPath!, bodyLines, logPath, stepsPath, ["start"]);
       let br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
 
       if (!br.ok && isTransientError(br.errors)) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
         br.hints = [...(br.hints ?? []), "Retried start once due to a transient connection failure."];
       }
 
       let stateData: Record<string, unknown> = {};
       if (existsSync(resultPath)) {
-        try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+        try {
+          stateData = JSON.parse(readFileSync(resultPath, "utf-8"));
+        } catch {}
       }
 
       steps.start_plc = {
         ...batchToStepResult(br),
-        postStartState: stateData
+        postStartState: stateData,
       } as any;
 
       if (!br.ok) return failResponse("PLC start step failed.", br.hints ?? []);
@@ -319,12 +335,13 @@ export async function deployAllHandler(args: {
     if (doUpdateVisuStations || doDownloadVisu) {
       const visuOps: Parameters<typeof runVisuOps>[1] = [];
       if (doUpdateVisuStations) visuOps.push({ type: "update_all_stations" });
-      if (doDownloadVisu) visuOps.push({
-        type: "download",
-        connection: args.visu_connection!,
-        flags: args.visu_download_flags ?? 0,
-        add_runtime: args.add_visu_runtime ?? false,
-      });
+      if (doDownloadVisu)
+        visuOps.push({
+          type: "download",
+          connection: args.visu_connection!,
+          flags: args.visu_download_flags ?? 0,
+          add_runtime: args.add_visu_runtime ?? false,
+        });
 
       const vr = await runVisuOps(lvpPath!, visuOps, true, TIMEOUTS.visu);
       steps.visu = visuToStepResult(vr);
@@ -338,7 +355,9 @@ export async function deployAllHandler(args: {
       steps.hmi_runtime = {
         ok: !hmiRes.isError,
         durationMs: Date.now() - startStart,
-        ...(hmiRes.isError ? { errors: [ hmiRes.content[0]?.text ?? "Unknown error" ] } : { logTail: [ `HMI started: ${hmiRes.content[0]?.text ?? "started"}` ] })
+        ...(hmiRes.isError
+          ? { errors: [hmiRes.content[0]?.text ?? "Unknown error"] }
+          : { logTail: [`HMI started: ${hmiRes.content[0]?.text ?? "started"}`] }),
       };
       if (hmiRes.isError) return failResponse("HMI runtime start step failed.");
     }
@@ -348,8 +367,8 @@ export async function deployAllHandler(args: {
       steps,
       connections: {
         plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
-        ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {})
-      }
+        ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {}),
+      },
     });
   });
 }

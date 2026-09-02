@@ -15,11 +15,11 @@ export class EditTransaction {
   public backup(filePath: string): void {
     if (this.backups.has(filePath)) return;
     if (!existsSync(filePath)) return;
-    
+
     if (!existsSync(this.backupDir)) {
       mkdirSync(this.backupDir, { recursive: true });
     }
-    
+
     const backupFile = join(this.backupDir, `${randomUUID()}-${basename(filePath)}`);
     copyFileSync(filePath, backupFile);
     this.backups.set(filePath, backupFile);

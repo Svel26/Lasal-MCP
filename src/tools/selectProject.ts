@@ -4,9 +4,7 @@ import { readState, writeState } from "../state.js";
 import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
 
 export const selectProjectSchema = {
-  path: z
-    .string()
-    .describe("Full path to the LASAL solution folder (must contain a .lsm file)."),
+  path: z.string().describe("Full path to the LASAL solution folder (must contain a .lsm file)."),
 };
 
 export async function selectProjectHandler(args: { path: string }) {

@@ -34,7 +34,6 @@ export const TIMEOUTS = {
 export const HMI_DIR = cfg.LASAL_MCP_HMI_DIR;
 export const SCRATCH_MAX_AGE_H = cfg.LASAL_MCP_SCRATCH_MAX_AGE_H;
 export const LARS_GC_MIN_AGE_H = cfg.LASAL_MCP_LARS_GC_MIN_AGE_H;
-export const LARS_GC_STATIONS_DIRS = cfg.LASAL_MCP_LARS_GC_STATIONS_DIRS
-  .split(";")
+export const LARS_GC_STATIONS_DIRS = cfg.LASAL_MCP_LARS_GC_STATIONS_DIRS.split(";")
   .map((s) => s.trim())
   .filter(Boolean);

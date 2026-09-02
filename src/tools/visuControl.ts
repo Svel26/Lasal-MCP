@@ -41,7 +41,7 @@ const propertySetDefSchema = z.object({
   property: z
     .string()
     .describe(
-      "Property constant, e.g. 'AliasName', 'RefreshTime', 'WriteProtected', 'LimitLow', 'LimitHigh', 'Unit', 'Keyboard', 'EnumValue', 'InitValue'"
+      "Property constant, e.g. 'AliasName', 'RefreshTime', 'WriteProtected', 'LimitLow', 'LimitHigh', 'Unit', 'Keyboard', 'EnumValue', 'InitValue'",
     ),
   value: z
     .union([z.string(), z.number(), z.boolean(), z.null()])
@@ -71,9 +71,7 @@ const schemeDefSchema = z.object({
 });
 
 const mediaItemDefSchema = z.object({
-  media_type: z
-    .string()
-    .describe("Media type: 'Image', 'Video', 'Audio', 'Docs', 'Fonts', 'KeyboardLayouts', 'Other'"),
+  media_type: z.string().describe("Media type: 'Image', 'Video', 'Audio', 'Docs', 'Fonts', 'KeyboardLayouts', 'Other'"),
   path: z.string().optional().describe("Full file path (for add operations)"),
   name: z.string().optional().describe("File name including extension (for remove operations)"),
 });
@@ -85,16 +83,23 @@ const UpdateStationOp = z.object({
 });
 const PublishOp = z.object({
   type: z.literal("publish"),
-  debug: z.boolean().optional().default(false)
+  debug: z
+    .boolean()
+    .optional()
+    .default(false)
     .describe("Publish with additional debug information. Requires TypeScript support to be enabled in the project."),
 });
 const SetTextListRevisionsOp = z.object({
   type: z.literal("set_text_list_revisions"),
-  text_lists: z.array(textListDefSchema).describe("Text lists with their revision strings to set (use the 'revision' field)"),
+  text_lists: z
+    .array(textListDefSchema)
+    .describe("Text lists with their revision strings to set (use the 'revision' field)"),
 });
 const SetComponentTextListRevisionsOp = z.object({
   type: z.literal("set_component_text_list_revisions"),
-  text_lists: z.array(textListDefSchema).describe("Component text lists with their revision strings to set (use the 'revision' field)"),
+  text_lists: z
+    .array(textListDefSchema)
+    .describe("Component text lists with their revision strings to set (use the 'revision' field)"),
 });
 const AddTextListsOp = z.object({
   type: z.literal("add_text_lists"),
@@ -149,7 +154,7 @@ const SetDatapointPropertiesOp = z.object({
   properties: z
     .array(propertySetDefSchema)
     .describe(
-      "List of property sets. Use property constants: AliasName, RefreshTime (High/Medium/Low/Standard), WriteProtected, AccessNumber, LimitLow, LimitHigh, Unit, Keyboard, EnumValue, InitValue, etc."
+      "List of property sets. Use property constants: AliasName, RefreshTime (High/Medium/Low/Standard), WriteProtected, AccessNumber, LimitLow, LimitHigh, Unit, Keyboard, EnumValue, InitValue, etc.",
     ),
 });
 const SetDataTypePropertiesOp = z.object({
@@ -182,9 +187,7 @@ const RemoveSchemeEntriesOp = z.object({
 });
 const MoveSchemeEntriesOp = z.object({
   type: z.literal("move_scheme_entries"),
-  schemes: z
-    .array(schemeDefSchema)
-    .describe("Schemes with move operations. Use 'moves': [{from: N, to: M}, ...]"),
+  schemes: z.array(schemeDefSchema).describe("Schemes with move operations. Use 'moves': [{from: N, to: M}, ...]"),
 });
 const SetSchemeInputsOp = z.object({
   type: z.literal("set_scheme_inputs"),
@@ -198,7 +201,7 @@ const SetSchemePropertiesOp = z.object({
   properties: z
     .array(propertySetDefSchema)
     .describe(
-      "PropertySets where 'element' is the scheme name. Available properties: Revision, LockOverloadCompareValue, LockOverloadSetValue"
+      "PropertySets where 'element' is the scheme name. Available properties: Revision, LockOverloadCompareValue, LockOverloadSetValue",
     ),
 });
 const SetSchemeEntryPropertiesOp = z.object({
@@ -208,7 +211,7 @@ const SetSchemeEntryPropertiesOp = z.object({
     .describe(
       "Schemes with entries where each entry specifies position + property + value to set. " +
         "Entry properties: Operator (<,<=,=,>=,>,<>), CompareValue, SetValue. " +
-        "For StateScheme SetValue: None, Active, Inactive, Invisible."
+        "For StateScheme SetValue: None, Active, Inactive, Invisible.",
     ),
 });
 const AddMediaItemsOp = z.object({
@@ -218,7 +221,9 @@ const AddMediaItemsOp = z.object({
 });
 const RemoveMediaItemsOp = z.object({
   type: z.literal("remove_media_items"),
-  items: z.array(mediaItemDefSchema).describe("Media items to remove. Each needs media_type and name (filename + extension)."),
+  items: z
+    .array(mediaItemDefSchema)
+    .describe("Media items to remove. Each needs media_type and name (filename + extension)."),
 });
 const AddCodeModulesOp = z.object({
   type: z.literal("add_code_modules"),
@@ -233,25 +238,48 @@ const DownloadOp = z.object({
   type: z.literal("download"),
   connection: z
     .string()
-    .describe("Connection string, e.g. 'TCPIP:192.168.1.100' or 'TCPIP:myhmi.local'. Use the 'TCPIP:' prefix for IP/DNS targets."),
-  flags: z.number().int().optional().default(0).describe("Download mode: 0=normal (default), 1=changes only, 2=publish+download changes"),
+    .describe(
+      "Connection string, e.g. 'TCPIP:192.168.1.100' or 'TCPIP:myhmi.local'. Use the 'TCPIP:' prefix for IP/DNS targets.",
+    ),
+  flags: z
+    .number()
+    .int()
+    .optional()
+    .default(0)
+    .describe("Download mode: 0=normal (default), 1=changes only, 2=publish+download changes"),
   add_runtime: z.boolean().optional().default(false).describe("Force runtime download even if version matches"),
 });
 
 const OperationSchema = z.discriminatedUnion("type", [
-  UpdateAllStationsOp, UpdateStationOp,
+  UpdateAllStationsOp,
+  UpdateStationOp,
   PublishOp,
-  AddTextListsOp, RemoveTextListsOp,
-  AddTextsOp, RemoveTextsOp, ChangeTextsOp, ChangeComponentTextsOp,
-  SetTextListRevisionsOp, SetComponentTextListRevisionsOp,
-  CsvExportTextListsOp, CsvImportTextListsOp,
-  CsvExportComponentTextListsOp, CsvImportComponentTextListsOp,
-  SetDatapointPropertiesOp, SetDataTypePropertiesOp,
-  AddSchemesOp, RemoveSchemesOp,
-  AddSchemeEntriesOp, RemoveSchemeEntriesOp, MoveSchemeEntriesOp,
-  SetSchemeInputsOp, SetSchemePropertiesOp, SetSchemeEntryPropertiesOp,
-  AddMediaItemsOp, RemoveMediaItemsOp,
-  AddCodeModulesOp, RemoveCodeModulesOp,
+  AddTextListsOp,
+  RemoveTextListsOp,
+  AddTextsOp,
+  RemoveTextsOp,
+  ChangeTextsOp,
+  ChangeComponentTextsOp,
+  SetTextListRevisionsOp,
+  SetComponentTextListRevisionsOp,
+  CsvExportTextListsOp,
+  CsvImportTextListsOp,
+  CsvExportComponentTextListsOp,
+  CsvImportComponentTextListsOp,
+  SetDatapointPropertiesOp,
+  SetDataTypePropertiesOp,
+  AddSchemesOp,
+  RemoveSchemesOp,
+  AddSchemeEntriesOp,
+  RemoveSchemeEntriesOp,
+  MoveSchemeEntriesOp,
+  SetSchemeInputsOp,
+  SetSchemePropertiesOp,
+  SetSchemeEntryPropertiesOp,
+  AddMediaItemsOp,
+  RemoveMediaItemsOp,
+  AddCodeModulesOp,
+  RemoveCodeModulesOp,
   UpdatePropertyValuesOp,
   DownloadOp,
 ]);
@@ -272,38 +300,90 @@ function parseOperations(raw: unknown[]): { ops: Operation[] } | { errors: strin
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toVisuOp(op: any): VisuOp {
   switch (op.type) {
-    case "update_all_stations": return { type: "update_all_stations" };
-    case "update_station": return { type: "update_station", station_nr: op.station_nr };
-    case "publish": return { type: "publish", debug: op.debug };
-    case "add_text_lists": return { type: "add_text_lists", text_lists: op.text_lists };
-    case "remove_text_lists": return { type: "remove_text_lists", names: op.names };
-    case "add_texts": return { type: "add_texts", text_lists: op.text_lists };
-    case "remove_texts": return { type: "remove_texts", text_lists: op.text_lists };
-    case "change_texts": return { type: "change_texts", text_lists: op.text_lists };
-    case "change_component_texts": return { type: "change_component_texts", text_lists: op.text_lists };
-    case "set_text_list_revisions": return { type: "set_text_list_revisions", text_lists: op.text_lists };
-    case "set_component_text_list_revisions": return { type: "set_component_text_list_revisions", text_lists: op.text_lists };
-    case "csv_export_text_lists": return { type: "csv_export_text_lists", csv_path: op.csv_path, text_lists: op.text_lists, languages: op.languages };
-    case "csv_import_text_lists": return { type: "csv_import_text_lists", file_paths: op.file_paths, text_lists: op.text_lists, languages: op.languages };
-    case "csv_export_component_text_lists": return { type: "csv_export_component_text_lists", csv_path: op.csv_path, text_lists: op.text_lists, languages: op.languages };
-    case "csv_import_component_text_lists": return { type: "csv_import_component_text_lists", file_paths: op.file_paths, text_lists: op.text_lists, languages: op.languages };
-    case "set_datapoint_properties": return { type: "set_datapoint_properties", properties: op.properties };
-    case "set_datatype_properties": return { type: "set_datatype_properties", properties: op.properties };
-    case "add_schemes": return { type: "add_schemes", schemes: op.schemes };
-    case "remove_schemes": return { type: "remove_schemes", schemes: op.schemes };
-    case "add_scheme_entries": return { type: "add_scheme_entries", schemes: op.schemes };
-    case "remove_scheme_entries": return { type: "remove_scheme_entries", schemes: op.schemes };
-    case "move_scheme_entries": return { type: "move_scheme_entries", schemes: op.schemes };
-    case "set_scheme_inputs": return { type: "set_scheme_inputs", schemes: op.schemes };
-    case "set_scheme_properties": return { type: "set_scheme_properties", scheme_type: op.scheme_type, properties: op.properties };
-    case "set_scheme_entry_properties": return { type: "set_scheme_entry_properties", schemes: op.schemes };
-    case "add_media_items": return { type: "add_media_items", items: op.items, overwrite: op.overwrite };
-    case "remove_media_items": return { type: "remove_media_items", items: op.items };
-    case "add_code_modules": return { type: "add_code_modules", paths: op.paths };
-    case "remove_code_modules": return { type: "remove_code_modules", names: op.names };
-    case "update_property_values": return { type: "update_property_values" };
-    case "download": return { type: "download", connection: op.connection, flags: op.flags, add_runtime: op.add_runtime };
-    default: throw new Error(`Unknown operation type: ${op.type}`);
+    case "update_all_stations":
+      return { type: "update_all_stations" };
+    case "update_station":
+      return { type: "update_station", station_nr: op.station_nr };
+    case "publish":
+      return { type: "publish", debug: op.debug };
+    case "add_text_lists":
+      return { type: "add_text_lists", text_lists: op.text_lists };
+    case "remove_text_lists":
+      return { type: "remove_text_lists", names: op.names };
+    case "add_texts":
+      return { type: "add_texts", text_lists: op.text_lists };
+    case "remove_texts":
+      return { type: "remove_texts", text_lists: op.text_lists };
+    case "change_texts":
+      return { type: "change_texts", text_lists: op.text_lists };
+    case "change_component_texts":
+      return { type: "change_component_texts", text_lists: op.text_lists };
+    case "set_text_list_revisions":
+      return { type: "set_text_list_revisions", text_lists: op.text_lists };
+    case "set_component_text_list_revisions":
+      return { type: "set_component_text_list_revisions", text_lists: op.text_lists };
+    case "csv_export_text_lists":
+      return {
+        type: "csv_export_text_lists",
+        csv_path: op.csv_path,
+        text_lists: op.text_lists,
+        languages: op.languages,
+      };
+    case "csv_import_text_lists":
+      return {
+        type: "csv_import_text_lists",
+        file_paths: op.file_paths,
+        text_lists: op.text_lists,
+        languages: op.languages,
+      };
+    case "csv_export_component_text_lists":
+      return {
+        type: "csv_export_component_text_lists",
+        csv_path: op.csv_path,
+        text_lists: op.text_lists,
+        languages: op.languages,
+      };
+    case "csv_import_component_text_lists":
+      return {
+        type: "csv_import_component_text_lists",
+        file_paths: op.file_paths,
+        text_lists: op.text_lists,
+        languages: op.languages,
+      };
+    case "set_datapoint_properties":
+      return { type: "set_datapoint_properties", properties: op.properties };
+    case "set_datatype_properties":
+      return { type: "set_datatype_properties", properties: op.properties };
+    case "add_schemes":
+      return { type: "add_schemes", schemes: op.schemes };
+    case "remove_schemes":
+      return { type: "remove_schemes", schemes: op.schemes };
+    case "add_scheme_entries":
+      return { type: "add_scheme_entries", schemes: op.schemes };
+    case "remove_scheme_entries":
+      return { type: "remove_scheme_entries", schemes: op.schemes };
+    case "move_scheme_entries":
+      return { type: "move_scheme_entries", schemes: op.schemes };
+    case "set_scheme_inputs":
+      return { type: "set_scheme_inputs", schemes: op.schemes };
+    case "set_scheme_properties":
+      return { type: "set_scheme_properties", scheme_type: op.scheme_type, properties: op.properties };
+    case "set_scheme_entry_properties":
+      return { type: "set_scheme_entry_properties", schemes: op.schemes };
+    case "add_media_items":
+      return { type: "add_media_items", items: op.items, overwrite: op.overwrite };
+    case "remove_media_items":
+      return { type: "remove_media_items", items: op.items };
+    case "add_code_modules":
+      return { type: "add_code_modules", paths: op.paths };
+    case "remove_code_modules":
+      return { type: "remove_code_modules", names: op.names };
+    case "update_property_values":
+      return { type: "update_property_values" };
+    case "download":
+      return { type: "download", connection: op.connection, flags: op.flags, add_runtime: op.add_runtime };
+    default:
+      throw new Error(`Unknown operation type: ${op.type}`);
   }
 }
 
@@ -314,7 +394,7 @@ export const visuProjectSchema = {
     .enum(["apply_changes", "download"])
     .describe(
       "'apply_changes' loads the project, runs operations, saves, and closes. " +
-        "'download' pushes the project to an HMI without saving content changes."
+        "'download' pushes the project to an HMI without saving content changes.",
     ),
   lvp_path: z
     .string()
@@ -334,12 +414,9 @@ export const visuProjectSchema = {
         "set_datapoint_properties | set_datatype_properties | add_schemes | remove_schemes | " +
         "add_scheme_entries | remove_scheme_entries | move_scheme_entries | set_scheme_inputs | " +
         "set_scheme_properties | set_scheme_entry_properties | add_media_items | remove_media_items | " +
-        "add_code_modules | remove_code_modules | update_property_values | download"
+        "add_code_modules | remove_code_modules | update_property_values | download",
     ),
-  connection: z
-    .string()
-    .optional()
-    .describe("HMI connection string, e.g. 'TCPIP:192.168.1.100' (download only)."),
+  connection: z.string().optional().describe("HMI connection string, e.g. 'TCPIP:192.168.1.100' (download only)."),
   flags: z
     .number()
     .int()
@@ -367,45 +444,52 @@ export async function visuProjectHandler(args: {
       return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
     }
 
-  if (args.action === "download") {
-    if (!args.connection) {
-      return fail("connection is required for action 'download'", ["Provide the connection parameter."]);
+    if (args.action === "download") {
+      if (!args.connection) {
+        return fail("connection is required for action 'download'", ["Provide the connection parameter."]);
+      }
+      const m = args.connection.match(/TCPIP:(.+)/i);
+      const ipUsed = m?.[1]?.split(":")[0] ?? args.connection;
+
+      const pf = await preflightHmi(resolved.path, args.connection);
+      if (!pf.ok) {
+        return respond({
+          ok: false,
+          preflight: pf,
+          connectionUsed: args.connection,
+          ipUsed,
+          errors: pf.problems.map((p) => p.message),
+          hints: pf.problems.map((p) => p.fix),
+        });
+      }
+
+      const r = await runVisuOps(
+        resolved.path,
+        [
+          {
+            type: "download",
+            connection: args.connection,
+            flags: args.flags ?? 0,
+            add_runtime: args.add_runtime ?? false,
+          },
+        ],
+        false,
+      );
+      return visuResultToResponse(r, { lvpPath: resolved.path, connectionUsed: args.connection, ipUsed });
     }
-    const m = args.connection.match(/TCPIP:(.+)/i);
-    const ipUsed = m?.[1]?.split(":")[0] ?? args.connection;
 
-    const pf = await preflightHmi(resolved.path, args.connection);
-    if (!pf.ok) {
-      return respond({
-        ok: false,
-        preflight: pf,
-        connectionUsed: args.connection,
-        ipUsed,
-        errors: pf.problems.map(p => p.message),
-        hints: pf.problems.map(p => p.fix)
-      });
+    // apply_changes
+    const raw = args.operations ?? [];
+    const parsed = parseOperations(raw);
+    if ("errors" in parsed) {
+      return {
+        content: [{ type: "text" as const, text: `Invalid operations:\n${parsed.errors.join("\n")}` }],
+        isError: true,
+      };
     }
 
-    const r = await runVisuOps(
-      resolved.path,
-      [{ type: "download", connection: args.connection, flags: args.flags ?? 0, add_runtime: args.add_runtime ?? false }],
-      false
-    );
-    return visuResultToResponse(r, { lvpPath: resolved.path, connectionUsed: args.connection, ipUsed });
-  }
-
-  // apply_changes
-  const raw = args.operations ?? [];
-  const parsed = parseOperations(raw);
-  if ("errors" in parsed) {
-    return {
-      content: [{ type: "text" as const, text: `Invalid operations:\n${parsed.errors.join("\n")}` }],
-      isError: true,
-    };
-  }
-
-  const visuOps: VisuOp[] = parsed.ops.map(toVisuOp);
-  const r = await runVisuOps(resolved.path, visuOps);
-  return visuResultToResponse(r, { lvpPath: resolved.path });
+    const visuOps: VisuOp[] = parsed.ops.map(toVisuOp);
+    const r = await runVisuOps(resolved.path, visuOps);
+    return visuResultToResponse(r, { lvpPath: resolved.path });
   });
 }

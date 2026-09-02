@@ -12,7 +12,7 @@ export function findLssPath(lcpPath: string): string | null {
       if (f.endsWith(".lss")) return join(lcpDir, f);
     }
   } catch {}
-  
+
   const parentDir = dirname(lcpDir);
   try {
     const parentFiles = readdirSync(parentDir);
@@ -57,10 +57,7 @@ export function parseConnectionTarget(conn: string): { ip?: string; port?: numbe
   return { ip: target };
 }
 
-export function resolveConnection(
-  lcpPath: string,
-  explicit?: string
-): ConnectionInfo {
+export function resolveConnection(lcpPath: string, explicit?: string): ConnectionInfo {
   if (explicit) {
     const { ip, port } = parseConnectionTarget(explicit);
     return { connection: explicit, ip, port, source: "explicit" };
@@ -140,17 +137,14 @@ export interface PreflightResult {
   ip?: string;
 }
 
-export async function preflightPlc(
-  lcpPath: string,
-  explicitConn?: string
-): Promise<PreflightResult> {
+export async function preflightPlc(lcpPath: string, explicitConn?: string): Promise<PreflightResult> {
   const problems: PreflightProblem[] = [];
 
   if (!existsSync(lcpPath)) {
     problems.push({
       code: "LCP_NOT_FOUND",
       message: `Project LCP file does not exist at ${lcpPath}`,
-      fix: "Select a valid project using select_project or specify a correct lcp_path."
+      fix: "Select a valid project using select_project or specify a correct lcp_path.",
     });
     return { ok: false, problems, connection: "" };
   }
@@ -160,7 +154,7 @@ export async function preflightPlc(
     problems.push({
       code: "NO_IP_RESOLVED",
       message: "Could not resolve an IP address for the connection.",
-      fix: "Provide an explicit connection string (e.g. TCPIP:10.195.0.50) or set the target IP using set_target_ip."
+      fix: "Provide an explicit connection string (e.g. TCPIP:10.195.0.50) or set the target IP using set_target_ip.",
     });
     return { ok: false, problems, connection: connInfo.connection };
   }
@@ -171,7 +165,7 @@ export async function preflightPlc(
     problems.push({
       code: "HOST_UNREACHABLE",
       message: `PLC host at ${connInfo.ip} is unreachable on port ${port}.`,
-      fix: "Ensure the PLC is powered on and connected to the network. Verify the IP using lasal_status or set the correct IP."
+      fix: "Ensure the PLC is powered on and connected to the network. Verify the IP using lasal_status or set the correct IP.",
     });
   }
 
@@ -179,21 +173,18 @@ export async function preflightPlc(
     ok: problems.length === 0,
     problems,
     connection: connInfo.connection,
-    ip: connInfo.ip
+    ip: connInfo.ip,
   };
 }
 
-export async function preflightHmi(
-  lvpPath: string,
-  explicitConn: string
-): Promise<PreflightResult> {
+export async function preflightHmi(lvpPath: string, explicitConn: string): Promise<PreflightResult> {
   const problems: PreflightProblem[] = [];
 
   if (!existsSync(lvpPath)) {
     problems.push({
       code: "LVP_NOT_FOUND",
       message: `VISUDesigner LVP file does not exist at ${lvpPath}`,
-      fix: "Verify that the VISUDesigner project path is correct."
+      fix: "Verify that the VISUDesigner project path is correct.",
     });
     return { ok: false, problems, connection: "" };
   }
@@ -202,7 +193,7 @@ export async function preflightHmi(
     problems.push({
       code: "NO_CONN_SPECIFIED",
       message: "No connection string specified for HMI download.",
-      fix: "Specify a visu_connection parameter."
+      fix: "Specify a visu_connection parameter.",
     });
     return { ok: false, problems, connection: "" };
   }
@@ -217,7 +208,7 @@ export async function preflightHmi(
     problems.push({
       code: "INVALID_HMI_CONN",
       message: `Invalid HMI connection string: ${explicitConn}`,
-      fix: "Provide a valid HMI connection string, e.g. 'TCPIP:10.195.0.51'."
+      fix: "Provide a valid HMI connection string, e.g. 'TCPIP:10.195.0.51'.",
     });
     return { ok: false, problems, connection: explicitConn };
   }
@@ -227,7 +218,7 @@ export async function preflightHmi(
     problems.push({
       code: "HMI_UNREACHABLE",
       message: `HMI host at ${ip} is unreachable on port ${port}.`,
-      fix: "Ensure the HMI is powered on and connected to the network. Verify the IP using lasal_status."
+      fix: "Ensure the HMI is powered on and connected to the network. Verify the IP using lasal_status.",
     });
   }
 
@@ -235,6 +226,6 @@ export async function preflightHmi(
     ok: problems.length === 0,
     problems,
     connection: explicitConn,
-    ip
+    ip,
   };
 }

@@ -8,7 +8,7 @@ import {
   resolveFontRef,
   resolveStyleClassRef,
   resolveTemplateRef,
-  resolveMediaRef
+  resolveMediaRef,
 } from "./visuDashboardIO.js";
 
 // Clean JSON helper for manifests (strips comments & trailing commas)
@@ -24,8 +24,26 @@ const manifestCache: Record<string, any> = {};
 export function loadControlManifest(projectDir: string, controlId: string): any {
   if (manifestCache[controlId]) return manifestCache[controlId];
 
-  const userPath = join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "user", controlId, `${controlId}.json`);
-  const sigmatekPath = join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "sigmatek", controlId, `${controlId}.json`);
+  const userPath = join(
+    projectDir,
+    "Runtime",
+    "DesignerRuntime",
+    "res",
+    "components",
+    "user",
+    controlId,
+    `${controlId}.json`,
+  );
+  const sigmatekPath = join(
+    projectDir,
+    "Runtime",
+    "DesignerRuntime",
+    "res",
+    "components",
+    "sigmatek",
+    controlId,
+    `${controlId}.json`,
+  );
 
   let manifest: any = null;
   if (existsSync(userPath)) {
@@ -81,9 +99,9 @@ export function encodeProperty(
   propName: string,
   manifestProp: any,
   sourceType: string,
-  value: any
+  value: any,
 ): { name: string; value: any; typeId: number; propTypeId: number; refId?: string; targetName?: string } {
-  const propType = manifestProp ? (manifestProp.propertyType || "none") : "none";
+  const propType = manifestProp ? manifestProp.propertyType || "none" : "none";
   let typeId = 0;
   let propTypeId = 2;
   let refId: string | undefined;
@@ -191,7 +209,7 @@ export function encodeProperty(
     name: propName,
     value,
     typeId,
-    propTypeId
+    propTypeId,
   };
   if (refId) {
     result.refId = refId;

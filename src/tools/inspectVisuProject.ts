@@ -17,7 +17,9 @@ export const inspectVisuProjectSchema = {
   filter: z
     .string()
     .optional()
-    .describe("Filter/query string (regex) for datapoint scan, or dashboard name/filename for dashboard_detail scope. Required when scope='datapoints' or scope='dashboard_detail'."),
+    .describe(
+      "Filter/query string (regex) for datapoint scan, or dashboard name/filename for dashboard_detail scope. Required when scope='datapoints' or scope='dashboard_detail'.",
+    ),
   limit: z
     .number()
     .int()
@@ -33,7 +35,7 @@ function readJson(filePath: string): any {
 async function scanDatapointsStream(
   filePath: string,
   filterRegex: RegExp,
-  limit: number
+  limit: number,
 ): Promise<Array<{ path: string; datatype: string }>> {
   const fileStream = createReadStream(filePath, { encoding: "utf-8" });
   const rl = createInterface({
@@ -58,7 +60,7 @@ async function scanDatapointsStream(
       continue;
     }
 
-    if (line.trim().startsWith(']')) {
+    if (line.trim().startsWith("]")) {
       if (nameStack.length > 0) {
         nameStack.pop();
       }
@@ -85,7 +87,7 @@ async function scanDatapointsStream(
       }
     }
 
-    if (line.trim().startsWith('}') || line.trim().startsWith('},')) {
+    if (line.trim().startsWith("}") || line.trim().startsWith("},")) {
       if (currentName) {
         const fullPath = [...nameStack, currentName].join(".");
         if (filterRegex.test(fullPath)) {
@@ -106,7 +108,7 @@ async function scanDatapointsStream(
 }
 
 async function getDatapointSummary(
-  filePath: string
+  filePath: string,
 ): Promise<{ roots: Array<{ name: string; datatype: string }>; total: number }> {
   const fileStream = createReadStream(filePath, { encoding: "utf-8" });
   const rl = createInterface({
@@ -132,7 +134,7 @@ async function getDatapointSummary(
       continue;
     }
 
-    if (line.trim().startsWith(']')) {
+    if (line.trim().startsWith("]")) {
       if (nameStack.length > 0) {
         nameStack.pop();
       }
@@ -159,7 +161,7 @@ async function getDatapointSummary(
       }
     }
 
-    if (line.trim().startsWith('}') || line.trim().startsWith('},')) {
+    if (line.trim().startsWith("}") || line.trim().startsWith("},")) {
       if (currentName) {
         total++;
         if (nameStack.length === 0) {
@@ -199,7 +201,10 @@ export async function inspectVisuProjectHandler(args: {
   // ── 1. Datapoints scope (optimized stream scan) ────────────────────────────
   if (scope === "datapoints") {
     if (!args.filter) {
-      return { content: [{ type: "text" as const, text: "filter is required when scope='datapoints'" }], isError: true };
+      return {
+        content: [{ type: "text" as const, text: "filter is required when scope='datapoints'" }],
+        isError: true,
+      };
     }
     const dpFile = join(projectDir, "Datapoints", "0_Datapoints.json");
     if (existsSync(dpFile)) {
@@ -219,7 +224,12 @@ export async function inspectVisuProjectHandler(args: {
   // ── 1.5. Dashboard Detail scope ──────────────────────────────────────────
   if (scope === "dashboard_detail") {
     if (!args.filter) {
-      return { content: [{ type: "text" as const, text: "filter (dashboard name/filename) is required when scope='dashboard_detail'" }], isError: true };
+      return {
+        content: [
+          { type: "text" as const, text: "filter (dashboard name/filename) is required when scope='dashboard_detail'" },
+        ],
+        isError: true,
+      };
     }
     let foundPath: string | null = null;
     for (const dirName of ["Dashboards", "GlobalDashboards", "Window", "ControlTemplate"]) {
@@ -239,7 +249,10 @@ export async function inspectVisuProjectHandler(args: {
     }
 
     if (!foundPath) {
-      return { content: [{ type: "text" as const, text: `Dashboard/window/template with name '${args.filter}' not found` }], isError: true };
+      return {
+        content: [{ type: "text" as const, text: `Dashboard/window/template with name '${args.filter}' not found` }],
+        isError: true,
+      };
     }
 
     try {
@@ -256,8 +269,8 @@ export async function inspectVisuProjectHandler(args: {
           controlId: el.controlId,
           designTimeId: el.designTimeId,
           instanceId: el.instanceId,
-          properties: el.properties ?? []
-        }))
+          properties: el.properties ?? [],
+        })),
       };
     } catch (e: any) {
       errors.push(`Error reading dashboard: ${e.message}`);
@@ -363,7 +376,11 @@ export async function inspectVisuProjectHandler(args: {
   if (existsSync(locDir)) {
     try {
       result.languages = readdirSync(locDir).filter((d) => {
-        try { return readdirSync(join(locDir, d)).length > 0; } catch { return false; }
+        try {
+          return readdirSync(join(locDir, d)).length > 0;
+        } catch {
+          return false;
+        }
       });
     } catch (e: any) {
       errors.push(`languages: ${e.message}`);
@@ -424,7 +441,7 @@ export async function inspectVisuProjectHandler(args: {
                     schemes.push({
                       type: typeDir,
                       name: s.name,
-                      designTimeId: s.designTimeId
+                      designTimeId: s.designTimeId,
                     });
                   }
                 }

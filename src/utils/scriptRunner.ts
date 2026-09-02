@@ -59,22 +59,27 @@ function executeEngine(
   timeoutMs: number,
 ): Promise<{ exitCode: number; timedOut: boolean; stderr: string }> {
   return new Promise((resolve) => {
-    const child = execFile(exe, args, {
-      timeout: timeoutMs,
-      windowsHide: true,
-      maxBuffer: 10 * 1024 * 1024,
-    }, (error, _stdout, stderr) => {
-      if (error) {
-        const timedOut = error.killed || (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
-        resolve({
-          exitCode: error.code !== undefined && typeof error.code === "number" ? error.code : (child.exitCode ?? 1),
-          timedOut,
-          stderr: stderr?.toString() ?? "",
-        });
-      } else {
-        resolve({ exitCode: 0, timedOut: false, stderr: "" });
-      }
-    });
+    const child = execFile(
+      exe,
+      args,
+      {
+        timeout: timeoutMs,
+        windowsHide: true,
+        maxBuffer: 10 * 1024 * 1024,
+      },
+      (error, _stdout, stderr) => {
+        if (error) {
+          const timedOut = error.killed || (error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+          resolve({
+            exitCode: error.code !== undefined && typeof error.code === "number" ? error.code : (child.exitCode ?? 1),
+            timedOut,
+            stderr: stderr?.toString() ?? "",
+          });
+        } else {
+          resolve({ exitCode: 0, timedOut: false, stderr: "" });
+        }
+      },
+    );
   });
 }
 
@@ -178,9 +183,9 @@ export async function runEngineScript(
   const { steps, allConfirmed } = parseSteps(opts.stepsPath, opts.expectedSteps);
 
   if (!allConfirmed && log.errors.length === 0 && !timedOut) {
-    const lastConfirmed = [...opts.expectedSteps].reverse().find((s) =>
-      steps.find((st) => st.label === s && st.status === "ok"),
-    );
+    const lastConfirmed = [...opts.expectedSteps]
+      .reverse()
+      .find((s) => steps.find((st) => st.label === s && st.status === "ok"));
     const firstMissing = opts.expectedSteps.find((s) => !steps.find((st) => st.label === s && st.status === "ok"));
     errors.push(
       `Engine exited but not all expected operations completed. ` +

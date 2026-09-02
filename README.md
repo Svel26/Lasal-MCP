@@ -1,5 +1,10 @@
 # Sigmatek LASAL MCP Server
 
+[![CI](https://github.com/Svel26/Lasal-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/Svel26/Lasal-MCP/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/lasal-mcp.svg)](https://www.npmjs.com/package/lasal-mcp)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 A Model Context Protocol (MCP) server for automating the **Sigmatek LASAL** software suite. It gives AI coding assistants (Claude, Gemini, Cursor, etc.) the ability to compile, deploy to hardware, control PLCs, read/write live values, run HMI simulations, and automate a headless browser — while the agent edits project files directly.
 
 > **Warning:** This is NOT an official Sigmatek product. This project is in active development — bugs and unpredictable behavior are likely. **Do not use on production projects** without backups or version control.
@@ -27,13 +32,70 @@ The MCP only exposes tools for operations that **require an external engine or h
   - **LASAL CLASS 2** (PLC engineering).
   - **VISUDesigner** (HMI design).
 
-## Installation & Setup
+## Quick Start (with `npx`)
+
+No repository clone or build required — configure your favorite MCP client to run directly via `npx`:
+
+### Claude Desktop
+
+Add to `%APPDATA%\Claude\claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "lasal-mcp": {
+      "command": "npx",
+      "args": ["-y", "lasal-mcp"]
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to your project's `.cursor/mcp.json` (or global Cursor MCP settings):
+
+```json
+{
+  "mcpServers": {
+    "lasal-mcp": {
+      "command": "npx",
+      "args": ["-y", "lasal-mcp"]
+    }
+  }
+}
+```
+
+### Claude Code
+
+Run:
 
 ```bash
-git clone <repository-url>
+claude mcp add lasal-mcp npx -y lasal-mcp
+```
+
+---
+
+## Local Installation & Setup (for Developers)
+
+```bash
+git clone https://github.com/Svel26/Lasal-MCP.git
 cd Lasal-MCP
 npm install
 npm run build
+```
+
+When running from a local clone, point your MCP client to:
+
+```json
+{
+  "mcpServers": {
+    "lasal-mcp": {
+      "command": "node",
+      "args": ["C:/path/to/Lasal-MCP/dist/server.js"]
+    }
+  }
+}
 ```
 
 ## Configuration
@@ -54,42 +116,6 @@ npm run build
 | `LASAL_LARS_CONFIG` | `%APPDATA%\lasalos2.xml` | LARS workspace config file |
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
 | `LASAL_MCP_SCRATCH_MAX_AGE_H` | `24` | Hours before temp files are cleaned |
-
-### Connecting to MCP Clients
-
-#### Claude Desktop
-
-Add to `%APPDATA%\Claude\claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "lasal-mcp": {
-      "command": "node",
-      "args": ["C:/path/to/Lasal-MCP/dist/server.js"],
-      "env": {
-        "LASAL_CLASS2_EXE": "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe",
-        "LASAL_VISUDESIGNER_EXE": "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe"
-      }
-    }
-  }
-}
-```
-
-#### Claude Code
-
-Add to `.claude/settings.json` or run `claude mcp add`:
-
-```json
-{
-  "mcpServers": {
-    "lasal-mcp": {
-      "command": "node",
-      "args": ["C:/path/to/Lasal-MCP/dist/server.js"]
-    }
-  }
-}
-```
 
 ## Available Tools
 
@@ -157,3 +183,16 @@ Notes:
 - Downloads to LARS automatically include the PC loader (`addLoaderAnyway`).
 - `hmi_runtime` remaps published stations.json entries to running LARS instances,
   so the web HMI talks to the local simulation.
+
+## Contributing
+
+Contributions are welcome! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code standards, adding tools, and submitting pull requests.
+
+## Releasing & CI/CD
+
+Automated releases and publishing to npm are powered by GitHub Actions. Releases can be triggered manually via workflow dispatch with automated version bumping or by pushing version tags (`v*.*.*`).
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+

@@ -4,9 +4,39 @@
   "description": "MCP server for LASAL IDE automation",
   "type": "module",
   "main": "dist/server.js",
+  "bin": {
+    "lasal-mcp": "dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "Svel26 <sjjansen06@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Svel26/Lasal-MCP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Svel26/Lasal-MCP/issues"
+  },
+  "homepage": "https://github.com/Svel26/Lasal-MCP#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "lasal",
+    "sigmatek",
+    "plc",
+    "automation",
+    "hmi",
+    "lars"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run test && npm run build",
     "start": "node dist/server.js",
     "inspector": "npx @modelcontextprotocol/inspector node dist/server.js",
     "test": "vitest run",

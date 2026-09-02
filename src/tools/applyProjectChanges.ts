@@ -92,8 +92,7 @@ const DeleteClassOp = z.object({
 
 const CompileOp = z.object({
   type: z.literal("compile"),
-  options: z.enum(["RebuildAll", "BuildChanges", "UserClassesOnly", "NoDebugInfo"])
-    .optional().default("RebuildAll"),
+  options: z.enum(["RebuildAll", "BuildChanges", "UserClassesOnly", "NoDebugInfo"]).optional().default("RebuildAll"),
 });
 
 const DownloadOp = z.object({
@@ -179,15 +178,29 @@ const SetParameterValueOp = z.object({
 });
 
 const OperationSchema = z.discriminatedUnion("type", [
-  CreateNetworkOp, DeleteNetworkOp, RenameNetworkOp, DuplicateNetworkOp,
-  AddObjectOp, RemoveObjectOp, RenameObjectOp, ChangeObjectClassOp,
-  CreateConnectionOp, DeleteConnectionOp, SetInitValueOp,
+  CreateNetworkOp,
+  DeleteNetworkOp,
+  RenameNetworkOp,
+  DuplicateNetworkOp,
+  AddObjectOp,
+  RemoveObjectOp,
+  RenameObjectOp,
+  ChangeObjectClassOp,
+  CreateConnectionOp,
+  DeleteConnectionOp,
+  SetInitValueOp,
   DeleteClassOp,
-  CompileOp, DownloadOp,
-  SetTaskOrderOp, SetTaskTimeOp, SetTaskCpuCoreOp, SetMultiCpuCoreOp,
+  CompileOp,
+  DownloadOp,
+  SetTaskOrderOp,
+  SetTaskTimeOp,
+  SetTaskCpuCoreOp,
+  SetMultiCpuCoreOp,
   SetVisualizedFlagOp,
-  SetCommentNetworkOp, SetCommentObjectOp,
-  SetNetworkOptionsOp, ResetNetworkOptionsOp,
+  SetCommentNetworkOp,
+  SetCommentObjectOp,
+  SetNetworkOptionsOp,
+  ResetNetworkOptionsOp,
   MoveNetworkToFolderOp,
   SetParameterValueOp,
 ]);
@@ -203,47 +216,122 @@ export const applyProjectChangesSchema = {
     .array(OperationSchema)
     .describe(
       "Ordered list of CLASS 2 batch engine operations. " +
-      "Available types: create_network, delete_network, rename_network, duplicate_network, " +
-      "add_object, remove_object, rename_object, change_object_class, " +
-      "create_connection, delete_connection, set_init_value, delete_class, " +
-      "compile, download, set_task_order, set_task_time, set_task_cpu_core, " +
-      "set_multi_cpu_core, set_visualized_flag, set_comment_network, set_comment_object, " +
-      "set_network_options, reset_network_options, move_network_to_folder, set_parameter_value"
+        "Available types: create_network, delete_network, rename_network, duplicate_network, " +
+        "add_object, remove_object, rename_object, change_object_class, " +
+        "create_connection, delete_connection, set_init_value, delete_class, " +
+        "compile, download, set_task_order, set_task_time, set_task_cpu_core, " +
+        "set_multi_cpu_core, set_visualized_flag, set_comment_network, set_comment_object, " +
+        "set_network_options, reset_network_options, move_network_to_folder, set_parameter_value",
     ),
-  dry_run: z
-    .boolean()
-    .optional()
-    .default(false)
-    .describe("Validate operations without applying them."),
+  dry_run: z.boolean().optional().default(false).describe("Validate operations without applying them."),
 };
 
 function toBatchOp(op: Operation): BatchOp {
   switch (op.type) {
-    case "create_network": return { type: "create_network", name: op.name };
-    case "delete_network": return { type: "delete_network", name: op.name, deleteConnections: op.deleteConnections };
-    case "rename_network": return { type: "rename_network", oldName: op.oldName, newName: op.newName };
-    case "duplicate_network": return { type: "duplicate_network", name: op.name, newName: op.newName };
-    case "add_object": return { type: "add_object", network: op.network, className: op.className, objectName: op.objectName, x: op.x, y: op.y, visualized: op.visualized };
-    case "remove_object": return { type: "remove_object", network: op.network, objectName: op.objectName, deleteConnections: op.deleteConnections };
-    case "rename_object": return { type: "rename_object", network: op.network, oldName: op.oldName, newName: op.newName };
-    case "change_object_class": return { type: "change_object_class", network: op.network, objectName: op.objectName, className: op.className };
-    case "create_connection": return { type: "create_connection", network: op.network, fromObject: op.fromObject, fromClient: op.fromClient, toObject: op.toObject, toServer: op.toServer };
-    case "delete_connection": return { type: "delete_connection", network: op.network, objectName: op.objectName, clientName: op.clientName };
-    case "set_init_value": return { type: "set_init_value", network: op.network, objectName: op.objectName, channelName: op.channelName, value: op.value };
-    case "delete_class": return { type: "delete_class", className: op.className, force: op.force };
-    case "compile": return { type: "compile", optionName: op.options };
-    case "download": return { type: "download", connection: op.connection ?? "", addLoaderAnyway: op.add_loader_anyway };
-    case "set_task_order": return { type: "set_task_order", network: op.network, objectName: op.objectName, task: op.task, position: op.position };
-    case "set_task_time": return { type: "set_task_time", network: op.network, objectName: op.objectName, task: op.task, time: op.time };
-    case "set_task_cpu_core": return { type: "set_task_cpu_core", network: op.network, objectName: op.objectName, task: op.task, core: op.core };
-    case "set_multi_cpu_core": return { type: "set_multi_cpu_core", multiCore: op.multiCore };
-    case "set_visualized_flag": return { type: "set_visualized_flag", network: op.network, objectName: op.objectName, isVisualized: op.isVisualized };
-    case "set_comment_network": return { type: "set_comment_network", network: op.network, comment: op.comment };
-    case "set_comment_object": return { type: "set_comment_object", network: op.network, objectName: op.objectName, comment: op.comment };
-    case "set_network_options": return { type: "set_network_options", network: op.network, optionNames: op.optionNames, resetAllOthers: op.resetAllOthers };
-    case "reset_network_options": return { type: "reset_network_options", network: op.network, optionNames: op.optionNames };
-    case "move_network_to_folder": return { type: "move_network_to_folder", network: op.network, folder: op.folder };
-    case "set_parameter_value": return { type: "set_parameter_value", network: op.network, objectName: op.objectName, parameterName: op.parameterName, value: op.value };
+    case "create_network":
+      return { type: "create_network", name: op.name };
+    case "delete_network":
+      return { type: "delete_network", name: op.name, deleteConnections: op.deleteConnections };
+    case "rename_network":
+      return { type: "rename_network", oldName: op.oldName, newName: op.newName };
+    case "duplicate_network":
+      return { type: "duplicate_network", name: op.name, newName: op.newName };
+    case "add_object":
+      return {
+        type: "add_object",
+        network: op.network,
+        className: op.className,
+        objectName: op.objectName,
+        x: op.x,
+        y: op.y,
+        visualized: op.visualized,
+      };
+    case "remove_object":
+      return {
+        type: "remove_object",
+        network: op.network,
+        objectName: op.objectName,
+        deleteConnections: op.deleteConnections,
+      };
+    case "rename_object":
+      return { type: "rename_object", network: op.network, oldName: op.oldName, newName: op.newName };
+    case "change_object_class":
+      return { type: "change_object_class", network: op.network, objectName: op.objectName, className: op.className };
+    case "create_connection":
+      return {
+        type: "create_connection",
+        network: op.network,
+        fromObject: op.fromObject,
+        fromClient: op.fromClient,
+        toObject: op.toObject,
+        toServer: op.toServer,
+      };
+    case "delete_connection":
+      return { type: "delete_connection", network: op.network, objectName: op.objectName, clientName: op.clientName };
+    case "set_init_value":
+      return {
+        type: "set_init_value",
+        network: op.network,
+        objectName: op.objectName,
+        channelName: op.channelName,
+        value: op.value,
+      };
+    case "delete_class":
+      return { type: "delete_class", className: op.className, force: op.force };
+    case "compile":
+      return { type: "compile", optionName: op.options };
+    case "download":
+      return { type: "download", connection: op.connection ?? "", addLoaderAnyway: op.add_loader_anyway };
+    case "set_task_order":
+      return {
+        type: "set_task_order",
+        network: op.network,
+        objectName: op.objectName,
+        task: op.task,
+        position: op.position,
+      };
+    case "set_task_time":
+      return { type: "set_task_time", network: op.network, objectName: op.objectName, task: op.task, time: op.time };
+    case "set_task_cpu_core":
+      return {
+        type: "set_task_cpu_core",
+        network: op.network,
+        objectName: op.objectName,
+        task: op.task,
+        core: op.core,
+      };
+    case "set_multi_cpu_core":
+      return { type: "set_multi_cpu_core", multiCore: op.multiCore };
+    case "set_visualized_flag":
+      return {
+        type: "set_visualized_flag",
+        network: op.network,
+        objectName: op.objectName,
+        isVisualized: op.isVisualized,
+      };
+    case "set_comment_network":
+      return { type: "set_comment_network", network: op.network, comment: op.comment };
+    case "set_comment_object":
+      return { type: "set_comment_object", network: op.network, objectName: op.objectName, comment: op.comment };
+    case "set_network_options":
+      return {
+        type: "set_network_options",
+        network: op.network,
+        optionNames: op.optionNames,
+        resetAllOthers: op.resetAllOthers,
+      };
+    case "reset_network_options":
+      return { type: "reset_network_options", network: op.network, optionNames: op.optionNames };
+    case "move_network_to_folder":
+      return { type: "move_network_to_folder", network: op.network, folder: op.folder };
+    case "set_parameter_value":
+      return {
+        type: "set_parameter_value",
+        network: op.network,
+        objectName: op.objectName,
+        parameterName: op.parameterName,
+        value: op.value,
+      };
   }
 }
 

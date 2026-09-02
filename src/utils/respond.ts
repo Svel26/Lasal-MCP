@@ -16,6 +16,6 @@ export function fail(message: string, hints: string[], extra?: object): ToolResp
     ok: false,
     error: message,
     hints,
-    ...extra
+    ...extra,
   });
 }

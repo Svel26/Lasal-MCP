@@ -7,12 +7,10 @@ import { SCRATCH_MAX_AGE_H } from "./config.js";
 // ─── Executable Paths ────────────────────────────────────────────────────────
 
 export const VISUDESIGNER_EXE =
-  process.env.LASAL_VISUDESIGNER_EXE ||
-  "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
+  process.env.LASAL_VISUDESIGNER_EXE || "C:\\Program Files\\Sigmatek\\Lasal\\VISUDesigner\\VISUDesigner.exe";
 
 export const CLASS2_EXE =
-  process.env.LASAL_CLASS2_EXE ||
-  "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
+  process.env.LASAL_CLASS2_EXE || "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
 
 function extractVersion(name: string): number[] {
   const m = name.match(/V(\d+(?:_\d+)*)/);
@@ -45,12 +43,12 @@ export function resolveDataServiceExe(): { path: string; searched: string[] } {
   }
 
   try {
-    const dirs = readdirSync(root).filter(d => d.startsWith("Lasal VISUDesigner V"));
+    const dirs = readdirSync(root).filter((d) => d.startsWith("Lasal VISUDesigner V"));
     const sortedDirs = versionSort(dirs);
     for (const dir of sortedDirs) {
       const parentPath = join(root, dir);
       try {
-        const subDirs = readdirSync(parentPath).filter(d => d.startsWith("Lasal VISUDataService V"));
+        const subDirs = readdirSync(parentPath).filter((d) => d.startsWith("Lasal VISUDataService V"));
         const sortedSubDirs = versionSort(subDirs);
         for (const subDir of sortedSubDirs) {
           const exePath = join(parentPath, subDir, "Windows", "LasalVISUDataService.exe");

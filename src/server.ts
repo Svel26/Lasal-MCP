@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { selectProjectSchema, selectProjectHandler } from "./tools/selectProject.js";
@@ -11,9 +12,12 @@ import {
 import { deployAllSchema, deployAllHandler } from "./tools/deployAll.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 import {
-  buildProjectSchema, buildProjectHandler,
-  controlPlcSchema, controlPlcHandler,
-  plcValuesSchema, plcValuesHandler,
+  buildProjectSchema,
+  buildProjectHandler,
+  controlPlcSchema,
+  controlPlcHandler,
+  plcValuesSchema,
+  plcValuesHandler,
 } from "./tools/plcControl.js";
 import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
 import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
@@ -33,28 +37,28 @@ server.tool(
   "select_project",
   "Set the active LASAL project by directory path. Call first — all other tools default to this project.",
   selectProjectSchema,
-  selectProjectHandler
+  selectProjectHandler,
 );
 
 server.tool(
   "lasal_status",
   "Check project selection, station discovery, PLC/HMI reachability, engine paths, running processes, and HMI runtime health. Call to orient or diagnose connection issues.",
   lasalStatusSchema,
-  lasalStatusHandler
+  lasalStatusHandler,
 );
 
 server.tool(
   "manage_class2",
   "Open or close the LASAL CLASS 2 IDE GUI. Close before running batch operations.",
   manageClass2Schema,
-  manageClass2Handler
+  manageClass2Handler,
 );
 
 server.tool(
   "manage_visudesigner",
   "Open or close the VISUDesigner GUI. Close before running automated visu operations.",
   manageVisuDesignerSchema,
-  manageVisuDesignerHandler
+  manageVisuDesignerHandler,
 );
 
 // ─── Build, deploy, PLC control ──────────────────────────────────────────────
@@ -63,35 +67,35 @@ server.tool(
   "build_project",
   "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first.",
   buildProjectSchema,
-  buildProjectHandler
+  buildProjectHandler,
 );
 
 server.tool(
   "control_plc",
   "Start, stop, or query PLC runtime state. Pings the target PLC before start/stop.",
   controlPlcSchema,
-  controlPlcHandler
+  controlPlcHandler,
 );
 
 server.tool(
   "plc_values",
   "Read or write live channel values on a running PLC. Channels use 'ObjectName.ChannelName' format. Auto-coerces types based on ST declarations.",
   plcValuesSchema,
-  plcValuesHandler
+  plcValuesHandler,
 );
 
 server.tool(
   "apply_project_changes",
   "Run CLASS 2 batch engine operations that cannot be done by editing files directly: create/delete/rename networks, add/remove/rename objects, create/delete connections, set init values, configure tasks, compile, download. Kills CLASS 2 IDE before running.",
   applyProjectChangesSchema,
-  applyProjectChangesHandler
+  applyProjectChangesHandler,
 );
 
 server.tool(
   "plc_diagnostics",
   "Run PLC diagnostics: trace recording, file upload/download/delete on PLC, or static code analysis.",
   plcDiagnosticsSchema,
-  plcDiagnosticsHandler
+  plcDiagnosticsHandler,
 );
 
 // ─── LARS local runtime simulation ───────────────────────────────────────────
@@ -105,7 +109,7 @@ server.tool(
     "set_station_target (point a station's .lss at its LARS instance), restore (revert .lss to the real target. " +
     "After set_station_target, build_project/control_plc/plc_values/deploy_all operate on the LARS instance automatically.",
   larsRuntimeSchema,
-  larsRuntimeHandler
+  larsRuntimeHandler,
 );
 
 // ─── VISUDesigner engine operations ──────────────────────────────────────────
@@ -114,7 +118,7 @@ server.tool(
   "visu_project",
   "Run VISUDesigner engine operations: update stations, publish, manage text lists/schemes/media/code modules, set datapoint properties, or download to HMI. These need the VISUDesigner engine — for direct dashboard JSON editing, edit the files in the project directly.",
   visuProjectSchema,
-  visuProjectHandler
+  visuProjectHandler,
 );
 
 // ─── Deploy pipeline ─────────────────────────────────────────────────────────
@@ -123,7 +127,7 @@ server.tool(
   "deploy_all",
   "Full deploy pipeline: compile → download PLC → start PLC → verify state → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags.",
   deployAllSchema,
-  deployAllHandler
+  deployAllHandler,
 );
 
 // ─── HMI runtime & browser ──────────────────────────────────────────────────
@@ -132,14 +136,14 @@ server.tool(
   "hmi_runtime",
   "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Use hmi_browser to interact with it afterwards.",
   hmiRuntimeSchema,
-  hmiRuntimeHandler
+  hmiRuntimeHandler,
 );
 
 server.tool(
   "hmi_browser",
   "Automate a headless Edge browser to test the HMI. Actions: open (navigate), screenshot (capture viewport or element), console (read logs/errors), eval (run JS), click, type, wait, close. ALWAYS use this after deploy to visually verify the HMI works.",
   hmiBrowserSchema,
-  hmiBrowserHandler
+  hmiBrowserHandler,
 );
 
 // ─── Resource: LASAL file format guide ───────────────────────────────────────
@@ -149,17 +153,19 @@ server.resource(
   "lasal://guide",
   {
     description: "Complete guide to LASAL file formats, file editing, HMI debugging, and the runtime JS API",
-    mimeType: "text/markdown"
+    mimeType: "text/markdown",
   },
   async () => {
     return {
-      contents: [{
-        uri: "lasal://guide",
-        mimeType: "text/markdown",
-        text: LASAL_GUIDE,
-      }]
+      contents: [
+        {
+          uri: "lasal://guide",
+          mimeType: "text/markdown",
+          text: LASAL_GUIDE,
+        },
+      ],
     };
-  }
+  },
 );
 
 const LASAL_GUIDE = `# LASAL Project Guide

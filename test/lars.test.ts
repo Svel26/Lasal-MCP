@@ -157,7 +157,6 @@ describe("gcLarsWorkspaces", () => {
   const emptyInstances: Record<string, LarsInstanceInfo> = {};
 
   function makeInstance(over: Partial<LarsInstanceInfo> = {}): Record<string, LarsInstanceInfo> {
-
     return {
       Proj_PLC: {
         name: "Proj_PLC",
@@ -168,8 +167,6 @@ describe("gcLarsWorkspaces", () => {
   }
 
   function makeLss(ip: string, port: string = "1964"): string {
-
-
     const sample = `<?xml version="1.0" encoding="ISO-8859-1" ?>
 <SlnStation Name="PLC" OnlineConnection="PLC50 (Project)" Color="12813661">
 \t<OnlineConnectionInfo>
@@ -180,14 +177,15 @@ describe("gcLarsWorkspaces", () => {
 
     writeFileSync(lssPath, sample, "latin1");
     return lssPath;
-
   }
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-gc-"));
     configPath = join(tempDir, "lasalos2.xml");
     process.env.LASAL_LARS_CONFIG = configPath;
-    writeFileSync(configPath, `<?xml version="1.0" encoding="UTF-8"?>
+    writeFileSync(
+      configPath,
+      `<?xml version="1.0" encoding="UTF-8"?>
 <LARSCONFIGURATIONS ConfigVersion="2">
   <WORKSPACE Name="DEFAULT">
     <MEMORY>
@@ -217,7 +215,9 @@ describe("gcLarsWorkspaces", () => {
     </IP_MAP>
   </WORKSPACE>
 </LARSCONFIGURATIONS>
-`, "utf-8");
+`,
+      "utf-8",
+    );
     lssPath = join(tempDir, "PLC.lss");
   });
 
@@ -238,7 +238,6 @@ describe("gcLarsWorkspaces", () => {
     expect(readLarsWorkspaces()).toHaveLength(1);
   });
 
-
   it("removes an auto-created workspace that is unreferenced", () => {
     upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
     makeLss("10.195.0.50");
@@ -251,7 +250,6 @@ describe("gcLarsWorkspaces", () => {
     expect(result.removed.map((r) => r.name)).toEqual(["Proj_PLC"]);
     expect(readLarsWorkspaces().map((w) => w.name)).toEqual(["DEFAULT"]);
   });
-
 
   it("keeps a workspace whose station .lss still points at it", () => {
     upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
@@ -267,12 +265,15 @@ describe("gcLarsWorkspaces", () => {
     expect(readLarsWorkspaces()).toHaveLength(2);
   });
 
-
   it("keeps a workspace referenced by a published DataService stations.json", () => {
     upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
     const dataDir = join(tempDir, "dataservice");
     mkdirSync(dataDir, { recursive: true });
-    writeFileSync(join(dataDir, "stations.json"), JSON.stringify({ stations: [{ name: "PLC", connection: "127.0.0.1:1964" }] }), "utf-8");
+    writeFileSync(
+      join(dataDir, "stations.json"),
+      JSON.stringify({ stations: [{ name: "PLC", connection: "127.0.0.1:1964" }] }),
+      "utf-8",
+    );
     const result = gcLarsWorkspaces({
       minAgeH: 0,
       isRunning: notRunning,
@@ -283,7 +284,6 @@ describe("gcLarsWorkspaces", () => {
     expect(result.removed).toHaveLength(0);
     expect(result.kept.map((k) => k.name)).toContain("Proj_PLC");
   });
-
 
   it("keeps running workspaces even when unreferenced", () => {
     upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
@@ -297,7 +297,6 @@ describe("gcLarsWorkspaces", () => {
     expect(result.removed).toHaveLength(0);
     expect(readLarsWorkspaces()).toHaveLength(2);
   });
-
 
   it("defers removal until the min age is reached, tracking candidates", () => {
     upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
@@ -323,7 +322,6 @@ describe("gcLarsWorkspaces", () => {
     expect(aged.removed.map((r) => r.name)).toEqual(["Proj_PLC"]);
     expect(readLarsWorkspaces().map((w) => w.name)).toEqual(["DEFAULT"]);
   });
-
 
   it("dry run reports removals without deleting", () => {
     upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });

@@ -16,7 +16,15 @@ import {
   gcLarsWorkspaces,
   type LarsWorkspace,
 } from "../utils/lars.js";
-import { readState, writeState, getLarsInstance, setLarsInstance, removeLarsInstance, type LarsInstanceInfo, type LasalState } from "../state.js";
+import {
+  readState,
+  writeState,
+  getLarsInstance,
+  setLarsInstance,
+  removeLarsInstance,
+  type LarsInstanceInfo,
+  type LasalState,
+} from "../state.js";
 import { HMI_DIR, LARS_GC_MIN_AGE_H, LARS_GC_STATIONS_DIRS } from "../utils/config.js";
 import { findLsmPath, parseSolution, readVisuStationIds } from "../utils/projectScanner.js";
 import { respond, fail } from "../utils/respond.js";
@@ -30,16 +38,20 @@ export const larsRuntimeSchema = {
         "'start' launches a LARS instance (auto-creates the workspace first if the station is known but unconfigured), 'stop' terminates it, 'remove' deletes its workspace config. " +
         "'gc' runs lazy garbage collection: deletes auto-created workspaces that are not running and no longer referenced by any station .lss or published DataService stations.json. " +
         "'set_station_target' points a station's .lss at its LARS instance (127.0.0.1:<port>); 'restore' reverts to the saved real target. " +
-        "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore')."
+        "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore').",
     ),
   name: z
     .string()
     .optional()
-    .describe("LARS workspace name (e.g. 'VisuPalletizer_PLC'). Required for start/stop/remove/set_station_target/restore when station is omitted."),
+    .describe(
+      "LARS workspace name (e.g. 'VisuPalletizer_PLC'). Required for start/stop/remove/set_station_target/restore when station is omitted.",
+    ),
   station: z
     .string()
     .optional()
-    .describe("Station name from the solution (e.g. 'PLC', 'HMI', 'Local'). Picks the matching workspace. Mutually exclusive with name."),
+    .describe(
+      "Station name from the solution (e.g. 'PLC', 'HMI', 'Local'). Picks the matching workspace. Mutually exclusive with name.",
+    ),
   lcp_path: z
     .string()
     .optional()
@@ -57,10 +69,13 @@ export const larsRuntimeSchema = {
     .int()
     .min(0)
     .optional()
-    .describe("With action 'gc': only delete workspaces unreferenced for at least this many hours (overrides LASAL_MCP_LARS_GC_MIN_AGE_H; 0 = immediately."),
+    .describe(
+      "With action 'gc': only delete workspaces unreferenced for at least this many hours (overrides LASAL_MCP_LARS_GC_MIN_AGE_H; 0 = immediately.",
+    ),
 };
 
-type LarsAction = "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc" | "gc";
+type LarsAction =
+  "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc" | "gc";
 
 function detectRole(lcpPath: string): "plc" | "hmi" | "unknown" {
   try {
@@ -126,10 +141,7 @@ function detectStations(projectDir: string): DetectedStation[] {
   }
 }
 
-async function workspaceSummary(
-  ws: LarsWorkspace,
-  instances: Record<string, LarsInstanceInfo> | undefined
-) {
+async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, LarsInstanceInfo> | undefined) {
   const inst = instances?.[ws.name];
   const pids = getLarsPids(ws.name);
   const running = pids.length > 0;
@@ -152,7 +164,11 @@ async function workspaceSummary(
   };
 }
 
-function requireWorkspace(args: { name?: string; station?: string }): { workspace?: LarsWorkspace; instance?: LarsInstanceInfo; error?: string } {
+function requireWorkspace(args: { name?: string; station?: string }): {
+  workspace?: LarsWorkspace;
+  instance?: LarsInstanceInfo;
+  error?: string;
+} {
   const state = readState();
   const workspaces = readLarsWorkspaces();
   const instances = state.larsInstances ?? {};
@@ -198,7 +214,7 @@ function runAutoGc(state: LasalState, dryRun: boolean = false) {
  */
 function ensureWorkspaceForStart(
   args: { name?: string; station?: string; project_dir?: string },
-  state: LasalState
+  state: LasalState,
 ): { workspace?: LarsWorkspace; instance?: LarsInstanceInfo; autoCreated?: boolean; error?: string } {
   const workspaces = readLarsWorkspaces();
 
@@ -212,7 +228,9 @@ function ensureWorkspaceForStart(
       });
       return { workspace, instance: inst, autoCreated: true };
     }
-    return { error: `No LARS workspace named '${args.name}' found and no instance bookkeeping exists — run lars_runtime setup first.` };
+    return {
+      error: `No LARS workspace named '${args.name}' found and no instance bookkeeping exists — run lars_runtime setup first.`,
+    };
   }
 
   if (args.station) {
@@ -252,7 +270,9 @@ function ensureWorkspaceForStart(
         return { workspace, instance: info, autoCreated: true };
       }
     }
-    return { error: `No LARS instance for station '${args.station}' found and none detectable in the solution — run lars_runtime setup first.` };
+    return {
+      error: `No LARS instance for station '${args.station}' found and none detectable in the solution — run lars_runtime setup first.`,
+    };
   }
 
   return { error: "Provide either 'name' (workspace name) or 'station' (station name." };
@@ -283,8 +303,7 @@ export async function larsRuntimeHandler(args: {
     const unconfigured = detected
       .filter(
         (d) =>
-          projectName === null ||
-          !workspaces.some((w) => w.name === safeWorkspaceName(projectName, d.stationName))
+          projectName === null || !workspaces.some((w) => w.name === safeWorkspaceName(projectName, d.stationName)),
       )
       .map((d) => ({ stationName: d.stationName, lcpPath: d.lcpPath, role: d.role }));
 
@@ -303,7 +322,7 @@ export async function larsRuntimeHandler(args: {
       hint: "Call lars_runtime setup to create workspaces for all stations, then start + set_station_target per station. Unreferenced auto-created workspaces are cleaned up automatically.",
     });
   }
-if (action === "setup") {
+  if (action === "setup") {
     const projectDir = args.project_dir ?? state.currentProject;
 
     if (!projectDir) {
@@ -325,7 +344,12 @@ if (action === "setup") {
 
     if (args.lcp_path) {
       // Single lcp: build a workspace named after the project + lcp base
-      const lcpBase = args.lcp_path.split(/[\\/]/).filter(Boolean).pop()?.replace(/\.lcp$/i, "") ?? "project";
+      const lcpBase =
+        args.lcp_path
+          .split(/[\\/]/)
+          .filter(Boolean)
+          .pop()
+          ?.replace(/\.lcp$/i, "") ?? "project";
       const name = safeWorkspaceName(projectName, lcpBase);
       const role = detectRole(args.lcp_path);
       const { workspace } = upsertLarsWorkspace(name, {
@@ -342,7 +366,10 @@ if (action === "setup") {
       created.push({ name: workspace.name, onlinePort: workspace.onlinePort, lcpPath: args.lcp_path, role });
     } else if (args.station) {
       const station = stations.find((s) => s.stationName === args.station);
-      if (!station) return fail(`Station '${args.station}' not found in ${projectDir}.`, ["Check lasal_status for the station list."]);
+      if (!station)
+        return fail(`Station '${args.station}' not found in ${projectDir}.`, [
+          "Check lasal_status for the station list.",
+        ]);
       const name = safeWorkspaceName(projectName, station.stationName);
       const { workspace } = upsertLarsWorkspace(name, {
         classProjectPath: station.lcpPath,
@@ -358,7 +385,13 @@ if (action === "setup") {
         role: station.role,
       });
       writeState(state);
-      created.push({ name: workspace.name, onlinePort: workspace.onlinePort, stationName: station.stationName, lcpPath: station.lcpPath, role: station.role });
+      created.push({
+        name: workspace.name,
+        onlinePort: workspace.onlinePort,
+        stationName: station.stationName,
+        lcpPath: station.lcpPath,
+        role: station.role,
+      });
     } else {
       for (const station of stations) {
         const name = safeWorkspaceName(projectName, station.stationName);
@@ -375,13 +408,21 @@ if (action === "setup") {
           projectDir,
           role: station.role,
         });
-        created.push({ name: workspace.name, onlinePort: workspace.onlinePort, stationName: station.stationName, lcpPath: station.lcpPath, role: station.role });
+        created.push({
+          name: workspace.name,
+          onlinePort: workspace.onlinePort,
+          stationName: station.stationName,
+          lcpPath: station.lcpPath,
+          role: station.role,
+        });
       }
       writeState(state);
     }
 
     if (created.length === 0) {
-      return fail("No stations with .lcp projects found.", ["Ensure the solution has a .lsm file with station .lss files."]);
+      return fail("No stations with .lcp projects found.", [
+        "Ensure the solution has a .lsm file with station .lss files.",
+      ]);
     }
 
     return respond({
@@ -391,7 +432,7 @@ if (action === "setup") {
     });
   }
 
-if (action === "gc") {
+  if (action === "gc") {
     const dryRun = args.dry_run ?? false;
     const gcResult = gcLarsWorkspaces({
       dryRun,
@@ -419,7 +460,14 @@ if (action === "gc") {
     });
   }
 
-  if (action === "start" || action === "stop" || action === "remove" || action === "set_station_target" || action === "restore" || action === "target_pc") {
+  if (
+    action === "start" ||
+    action === "stop" ||
+    action === "remove" ||
+    action === "set_station_target" ||
+    action === "restore" ||
+    action === "target_pc"
+  ) {
     // 'start' auto-creates the workspace when the station is known but unconfigured;
     // all other actions require an existing configured workspace.
 
@@ -470,7 +518,7 @@ if (action === "gc") {
         writeState(state);
       }
 
-return respond({
+      return respond({
         ok: true,
         name: workspace.name,
         onlinePort: workspace.onlinePort,
@@ -489,7 +537,9 @@ return respond({
     if (action === "set_station_target") {
       const inst = req.instance;
       if (!inst?.stationLssPath) {
-        return fail(`No station .lss known for workspace '${workspace.name}'.`, ["Run setup with the station linked first."]);
+        return fail(`No station .lss known for workspace '${workspace.name}'.`, [
+          "Run setup with the station linked first.",
+        ]);
       }
       if (!existsSync(inst.stationLssPath)) {
         return fail(`Station .lss not found: ${inst.stationLssPath}`, []);

@@ -160,7 +160,7 @@ function emitSchemeForRemove(def: { scheme_type: string; name: string }): string
 
 // Positions or entries to remove
 function emitSchemeForRemoveEntries(def: SchemeDef): string {
-  const positions = def.positions ?? (def.entries?.map((e) => e.position) ?? []);
+  const positions = def.positions ?? def.entries?.map((e) => e.position) ?? [];
   const elems = positions.map((p) => `lvd.SchemeEntry(${p})`).join(", ");
   return `lvd.Scheme(${emitStr(def.scheme_type)}, ${emitStr(def.name)}, None, [${elems}])`;
 }
@@ -185,16 +185,16 @@ export function buildVisuScript(
   ops: VisuOp[],
   logPath: string,
   stepsPath: string,
-  saveAtEnd = true
+  saveAtEnd = true,
 ): { script: string; expectedSteps: string[] } {
   const lines: string[] = [];
   const expectedSteps: string[] = ["LoadProject"];
 
   lines.push(
-    "    f_step = open(r\"" + stepsPath + "\", \"a\", encoding=\"utf-8\")",
-    "    f_step.write(\"STEP LoadProject OK\\n\")",
+    '    f_step = open(r"' + stepsPath + '", "a", encoding="utf-8")',
+    '    f_step.write("STEP LoadProject OK\\n")',
     "    f_step.close()",
-    ""
+    "",
   );
 
   for (let i = 0; i < ops.length; i++) {
@@ -239,16 +239,24 @@ export function buildVisuScript(
         opLines.push(`lvd.SetComponentTextListRevisions(prj, [${op.text_lists.map(emitTextList).join(", ")}])`);
         break;
       case "csv_export_text_lists":
-        opLines.push(`lvd.CsvExportTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
+        opLines.push(
+          `lvd.CsvExportTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`,
+        );
         break;
       case "csv_import_text_lists":
-        opLines.push(`lvd.CsvImportTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
+        opLines.push(
+          `lvd.CsvImportTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`,
+        );
         break;
       case "csv_export_component_text_lists":
-        opLines.push(`lvd.CsvExportComponentTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
+        opLines.push(
+          `lvd.CsvExportComponentTextLists(prj, ${emitStr(op.csv_path)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`,
+        );
         break;
       case "csv_import_component_text_lists":
-        opLines.push(`lvd.CsvImportComponentTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`);
+        opLines.push(
+          `lvd.CsvImportComponentTextLists(prj, ${emitStrList(op.file_paths)}, ${emitOptStrList(op.text_lists)}, ${emitOptStrList(op.languages)})`,
+        );
         break;
       case "set_datapoint_properties":
         opLines.push(`lvd.SetDatapointProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`);
@@ -275,7 +283,9 @@ export function buildVisuScript(
         opLines.push(`lvd.SetSchemeInputs(prj, [${op.schemes.map(emitSchemeForInput).join(", ")}])`);
         break;
       case "set_scheme_properties":
-        opLines.push(`lvd.SetSchemeProperties(prj, ${emitStr(op.scheme_type)}, [${op.properties.map(emitPropertySet).join(", ")}])`);
+        opLines.push(
+          `lvd.SetSchemeProperties(prj, ${emitStr(op.scheme_type)}, [${op.properties.map(emitPropertySet).join(", ")}])`,
+        );
         break;
       case "set_scheme_entry_properties":
         opLines.push(`lvd.SetSchemeEntryProperties(prj, [${op.schemes.map(emitSchemeFull).join(", ")}])`);
@@ -313,7 +323,7 @@ export function buildVisuScript(
       `    f_step = open(r"${stepsPath}", "a", encoding="utf-8")`,
       `    f_step.write("STEP ${label} OK\\n")`,
       `    f_step.close()`,
-      ""
+      "",
     );
   }
 
@@ -324,7 +334,7 @@ export function buildVisuScript(
       `    f_step = open(r"${stepsPath}", "a", encoding="utf-8")`,
       `    f_step.write("STEP SaveProject OK\\n")`,
       `    f_step.close()`,
-      ""
+      "",
     );
   }
 
@@ -334,35 +344,36 @@ export function buildVisuScript(
     `    f_step = open(r"${stepsPath}", "a", encoding="utf-8")`,
     `    f_step.write("STEP CloseProject OK\\n")`,
     `    f_step.close()`,
-    ""
+    "",
   );
 
-  const finalScript = [
-    "import sys",
-    "import traceback",
-    `log_file = open(${emitStr(logPath)}, "w", encoding="utf-8")`,
-    "sys.stdout = log_file",
-    "sys.stderr = log_file",
-    "",
-    "import sigmatek.lasal.lvd as lvd",
-    "lvd.SetExceptionOnError(True)",
-    "",
-    "try:",
-    `    prj = lvd.LoadProject(${emitStr(lvpPath)})`,
-    "    if prj is None: raise RuntimeError('Failed to load project')",
-    "",
-    lines.join("\n"),
-    "except Exception as e:",
-    "    print('(ERROR) Exception occurred during script execution:')",
-    "    traceback.print_exc()",
-    "    sys.exit(1)",
-    "finally:",
-    "    log_file.close()"
-  ].join("\n") + "\n";
+  const finalScript =
+    [
+      "import sys",
+      "import traceback",
+      `log_file = open(${emitStr(logPath)}, "w", encoding="utf-8")`,
+      "sys.stdout = log_file",
+      "sys.stderr = log_file",
+      "",
+      "import sigmatek.lasal.lvd as lvd",
+      "lvd.SetExceptionOnError(True)",
+      "",
+      "try:",
+      `    prj = lvd.LoadProject(${emitStr(lvpPath)})`,
+      "    if prj is None: raise RuntimeError('Failed to load project')",
+      "",
+      lines.join("\n"),
+      "except Exception as e:",
+      "    print('(ERROR) Exception occurred during script execution:')",
+      "    traceback.print_exc()",
+      "    sys.exit(1)",
+      "finally:",
+      "    log_file.close()",
+    ].join("\n") + "\n";
 
   return {
     script: finalScript,
-    expectedSteps
+    expectedSteps,
   };
 }
 

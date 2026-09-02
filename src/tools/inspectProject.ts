@@ -1,13 +1,6 @@
 import { existsSync } from "fs";
 import { z } from "zod";
-import {
-  parseLcp,
-  parseStClass,
-  parseLcn,
-  type LcpInfo,
-  type StClassInfo,
-  type LcnInfo,
-} from "../utils/lasalXml.js";
+import { parseLcp, parseStClass, parseLcn, type LcpInfo, type StClassInfo, type LcnInfo } from "../utils/lasalXml.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 
 export const inspectProjectSchema = {
@@ -20,7 +13,7 @@ export const inspectProjectSchema = {
     .optional()
     .describe(
       "Return full channel details only for these class names. Omit to get a summary of all classes (name + channel counts). " +
-      "Use this to drill into specific classes after the initial summary."
+        "Use this to drill into specific classes after the initial summary.",
     ),
   include_networks: z
     .boolean()
@@ -112,7 +105,9 @@ export async function inspectProjectHandler(args: {
           servers: info.servers.length,
           clients: info.clients.length,
         });
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
     classesOutput = allClasses;
   }
@@ -123,9 +118,7 @@ export async function inspectProjectHandler(args: {
     projectDir: lcpInfo.projectDir,
     totalClasses: lcpInfo.classFiles.filter((f) => f.absPath.endsWith(".st")).length,
     totalNetworks: lcpInfo.networkFiles.length,
-    ...(filterNames
-      ? { classDetail: classesOutput }
-      : { classSummary: classesOutput }),
+    ...(filterNames ? { classDetail: classesOutput } : { classSummary: classesOutput }),
   };
 
   // Networks (optional)
@@ -134,7 +127,9 @@ export async function inspectProjectHandler(args: {
     const networkErrors: string[] = [];
     for (const nf of lcpInfo.networkFiles) {
       if (!existsSync(nf.absPath)) continue;
-      try { networks.push(parseLcn(nf.absPath)); } catch (e: any) {
+      try {
+        networks.push(parseLcn(nf.absPath));
+      } catch (e: any) {
         networkErrors.push(`${nf.relativePath}: ${e.message}`);
       }
     }
@@ -147,11 +142,13 @@ export async function inspectProjectHandler(args: {
         ...(Object.keys(o.channelValues).length ? { channelValues: o.channelValues } : {}),
       })),
       ...(args.include_connections
-        ? { connections: n.connections.map((c) => ({
-            source: c.source,
-            destination: c.destination,
-            ...(c.remote ? { remote: true, station: c.station } : {}),
-          })) }
+        ? {
+            connections: n.connections.map((c) => ({
+              source: c.source,
+              destination: c.destination,
+              ...(c.remote ? { remote: true, station: c.station } : {}),
+            })),
+          }
         : {}),
     }));
     if (networkErrors.length) result.networkParseErrors = networkErrors;

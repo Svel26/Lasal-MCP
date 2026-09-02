@@ -24,10 +24,7 @@ export const classSourceSchema = {
     .describe("Content to write to the .h file. Omit to leave it unchanged (write only)."),
 };
 
-function resolveStPath(
-  lcpPath: string,
-  className: string
-): { stPath: string } | { error: string } {
+function resolveStPath(lcpPath: string, className: string): { stPath: string } | { error: string } {
   let lcpInfo;
   try {
     lcpInfo = parseLcp(lcpPath);
@@ -40,12 +37,20 @@ function resolveStPath(
     try {
       const info = parseStClass(cf.absPath);
       if (info.name === className) return { stPath: cf.absPath };
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   const available = lcpInfo.classFiles
     .filter((f) => f.absPath.endsWith(".st") && existsSync(f.absPath))
-    .map((f) => { try { return parseStClass(f.absPath).name; } catch { return null; } })
+    .map((f) => {
+      try {
+        return parseStClass(f.absPath).name;
+      } catch {
+        return null;
+      }
+    })
     .filter((x): x is string => x !== null);
   return { error: `Class "${className}" not found.\nAvailable classes: ${available.join(", ")}` };
 }
@@ -61,7 +66,7 @@ function validateLatin1(s: string): { ok: boolean; offending?: { char: string; c
   }
   return {
     ok: offending.length === 0,
-    offending: offending.length > 0 ? offending : undefined
+    offending: offending.length > 0 ? offending : undefined,
   };
 }
 
@@ -103,10 +108,9 @@ export async function classSourceHandler(args: {
 
   // write
   if (isProcessRunning("Lasal2.exe")) {
-    return fail(
-      "CLASS 2 IDE is open.",
-      ["Close the CLASS 2 IDE manually or run manage_class2 close before writing to Structured Text class files."]
-    );
+    return fail("CLASS 2 IDE is open.", [
+      "Close the CLASS 2 IDE manually or run manage_class2 close before writing to Structured Text class files.",
+    ]);
   }
 
   if (!args.source) {
@@ -116,21 +120,21 @@ export async function classSourceHandler(args: {
   // Validate latin1
   const validation = validateLatin1(args.source);
   if (!validation.ok) {
-    const details = validation.offending!.map(o => `'${o.char}' (code: ${o.code}) at index ${o.index}`).join(", ");
-    return fail(
-      "Source contains non-latin1 characters.",
-      ["Make sure all characters in the source are representable in ISO-8859-1 (latin1). Offending characters: " + details]
-    );
+    const details = validation.offending!.map((o) => `'${o.char}' (code: ${o.code}) at index ${o.index}`).join(", ");
+    return fail("Source contains non-latin1 characters.", [
+      "Make sure all characters in the source are representable in ISO-8859-1 (latin1). Offending characters: " +
+        details,
+    ]);
   }
 
   if (args.header_source !== undefined) {
     const hValidation = validateLatin1(args.header_source);
     if (!hValidation.ok) {
-      const details = hValidation.offending!.map(o => `'${o.char}' (code: ${o.code}) at index ${o.index}`).join(", ");
-      return fail(
-        "Header source contains non-latin1 characters.",
-        ["Make sure all characters in the header source are representable in ISO-8859-1 (latin1). Offending characters: " + details]
-      );
+      const details = hValidation.offending!.map((o) => `'${o.char}' (code: ${o.code}) at index ${o.index}`).join(", ");
+      return fail("Header source contains non-latin1 characters.", [
+        "Make sure all characters in the header source are representable in ISO-8859-1 (latin1). Offending characters: " +
+          details,
+      ]);
     }
   }
 

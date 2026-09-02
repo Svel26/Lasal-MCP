@@ -16,9 +16,7 @@ export function writeLatin1(path: string, content: string): void {
 // ─── XML Parser (read-only) ──────────────────────────────────────────────────
 
 // Tags that can appear multiple times as siblings
-const ALWAYS_ARRAY = new Set([
-  "File", "Server", "Client", "Object", "Connection", "RemoteObject", "Folder",
-]);
+const ALWAYS_ARRAY = new Set(["File", "Server", "Client", "Object", "Connection", "RemoteObject", "Folder"]);
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -45,8 +43,14 @@ export function newGuid(): string {
 // .lcp parsing
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface LcpClassEntry { relativePath: string; absPath: string }
-export interface LcpNetworkEntry { relativePath: string; absPath: string }
+export interface LcpClassEntry {
+  relativePath: string;
+  absPath: string;
+}
+export interface LcpNetworkEntry {
+  relativePath: string;
+  absPath: string;
+}
 
 export interface LcpInfo {
   projectName: string;
@@ -219,7 +223,7 @@ export interface LcnObject {
 }
 
 export interface LcnConnection {
-  source: string;   // "ObjName.ClientName"
+  source: string; // "ObjName.ClientName"
   destination: string; // "ObjName.ServerName"
   remote?: boolean;
   station?: string;
@@ -228,7 +232,7 @@ export interface LcnConnection {
 export interface LcnInfo {
   name: string;
   lcnPath: string;
-  objects: LcnObject[];   // flat list (top-level + nested sub-objects)
+  objects: LcnObject[]; // flat list (top-level + nested sub-objects)
   connections: LcnConnection[];
 }
 
@@ -388,11 +392,7 @@ export function renameClientInSt(stPath: string, oldName: string, newName: strin
 
 // Applies editFn to each <Object ... Class="className" ...> block in the lcn content.
 // editFn receives the inner content between <Object ...> and </Object> and returns it modified.
-function editObjectsOfClass(
-  content: string,
-  className: string,
-  editFn: (objectBlock: string) => string
-): string {
+function editObjectsOfClass(content: string, className: string, editFn: (objectBlock: string) => string): string {
   // We match the Class attribute value in the opening <Object tag
   // then capture up to the matching </Object>
   // Strategy: find each occurrence, replace in-place
@@ -404,7 +404,7 @@ function editObjectsOfClass(
     // Find the next <Object...> tag with this class
     const objTagRe = new RegExp(
       `<Object(?=[^>]*\\bClass\\s*=\\s*"${escapeRe(className)}"[^>]*)([^>]*)>`,
-      "s"  // dotAll
+      "s", // dotAll
     );
 
     const searchStr = result.slice(searchFrom);
@@ -449,10 +449,7 @@ export function cascadeRenameServerInLcn(lcnPath: string, className: string, old
 
   // 1. Rename in object channels
   content = editObjectsOfClass(content, className, (inner) => {
-    const re = new RegExp(
-      `(<Server\\s+Name\\s*=\\s*")${escapeRe(oldName)}(")`,
-      "g"
-    );
+    const re = new RegExp(`(<Server\\s+Name\\s*=\\s*")${escapeRe(oldName)}(")`, "g");
     return inner.replace(re, `$1${newName}$2`);
   });
 
@@ -470,7 +467,9 @@ export function cascadeRenameServerInLcn(lcnPath: string, className: string, old
     if (objClass === className) {
       return `${prefix}${objName}.${newName}${suffix}`;
     } else if (!objClass) {
-      console.warn(`Warning: Could not resolve class for object "${objName}" in ${lcnPath} when renaming server "${oldName}" to "${newName}"`);
+      console.warn(
+        `Warning: Could not resolve class for object "${objName}" in ${lcnPath} when renaming server "${oldName}" to "${newName}"`,
+      );
     }
     return match;
   });
@@ -483,16 +482,13 @@ export function cascadeRenameClientInLcn(
   className: string,
   oldName: string,
   newName: string,
-  objectNames: string[] // objects of this class in this network
+  objectNames: string[], // objects of this class in this network
 ): void {
   let content = readLatin1(lcnPath);
 
   // 1. Rename in object channels
   content = editObjectsOfClass(content, className, (inner) => {
-    const re = new RegExp(
-      `(<Client\\s+Name\\s*=\\s*")${escapeRe(oldName)}(")`,
-      "g"
-    );
+    const re = new RegExp(`(<Client\\s+Name\\s*=\\s*")${escapeRe(oldName)}(")`, "g");
     return inner.replace(re, `$1${newName}$2`);
   });
 
@@ -500,7 +496,7 @@ export function cascadeRenameClientInLcn(
   for (const objName of objectNames) {
     content = content.replace(
       new RegExp(`(Source\\s*=\\s*")${escapeRe(objName)}\\.${escapeRe(oldName)}(")`, "g"),
-      `$1${objName}.${newName}$2`
+      `$1${objName}.${newName}$2`,
     );
   }
 
@@ -511,23 +507,21 @@ export function cascadeRemoveClientFromLcn(
   lcnPath: string,
   className: string,
   clientName: string,
-  objectNames: string[]
+  objectNames: string[],
 ): void {
   let content = readLatin1(lcnPath);
 
   // 1. Remove from object channels
-  content = editObjectsOfClass(content, className, (inner) =>
-    inner.replace(clientLineRegex(clientName), "")
-  );
+  content = editObjectsOfClass(content, className, (inner) => inner.replace(clientLineRegex(clientName), ""));
 
   // 2. Remove Connection lines that source from these objects' removed client
   for (const objName of objectNames) {
     content = content.replace(
       new RegExp(
         `[ \\t]*<Connection[^>]*Source\\s*=\\s*"${escapeRe(objName)}\\.${escapeRe(clientName)}"[^\\n]*\\n`,
-        "g"
+        "g",
       ),
-      ""
+      "",
     );
   }
 
@@ -538,23 +532,21 @@ export function cascadeRemoveServerFromLcn(
   lcnPath: string,
   className: string,
   serverName: string,
-  objectNames: string[]
+  objectNames: string[],
 ): void {
   let content = readLatin1(lcnPath);
 
   // 1. Remove from object channels
-  content = editObjectsOfClass(content, className, (inner) =>
-    inner.replace(serverLineRegex(serverName), "")
-  );
+  content = editObjectsOfClass(content, className, (inner) => inner.replace(serverLineRegex(serverName), ""));
 
   // 2. Remove Connection lines that target these objects' removed server
   for (const objName of objectNames) {
     content = content.replace(
       new RegExp(
         `[ \\t]*<Connection[^>]*Destination\\s*=\\s*"${escapeRe(objName)}\\.${escapeRe(serverName)}"[^\\n]*\\n`,
-        "g"
+        "g",
       ),
-      ""
+      "",
     );
   }
 
@@ -565,17 +557,12 @@ export function cascadeRemoveServerFromLcn(
 // Find objects of a class across all .lcn files
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function findObjectsOfClass(
-  lcnPaths: string[],
-  className: string
-): Map<string, string[]> {
+export function findObjectsOfClass(lcnPaths: string[], className: string): Map<string, string[]> {
   const result = new Map<string, string[]>(); // lcnPath → object names
   for (const lcnPath of lcnPaths) {
     if (!existsSync(lcnPath)) continue;
     const info = parseLcn(lcnPath);
-    const names = info.objects
-      .filter((o) => o.className === className)
-      .map((o) => o.name);
+    const names = info.objects.filter((o) => o.className === className).map((o) => o.name);
     if (names.length > 0) result.set(lcnPath, names);
   }
   return result;
@@ -598,7 +585,7 @@ export interface StMethodParam {
 
 export interface StMethodSig {
   name: string;
-  modifiers: string[];   // e.g. ["VIRTUAL", "GLOBAL"]
+  modifiers: string[]; // e.g. ["VIRTUAL", "GLOBAL"]
   params: StMethodParam[];
 }
 
@@ -609,9 +596,9 @@ export interface StBodyInfo {
 
 /** Split a .st file into its major sections. */
 function splitStSections(content: string): {
-  pre: string;        // up to and including *)
-  classPart: string;  // CLASS...END_CLASS; + pragmas (between *) and //}}LSL_DECLARATION)
-  implPart: string;   // //}}LSL_DECLARATION onwards (method implementations)
+  pre: string; // up to and including *)
+  classPart: string; // CLASS...END_CLASS; + pragmas (between *) and //}}LSL_DECLARATION)
+  implPart: string; // //}}LSL_DECLARATION onwards (method implementations)
 } {
   const xmlEnd = (() => {
     const si = content.indexOf("(*!");
@@ -651,10 +638,7 @@ function splitStSections(content: string): {
 }
 
 /** Return the line range for a named section (e.g. "Variables") in the class body. */
-function findSectionRange(
-  text: string,
-  sectionMarker: string
-): { start: number; end: number } | null {
+function findSectionRange(text: string, sectionMarker: string): { start: number; end: number } | null {
   const markerRe = new RegExp(`\\/\\/\\s*${escapeRe(sectionMarker)}\\s*:`, "i");
   const m = markerRe.exec(text);
   if (!m) return null;
@@ -664,17 +648,12 @@ function findSectionRange(
   // Find the next section marker line (// + word) or END_CLASS;.
   // Use multiline mode with ^[ \t]* so n.index lands at the START of the line,
   // not mid-line at the //, keeping the marker's leading whitespace in slice(range.end).
-  const nextSection = new RegExp(
-    `^[ \\t]*(?:\\/\\/[A-Za-z]|END_CLASS\\s*;)`,
-    "gm"
-  );
+  const nextSection = new RegExp(`^[ \\t]*(?:\\/\\/[A-Za-z]|END_CLASS\\s*;)`, "gm");
   nextSection.lastIndex = start;
   const n = nextSection.exec(text);
   const end = n ? n.index : text.length;
   return { start, end };
 }
-
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ST body channel type declarations  (//Servers: and //Clients: sections)
@@ -685,22 +664,14 @@ function editStBody(stPath: string, editFn: (content: string) => string): void {
   writeLatin1(stPath, editFn(readLatin1(stPath)));
 }
 
-function insertIntoSection(
-  text: string,
-  sectionMarker: string,
-  newLine: string
-): string {
+function insertIntoSection(text: string, sectionMarker: string, newLine: string): string {
   const range = findSectionRange(text, sectionMarker);
   if (!range) return text; // section not found — leave unchanged
   // Insert before the end of the section
   return text.slice(0, range.end) + newLine + text.slice(range.end);
 }
 
-function removeLineFromSection(
-  text: string,
-  sectionMarker: string,
-  namePattern: string
-): string {
+function removeLineFromSection(text: string, sectionMarker: string, namePattern: string): string {
   const range = findSectionRange(text, sectionMarker);
   if (!range) return text;
   const section = text.slice(range.start, range.end);
@@ -728,10 +699,7 @@ export function renameServerInStBody(stPath: string, oldName: string, newName: s
     const before = classPart.slice(0, range.start);
     const section = classPart.slice(range.start, range.end);
     const after = classPart.slice(range.end);
-    const newSection = section.replace(
-      new RegExp(`\\b${escapeRe(oldName)}\\b(?=[ \\t]*:)`, "g"),
-      newName
-    );
+    const newSection = section.replace(new RegExp(`\\b${escapeRe(oldName)}\\b(?=[ \\t]*:)`, "g"), newName);
     const newClassPart = before + newSection + after;
     return pre + newClassPart + implPart;
   });
@@ -756,10 +724,7 @@ export function renameClientInStBody(stPath: string, oldName: string, newName: s
     const before = classPart.slice(0, range.start);
     const section = classPart.slice(range.start, range.end);
     const after = classPart.slice(range.end);
-    const newSection = section.replace(
-      new RegExp(`\\b${escapeRe(oldName)}\\b(?=[ \\t]*:)`, "g"),
-      newName
-    );
+    const newSection = section.replace(new RegExp(`\\b${escapeRe(oldName)}\\b(?=[ \\t]*:)`, "g"), newName);
     const newClassPart = before + newSection + after;
     return pre + newClassPart + implPart;
   });
@@ -786,12 +751,7 @@ export function removeVariableFromSt(stPath: string, name: string): void {
  * implementation section (use with care — may affect unrelated identifiers).
  * Returns the number of replacements made in the implementation section.
  */
-export function renameVariableInSt(
-  stPath: string,
-  oldName: string,
-  newName: string,
-  renameInBody = false
-): number {
+export function renameVariableInSt(stPath: string, oldName: string, newName: string, renameInBody = false): number {
   let bodyReplacements = 0;
   editStBody(stPath, (content) => {
     const { pre, classPart, implPart } = splitStSections(content);
@@ -801,21 +761,17 @@ export function renameVariableInSt(
     let newClassPart = classPart;
     if (varRange) {
       const section = classPart.slice(varRange.start, varRange.end);
-      const newSection = section.replace(
-        new RegExp(`\\b${escapeRe(oldName)}\\b`, "gi"),
-        (m) => {
-          const newNameFirstChar = newName[0];
-          const oldNameFirstChar = oldName[0];
-          const matchFirstChar = m[0];
-          return newNameFirstChar && oldNameFirstChar && newNameFirstChar === oldNameFirstChar
-            ? newName
-            : matchFirstChar && matchFirstChar === matchFirstChar.toUpperCase()
+      const newSection = section.replace(new RegExp(`\\b${escapeRe(oldName)}\\b`, "gi"), (m) => {
+        const newNameFirstChar = newName[0];
+        const oldNameFirstChar = oldName[0];
+        const matchFirstChar = m[0];
+        return newNameFirstChar && oldNameFirstChar && newNameFirstChar === oldNameFirstChar
+          ? newName
+          : matchFirstChar && matchFirstChar === matchFirstChar.toUpperCase()
             ? (newName[0] ?? "").toUpperCase() + newName.slice(1)
             : newName;
-        }
-      );
-      newClassPart =
-        classPart.slice(0, varRange.start) + newSection + classPart.slice(varRange.end);
+      });
+      newClassPart = classPart.slice(0, varRange.start) + newSection + classPart.slice(varRange.end);
     }
 
     // 2. Optionally rename in the implementation section
@@ -831,8 +787,8 @@ export function renameVariableInSt(
         return newNameFirstChar && oldNameFirstChar && newNameFirstChar === oldNameFirstChar
           ? newName
           : matchFirstChar && matchFirstChar === matchFirstChar.toUpperCase()
-          ? (newName[0] ?? "").toUpperCase() + newName.slice(1)
-          : newName;
+            ? (newName[0] ?? "").toUpperCase() + newName.slice(1)
+            : newName;
       });
     }
 
@@ -847,9 +803,9 @@ export function renameVariableInSt(
 
 export interface AddMethodOptions {
   name: string;
-  modifiers?: string[];  // e.g. ["VIRTUAL", "GLOBAL"]
+  modifiers?: string[]; // e.g. ["VIRTUAL", "GLOBAL"]
   params?: Array<{ name: string; type: string; direction?: "input" | "output" | "in_out" }>;
-  body?: string;         // implementation body; default is "// TODO: implement"
+  body?: string; // implementation body; default is "// TODO: implement"
 }
 
 function buildMethodDeclaration(opts: AddMethodOptions, eol = "\n"): string {
@@ -916,8 +872,7 @@ export function addMethodToSt(stPath: string, className: string, opts: AddMethod
     let newClassPart = classPart;
     if (funcRange) {
       const decl = buildMethodDeclaration(opts, eol);
-      newClassPart =
-        classPart.slice(0, funcRange.end) + decl + classPart.slice(funcRange.end);
+      newClassPart = classPart.slice(0, funcRange.end) + decl + classPart.slice(funcRange.end);
     }
 
     // 2. Add implementation to end of implPart
@@ -932,11 +887,9 @@ export function addMethodToSt(stPath: string, className: string, opts: AddMethod
 function findMethodImplRange(
   implPart: string,
   className: string,
-  methodName: string
+  methodName: string,
 ): { start: number; end: number } | null {
-  const headerRe = new RegExp(
-    `FUNCTION\\s+${escapeRe(className)}::${escapeRe(methodName)}\\b`
-  );
+  const headerRe = new RegExp(`FUNCTION\\s+${escapeRe(className)}::${escapeRe(methodName)}\\b`);
   const m = headerRe.exec(implPart);
   if (!m) return null;
   const start = m.index;
@@ -951,18 +904,13 @@ function findMethodImplRange(
 }
 
 /** Find a method declaration in the Functions section (multi-line, ends with ;) */
-function findMethodDeclRange(
-  classPart: string,
-  methodName: string
-): { start: number; end: number } | null {
+function findMethodDeclRange(classPart: string, methodName: string): { start: number; end: number } | null {
   const range = findSectionRange(classPart, "Functions");
   if (!range) return null;
   const section = classPart.slice(range.start, range.end);
 
   // Match FUNCTION [modifiers] methodName
-  const headerRe = new RegExp(
-    `[ \\t]*FUNCTION(?:[\\s\\w]*?)\\s+${escapeRe(methodName)}\\b`
-  );
+  const headerRe = new RegExp(`[ \\t]*FUNCTION(?:[\\s\\w]*?)\\s+${escapeRe(methodName)}\\b`);
   const m = headerRe.exec(section);
   if (!m) return null;
 
@@ -999,28 +947,21 @@ export function removeMethodFromSt(stPath: string, className: string, name: stri
     const declRange = findMethodDeclRange(classPart, name);
     let newClassPart = classPart;
     if (declRange) {
-      newClassPart =
-        classPart.slice(0, declRange.start) + classPart.slice(declRange.end);
+      newClassPart = classPart.slice(0, declRange.start) + classPart.slice(declRange.end);
     }
 
     // Remove implementation
     const implRange = findMethodImplRange(implPart, className, name);
     let newImplPart = implPart;
     if (implRange) {
-      newImplPart =
-        implPart.slice(0, implRange.start) + implPart.slice(implRange.end);
+      newImplPart = implPart.slice(0, implRange.start) + implPart.slice(implRange.end);
     }
 
     return pre + newClassPart + newImplPart;
   });
 }
 
-export function renameMethodInSt(
-  stPath: string,
-  className: string,
-  oldName: string,
-  newName: string
-): void {
+export function renameMethodInSt(stPath: string, className: string, oldName: string, newName: string): void {
   editStBody(stPath, (content) => {
     const { pre, classPart, implPart } = splitStSections(content);
 
@@ -1030,23 +971,16 @@ export function renameMethodInSt(
     if (funcRange) {
       const section = classPart.slice(funcRange.start, funcRange.end);
       const newSection = section.replace(
-        new RegExp(
-          `(FUNCTION(?:[\\s\\w]*)\\s+)${escapeRe(oldName)}\\b`,
-          "g"
-        ),
-        `$1${newName}`
+        new RegExp(`(FUNCTION(?:[\\s\\w]*)\\s+)${escapeRe(oldName)}\\b`, "g"),
+        `$1${newName}`,
       );
-      newClassPart =
-        classPart.slice(0, funcRange.start) + newSection + classPart.slice(funcRange.end);
+      newClassPart = classPart.slice(0, funcRange.start) + newSection + classPart.slice(funcRange.end);
     }
 
     // 2. Rename implementation header: FUNCTION ClassName::OldName
     const newImplPart = implPart.replace(
-      new RegExp(
-        `(FUNCTION\\s+${escapeRe(className)}::)${escapeRe(oldName)}\\b`,
-        "g"
-      ),
-      `$1${newName}`
+      new RegExp(`(FUNCTION\\s+${escapeRe(className)}::)${escapeRe(oldName)}\\b`, "g"),
+      `$1${newName}`,
     );
 
     return pre + newClassPart + newImplPart;

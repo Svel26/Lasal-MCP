@@ -45,10 +45,12 @@ describe("buildVisuScript", () => {
   });
 
   it("emits add_text_lists", () => {
-    const ops: VisuOp[] = [{
-      type: "add_text_lists",
-      text_lists: [{ name: "MyList", texts: [{ id: "t1", en: "Hello", de: "Hallo" }] }],
-    }];
+    const ops: VisuOp[] = [
+      {
+        type: "add_text_lists",
+        text_lists: [{ name: "MyList", texts: [{ id: "t1", en: "Hello", de: "Hallo" }] }],
+      },
+    ];
     const { script } = buildVisuScript(lvp, ops, log, steps);
     expect(script).toContain("lvd.AddTextLists(prj,");
     expect(script).toContain("lvd.TextList(");
@@ -63,20 +65,26 @@ describe("buildVisuScript", () => {
   });
 
   it("emits set_datapoint_properties", () => {
-    const ops: VisuOp[] = [{
-      type: "set_datapoint_properties",
-      properties: [{ element: "dp1", property: "visible", value: true }],
-    }];
+    const ops: VisuOp[] = [
+      {
+        type: "set_datapoint_properties",
+        properties: [{ element: "dp1", property: "visible", value: true }],
+      },
+    ];
     const { script } = buildVisuScript(lvp, ops, log, steps);
     expect(script).toContain("lvd.SetDatapointProperties(prj,");
     expect(script).toContain("lvd.PropertySet(");
   });
 
   it("emits add_schemes", () => {
-    const ops: VisuOp[] = [{
-      type: "add_schemes",
-      schemes: [{ scheme_type: "ColorSchemes", name: "MyScheme", entries: [{ position: 0, property: "bg", value: "#fff" }] }],
-    }];
+    const ops: VisuOp[] = [
+      {
+        type: "add_schemes",
+        schemes: [
+          { scheme_type: "ColorSchemes", name: "MyScheme", entries: [{ position: 0, property: "bg", value: "#fff" }] },
+        ],
+      },
+    ];
     const { script } = buildVisuScript(lvp, ops, log, steps);
     expect(script).toContain("lvd.AddSchemes(prj,");
     expect(script).toContain("lvd.Scheme(");
@@ -84,21 +92,20 @@ describe("buildVisuScript", () => {
   });
 
   it("emits add_media_items with overwrite", () => {
-    const ops: VisuOp[] = [{
-      type: "add_media_items",
-      items: [{ media_type: "image", path: "C:\\img\\logo.png" }],
-      overwrite: true,
-    }];
+    const ops: VisuOp[] = [
+      {
+        type: "add_media_items",
+        items: [{ media_type: "image", path: "C:\\img\\logo.png" }],
+        overwrite: true,
+      },
+    ];
     const { script } = buildVisuScript(lvp, ops, log, steps);
     expect(script).toContain("lvd.AddMediaItems(prj,");
     expect(script).toContain("True"); // overwrite
   });
 
   it("emits step markers for each operation", () => {
-    const ops: VisuOp[] = [
-      { type: "update_all_stations" },
-      { type: "publish" },
-    ];
+    const ops: VisuOp[] = [{ type: "update_all_stations" }, { type: "publish" }];
     const { expectedSteps } = buildVisuScript(lvp, ops, log, steps);
     expect(expectedSteps).toContain("0_update_all_stations");
     expect(expectedSteps).toContain("1_publish");

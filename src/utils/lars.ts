@@ -9,17 +9,13 @@ import type { LarsInstanceInfo } from "../state.js";
 
 // ─── Executable paths ─────────────────────────────────────────────────────────
 
-export const LARS_EXE =
-  process.env.LASAL_LARS_EXE || "C:\\Program Files (x86)\\Sigmatek\\Lars\\Lars.exe";
+export const LARS_EXE = process.env.LASAL_LARS_EXE || "C:\\Program Files (x86)\\Sigmatek\\Lars\\Lars.exe";
 
 export const LARS_CONFIG_EXE =
-  process.env.LASAL_LARS_CONFIG_EXE ||
-  "C:\\Program Files (x86)\\Sigmatek\\Lars\\LARSConfigTool.exe";
+  process.env.LASAL_LARS_CONFIG_EXE || "C:\\Program Files (x86)\\Sigmatek\\Lars\\LARSConfigTool.exe";
 
 export function larsConfigPath(): string {
-  return (
-    process.env.LASAL_LARS_CONFIG || join(process.env.APPDATA || homedir(), "lasalos2.xml")
-  );
+  return process.env.LASAL_LARS_CONFIG || join(process.env.APPDATA || homedir(), "lasalos2.xml");
 }
 
 // ─── Workspace model (lasalos2.xml) ───────────────────────────────────────────
@@ -59,11 +55,7 @@ function asArray<T>(v: T | T[] | undefined): T[] {
 }
 
 function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 export function readLarsWorkspaces(): LarsWorkspace[] {
@@ -97,10 +89,8 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
         autoexec: str(pathElem.AUTOEXEC, "C:\\Autoexec.lsl"),
         lslWork: str(pathElem.LSLWORK, "C:\\LSLWORK"),
         sramData: str(pathElem.SRAMDAT, "C:\\"),
-        classProjectPath:
-          typeof pathElem.CLASS_PRJ_PATH === "string" ? pathElem.CLASS_PRJ_PATH : undefined,
-        screenProjectPath:
-          typeof pathElem.SCREEN_PRJ_PATH === "string" ? pathElem.SCREEN_PRJ_PATH : undefined,
+        classProjectPath: typeof pathElem.CLASS_PRJ_PATH === "string" ? pathElem.CLASS_PRJ_PATH : undefined,
+        screenProjectPath: typeof pathElem.SCREEN_PRJ_PATH === "string" ? pathElem.SCREEN_PRJ_PATH : undefined,
         dataLenMb: num(memory.DATALEN, 40),
         codeLenMb: num(memory.CODELEN, 8),
       });
@@ -120,18 +110,14 @@ export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
     const mem =
       ws.dataLenMb || ws.codeLenMb
         ? `\t\t<MEMORY>\n\t\t\t<DATALEN Unit="MiB">${ws.dataLenMb}</DATALEN>\n\t\t\t<CODELEN Unit="MiB">${ws.codeLenMb}</CODELEN>\n\t\t</MEMORY>`
-        : "\t\t<MEMORY>\n\t\t\t<DATALEN Unit=\"MiB\">40</DATALEN>\n\t\t\t<CODELEN Unit=\"MiB\">8</CODELEN>\n\t\t</MEMORY>";
+        : '\t\t<MEMORY>\n\t\t\t<DATALEN Unit="MiB">40</DATALEN>\n\t\t\t<CODELEN Unit="MiB">8</CODELEN>\n\t\t</MEMORY>';
     const paths = [
       `\t\t\t<ACTIVEDAT>${escapeXml(ws.activeData)}</ACTIVEDAT>`,
       `\t\t\t<AUTOEXEC>${escapeXml(ws.autoexec)}</AUTOEXEC>`,
       `\t\t\t<LSLWORK>${escapeXml(ws.lslWork)}</LSLWORK>`,
       `\t\t\t<SRAMDAT>${escapeXml(ws.sramData)}</SRAMDAT>`,
-      ws.classProjectPath
-        ? `\t\t\t<CLASS_PRJ_PATH>${escapeXml(ws.classProjectPath)}</CLASS_PRJ_PATH>`
-        : "",
-      ws.screenProjectPath
-        ? `\t\t\t<SCREEN_PRJ_PATH>${escapeXml(ws.screenProjectPath)}</SCREEN_PRJ_PATH>`
-        : "",
+      ws.classProjectPath ? `\t\t\t<CLASS_PRJ_PATH>${escapeXml(ws.classProjectPath)}</CLASS_PRJ_PATH>` : "",
+      ws.screenProjectPath ? `\t\t\t<SCREEN_PRJ_PATH>${escapeXml(ws.screenProjectPath)}</SCREEN_PRJ_PATH>` : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -180,7 +166,10 @@ export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
 }
 
 /** Allocate a unique set of ports for a new workspace (each LARS instance needs distinct ports). */
-export function allocateLarsPorts(existing: LarsWorkspace[], baseOnline = DEFAULT_ONLINE_PORT): {
+export function allocateLarsPorts(
+  existing: LarsWorkspace[],
+  baseOnline = DEFAULT_ONLINE_PORT,
+): {
   onlinePort: number;
   comlinkServerPort: number;
   comlinkBasePort: number;
@@ -205,7 +194,7 @@ export function allocateLarsPorts(existing: LarsWorkspace[], baseOnline = DEFAUL
 
 export function upsertLarsWorkspace(
   name: string,
-  partial: Partial<LarsWorkspace>
+  partial: Partial<LarsWorkspace>,
 ): { workspaces: LarsWorkspace[]; workspace: LarsWorkspace } {
   const workspaces = readLarsWorkspaces();
   let workspace = workspaces.find((w) => w.name === name);
@@ -280,7 +269,11 @@ function findStationsJsonFiles(dirs: string[]): string[] {
     if (!dir || !existsSync(dir)) continue;
     const walk = (d: string, depth: number): void => {
       let entries: Array<import("fs").Dirent>;
-      try { entries = readdirSync(d, { withFileTypes: true }) as unknown as Array<import("fs").Dirent>; } catch { return; }
+      try {
+        entries = readdirSync(d, { withFileTypes: true }) as unknown as Array<import("fs").Dirent>;
+      } catch {
+        return;
+      }
       for (const e of entries) {
         const p = join(d, e.name);
         if (e.isDirectory() && depth > 0) walk(p, depth - 1);
@@ -296,7 +289,7 @@ function stationsJsonPointsAt(
   file: string,
   stationName: string | undefined,
   stationId: number | undefined,
-  onlinePort: number
+  onlinePort: number,
 ): boolean {
   try {
     const doc: { stations?: unknown[] } = JSON.parse(readFileSync(file, "utf-8"));
@@ -305,7 +298,12 @@ function stationsJsonPointsAt(
       if (!st || typeof st !== "object") continue;
       const stRec = st as Record<string, unknown>;
       const nameOk = stationName !== undefined && stRec.name === stationName;
-      const num = typeof stRec.station === "number" ? stRec.station : typeof stRec.station === "string" ? parseInt(stRec.station, 10) : NaN;
+      const num =
+        typeof stRec.station === "number"
+          ? stRec.station
+          : typeof stRec.station === "string"
+            ? parseInt(stRec.station, 10)
+            : NaN;
       const idOk = stationId !== undefined && stRec.station !== undefined && !isNaN(num) && num === stationId;
       if (!nameOk && !idOk) continue;
 
@@ -314,7 +312,12 @@ function stationsJsonPointsAt(
       if (ip === "127.0.0.1" && String(stRec.port) === String(onlinePort)) return true;
 
       // Design-time layout: connection/conType = "127.0.0.1:<onlinePort>"
-      const v = typeof stRec.connection === "string" ? stRec.connection : typeof stRec.conType === "string" ? stRec.conType : undefined;
+      const v =
+        typeof stRec.connection === "string"
+          ? stRec.connection
+          : typeof stRec.conType === "string"
+            ? stRec.conType
+            : undefined;
       if (stationTargetsLars(v, onlinePort)) return true;
     }
   } catch {}
@@ -322,7 +325,6 @@ function stationsJsonPointsAt(
 }
 
 export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
-
   const workspaces = readLarsWorkspaces();
   const instances = opts.instances ?? {};
   const isRunning = opts.isRunning ?? ((name: string) => getLarsPids(name).length > 0);
@@ -335,40 +337,35 @@ export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
   const stationsJsonFiles = findStationsJsonFiles(opts.dataDirs ?? []);
 
   for (const ws of workspaces) {
-
-
-
     const inst = instances[ws.name];
     let reason: string;
     if (!inst) {
       reason = "manual (no instance bookkeeping) — kept";
     } else if (isRunning(ws.name)) {
-
       reason = "running";
     } else {
       const lssPoints = inst.stationLssPath
         ? (() => {
-          const conn = readLssConnection(inst.stationLssPath);
-          return !("error" in conn) && conn.ip === "127.0.0.1" && conn.port === String(ws.onlinePort);
-        })()
+            const conn = readLssConnection(inst.stationLssPath);
+            return !("error" in conn) && conn.ip === "127.0.0.1" && conn.port === String(ws.onlinePort);
+          })()
         : false;
-      const dsPoints = (inst.stationName !== undefined || inst.stationId !== undefined)
-        ? stationsJsonFiles.some((f) => stationsJsonPointsAt(f, inst.stationName, inst.stationId, ws.onlinePort))
-        : false;
-      reason = lssPoints || dsPoints ? "referenced (station .lss or DataService stations.json points at it)" : "unreferenced";
+      const dsPoints =
+        inst.stationName !== undefined || inst.stationId !== undefined
+          ? stationsJsonFiles.some((f) => stationsJsonPointsAt(f, inst.stationName, inst.stationId, ws.onlinePort))
+          : false;
+      reason =
+        lssPoints || dsPoints ? "referenced (station .lss or DataService stations.json points at it)" : "unreferenced";
     }
 
     if (reason !== "unreferenced") {
-
       delete larsGc[ws.name];
       kept.push({ name: ws.name, onlinePort: ws.onlinePort, reason });
     } else {
       const since = larsGc[ws.name]?.since ?? now;
       const ageH = (now - since) / 3_600_000;
       if (ageH >= minAgeH) {
-
         if (!opts.dryRun) {
-
           removeLarsWorkspace(ws.name);
           delete larsGc[ws.name];
         }
@@ -387,12 +384,10 @@ export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
 
 export function getLarsPids(name?: string): number[] {
   try {
-    const filter = name
-      ? ` | Where-Object { $_.MainWindowTitle -like '*${name}*' }`
-      : "";
+    const filter = name ? ` | Where-Object { $_.MainWindowTitle -like '*${name}*' }` : "";
     const out = execSync(
       `powershell -NoProfile -Command "Get-Process -Name Lars -ErrorAction SilentlyContinue${filter} | Select-Object -ExpandProperty Id"`,
-      { encoding: "utf-8" }
+      { encoding: "utf-8" },
     );
     return out
       .split(/\r?\n/)
@@ -463,7 +458,7 @@ export function isLarsHealthy(onlinePort: number, timeoutMs = 1000): Promise<boo
  */
 export function pointStationAtLars(
   lssPath: string,
-  onlinePort: number
+  onlinePort: number,
 ): { previousIp: string; previousPort: string } | { error: string } {
   const current = readLssConnection(lssPath);
   if ("error" in current) {
@@ -476,8 +471,7 @@ export function pointStationAtLars(
 }
 
 export function safeWorkspaceName(projectName: string, stationName: string): string {
-  const clean = (s: string) =>
-    s.replace(/[^A-Za-z0-9_.-]/g, "_").replace(/^[0-9]+/, "_");
+  const clean = (s: string) => s.replace(/[^A-Za-z0-9_.-]/g, "_").replace(/^[0-9]+/, "_");
   return `${clean(projectName)}_${clean(stationName)}`;
 }
 
@@ -518,7 +512,7 @@ export interface LarsStationMapping {
 export function mapStationsToLars(
   stations: Array<DataServiceStation>,
   larsInstances: Record<string, LarsInstanceInfo>,
-  isRunning: (name: string) => boolean = (name) => getLarsPids(name).length > 0
+  isRunning: (name: string) => boolean = (name) => getLarsPids(name).length > 0,
 ): LarsStationMapping[] {
   const runningByName = new Map<string, LarsInstanceInfo>();
   const runningById = new Map<number, LarsInstanceInfo>();
@@ -532,7 +526,8 @@ export function mapStationsToLars(
   const changed: LarsStationMapping[] = [];
   for (const st of stations) {
     const name = typeof st.name === "string" ? st.name : undefined;
-    const num = typeof st.station === "number" ? st.station : typeof st.station === "string" ? parseInt(st.station, 10) : NaN;
+    const num =
+      typeof st.station === "number" ? st.station : typeof st.station === "string" ? parseInt(st.station, 10) : NaN;
     const inst = (name && runningByName.get(name)) ?? (!isNaN(num) && runningById.get(num));
     if (!inst) continue;
 
@@ -550,7 +545,8 @@ export function mapStationsToLars(
     }
 
     // Design-time layout: { name, connection | conType }
-    const field = typeof st.connection === "string" ? "connection" : typeof st.conType === "string" ? "conType" : undefined;
+    const field =
+      typeof st.connection === "string" ? "connection" : typeof st.conType === "string" ? "conType" : undefined;
     if (!field) continue;
     const value = String(st[field]);
     const isHardwareTarget = /^TCPIP:/i.test(value) || /^\d{1,3}(\.\d{1,3}){3}/.test(value);

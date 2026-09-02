@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 LASAL Architecture & File Guide
+    url: https://github.com/Svel26/Lasal-MCP/blob/main/ARCHITECTURE.md
+    about: Review our architectural overview and LASAL file format specifications.
+  - name: 💡 Contribution Guidelines
+    url: https://github.com/Svel26/Lasal-MCP/blob/main/CONTRIBUTING.md
+    about: Learn how to set up the development environment, submit PRs, and run tests.

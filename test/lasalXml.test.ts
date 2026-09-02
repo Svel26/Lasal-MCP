@@ -148,7 +148,13 @@ describe("ST editing round-trips", () => {
     const path = workCopy("Motor.st");
     const original = readFileSync(path, "latin1");
 
-    addServerToSt(path, { name: "s_Test", visualized: false, initialize: false, writeProtected: false, retentive: "false" });
+    addServerToSt(path, {
+      name: "s_Test",
+      visualized: false,
+      initialize: false,
+      writeProtected: false,
+      retentive: "false",
+    });
     removeServerFromSt(path, "s_Test");
 
     const restored = readFileSync(path, "latin1");
@@ -160,7 +166,14 @@ describe("ST editing round-trips", () => {
 
   it("addServerToSt adds a server channel", () => {
     const path = workCopy("Motor.st");
-    addServerToSt(path, { name: "s_Torque", visualized: true, initialize: true, defValue: "0", writeProtected: false, retentive: "false" });
+    addServerToSt(path, {
+      name: "s_Torque",
+      visualized: true,
+      initialize: true,
+      defValue: "0",
+      writeProtected: false,
+      retentive: "false",
+    });
     const info = parseStClass(path);
     expect(info.servers).toHaveLength(3);
     expect(info.servers.find((s) => s.name === "s_Torque")).toBeDefined();
@@ -232,7 +245,11 @@ describe("Variable editing", () => {
 describe("Method editing", () => {
   it("addMethodToSt adds declaration and implementation", () => {
     const path = workCopy("Motor.st");
-    addMethodToSt(path, "Motor", { name: "Stop", params: [{ name: "immediate", type: "BOOL" }], body: "s_Running := FALSE;" });
+    addMethodToSt(path, "Motor", {
+      name: "Stop",
+      params: [{ name: "immediate", type: "BOOL" }],
+      body: "s_Running := FALSE;",
+    });
     const content = readFileSync(path, "latin1");
     expect(content).toContain("FUNCTION Stop");
     expect(content).toContain("FUNCTION Motor::Stop");

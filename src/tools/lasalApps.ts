@@ -22,8 +22,6 @@ function launchDetached(exe: string, args: string[]): void {
   child.unref();
 }
 
-
-
 // --- manage_visudesigner ---
 
 export const manageVisuDesignerSchema = {
@@ -31,9 +29,7 @@ export const manageVisuDesignerSchema = {
   lvp_path: z
     .string()
     .optional()
-    .describe(
-      "Full path to the .lvp station file to open (open only). Omit to auto-detect from the selected project."
-    ),
+    .describe("Full path to the .lvp station file to open (open only). Omit to auto-detect from the selected project."),
 };
 
 export async function manageVisuDesignerHandler(args: { action: "open" | "close"; lvp_path?: string }) {
@@ -62,10 +58,14 @@ export async function manageVisuDesignerHandler(args: { action: "open" | "close"
       return { content: [{ type: "text" as const, text: `VISUDesigner opened with: ${found[0]}` }] };
     }
     return {
-      content: [{
-        type: "text" as const,
-        text: ["Multiple .lvp stations found. Specify lvp_path with one of:", ...found.map((f) => `  ${f}`)].join("\n"),
-      }],
+      content: [
+        {
+          type: "text" as const,
+          text: ["Multiple .lvp stations found. Specify lvp_path with one of:", ...found.map((f) => `  ${f}`)].join(
+            "\n",
+          ),
+        },
+      ],
     };
   }
 
@@ -84,9 +84,7 @@ export const manageClass2Schema = {
   lcp_path: z
     .string()
     .optional()
-    .describe(
-      "Full path to the .lcp station file to open (open only). Omit to auto-detect from the selected project."
-    ),
+    .describe("Full path to the .lcp station file to open (open only). Omit to auto-detect from the selected project."),
 };
 
 export async function manageClass2Handler(args: { action: "open" | "close"; lcp_path?: string }) {
@@ -115,10 +113,14 @@ export async function manageClass2Handler(args: { action: "open" | "close"; lcp_
       return { content: [{ type: "text" as const, text: `CLASS 2 opened with: ${found[0]}` }] };
     }
     return {
-      content: [{
-        type: "text" as const,
-        text: ["Multiple .lcp stations found. Specify lcp_path with one of:", ...found.map((f) => `  ${f}`)].join("\n"),
-      }],
+      content: [
+        {
+          type: "text" as const,
+          text: ["Multiple .lcp stations found. Specify lcp_path with one of:", ...found.map((f) => `  ${f}`)].join(
+            "\n",
+          ),
+        },
+      ],
     };
   }
 

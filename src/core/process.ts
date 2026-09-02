@@ -11,10 +11,9 @@ export function isPidRunning(pid: number): boolean {
 
 export function getPortForPid(pid: number): number {
   try {
-    const out = execSync(
-      `powershell -Command "(Get-NetTCPConnection -OwningProcess ${pid} -State Listen).Port"`,
-      { encoding: "utf-8" },
-    ).trim();
+    const out = execSync(`powershell -Command "(Get-NetTCPConnection -OwningProcess ${pid} -State Listen).Port"`, {
+      encoding: "utf-8",
+    }).trim();
     const ports = out
       .split(/[\r\n]+/)
       .map((p) => parseInt(p.trim()))

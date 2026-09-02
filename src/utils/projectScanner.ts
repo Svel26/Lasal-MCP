@@ -93,7 +93,9 @@ export function findLsmPath(solutionDir: string): string | null {
     for (const f of readdirSync(solutionDir)) {
       if (f.endsWith(".lsm")) return join(solutionDir, f);
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return null;
 }
 
@@ -129,7 +131,9 @@ function findFilesDeep(dir: string, ext: string): string[] {
       try {
         if (statSync(full).isDirectory()) walk(full);
         else if (entry.endsWith(ext)) results.push(full);
-      } catch { /* skip inaccessible */ }
+      } catch {
+        /* skip inaccessible */
+      }
     }
   }
   walk(dir);
@@ -152,7 +156,12 @@ export function readVisuStationIds(lvpPath: string): Record<string, number> {
       if (!st || typeof st !== "object") continue;
       const stRec = st as Record<string, unknown>;
       const name = typeof stRec.name === "string" ? stRec.name : undefined;
-      const id = typeof stRec.stationId === "number" ? stRec.stationId : typeof stRec.stationId === "string" ? parseInt(stRec.stationId, 10) : NaN;
+      const id =
+        typeof stRec.stationId === "number"
+          ? stRec.stationId
+          : typeof stRec.stationId === "string"
+            ? parseInt(stRec.stationId, 10)
+            : NaN;
       if (name && !isNaN(id)) result[name] = id;
     }
   } catch {}
@@ -160,9 +169,7 @@ export function readVisuStationIds(lvpPath: string): Record<string, number> {
 }
 
 /** Read the current TCPIP connection from a .lss file (IP + port). */
-export function readLssConnection(
-  lssPath: string
-): { ip: string; port: string } | { error: string } {
+export function readLssConnection(lssPath: string): { ip: string; port: string } | { error: string } {
   if (!existsSync(lssPath)) return { error: `LSS file not found: ${lssPath}` };
   try {
     const content = readLatin1(lssPath);
@@ -178,10 +185,7 @@ export function readLssConnection(
 }
 
 /** Surgically update the TCPIP IP (and optionally port/ssltls) in a .lss file, byte-preserving everything else. */
-export function updateLssConnection(
-  lssPath: string,
-  updates: { ip?: string; port?: string; ssltls?: string }
-): void {
+export function updateLssConnection(lssPath: string, updates: { ip?: string; port?: string; ssltls?: string }): void {
   let content = readLatin1(lssPath);
   const tcpipRe = /(<TCPIP\s[^>]*?>)/s;
   const m = tcpipRe.exec(content);
@@ -191,8 +195,7 @@ export function updateLssConnection(
     const stationRe = /(<SlnStation\s[^>]*>)/s;
     const sm = stationRe.exec(content);
     if (!sm) throw new Error(`No <SlnStation ...> element found in ${lssPath}`);
-    const tag =
-      `<OnlineConnectionInfo>\n\t\t<TCPIP ConfigName="MCP" BUS="3" Password="" IP="${updates.ip ?? "127.0.0.1"}" PORT="${updates.port ?? "1954"}" SomeFlags="0" PLCID="" Repeater="0" SSLTLS="${updates.ssltls ?? "0"}" Favorite="0"/>\n\t</OnlineConnectionInfo>`;
+    const tag = `<OnlineConnectionInfo>\n\t\t<TCPIP ConfigName="MCP" BUS="3" Password="" IP="${updates.ip ?? "127.0.0.1"}" PORT="${updates.port ?? "1954"}" SomeFlags="0" PLCID="" Repeater="0" SSLTLS="${updates.ssltls ?? "0"}" Favorite="0"/>\n\t</OnlineConnectionInfo>`;
     content = content.slice(0, sm.index! + sm[1]!.length) + "\n\t" + tag + content.slice(sm.index! + sm[1]!.length);
     writeFileSync(lssPath, content, "latin1");
     return;

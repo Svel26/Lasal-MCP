@@ -4,16 +4,8 @@ import { z } from "zod";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, killVisuDesigner } from "../utils/engine.js";
 import { EditTransaction } from "../utils/editTransaction.js";
-import {
-  newDesignTimeId,
-  newInstanceId,
-  getFileEntryVersion,
-  writeTabIndentedJson
-} from "../utils/visuDashboardIO.js";
-import {
-  loadControlManifest,
-  encodeProperty
-} from "../utils/visuPropertyEncoding.js";
+import { newDesignTimeId, newInstanceId, getFileEntryVersion, writeTabIndentedJson } from "../utils/visuDashboardIO.js";
+import { loadControlManifest, encodeProperty } from "../utils/visuPropertyEncoding.js";
 
 // Helper to clean JSON manifests
 import { cleanJson } from "../utils/visuPropertyEncoding.js";
@@ -65,7 +57,7 @@ const PropertyBindInput = z.object({
     "compositeControl",
     "imageOrMedia",
     "fontStyle",
-    "styleClass"
+    "styleClass",
   ]),
   value: z.any(),
 });
@@ -73,7 +65,10 @@ const PropertyBindInput = z.object({
 const SetElementPropertiesOp = z.object({
   op: z.literal("set_element_properties"),
   dashboardName: z.string(),
-  name: z.string().optional().describe("Element name to update. Omit or set to '' or '__root' to edit the root dashboard properties."),
+  name: z
+    .string()
+    .optional()
+    .describe("Element name to update. Omit or set to '' or '__root' to edit the root dashboard properties."),
   properties: z.array(PropertyBindInput),
 });
 
@@ -196,7 +191,7 @@ function updateLayoutProp(properties: any[], name: string, value: string | undef
       name,
       value: realVal,
       typeId,
-      propTypeId
+      propTypeId,
     });
   }
 }
@@ -238,7 +233,7 @@ export async function visuDashboardHandler(args: {
             const list: any[] = [];
             const roots = [
               join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "user"),
-              join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "sigmatek")
+              join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "sigmatek"),
             ];
             for (const r of roots) {
               if (!existsSync(r)) continue;
@@ -251,7 +246,7 @@ export async function visuDashboardHandler(args: {
                       controlId: entry,
                       shortName: manifest.shortName?.en || entry,
                       version: manifest.version || "unknown",
-                      description: manifest.description?.en || ""
+                      description: manifest.description?.en || "",
                     });
                   } catch {}
                 }
@@ -278,8 +273,10 @@ export async function visuDashboardHandler(args: {
                 description: p.description?.en || "",
                 valueSourceTypes: Array.isArray(p.valueSourceTypes)
                   ? p.valueSourceTypes
-                  : (p.valueSourceTypes ? [p.valueSourceTypes] : ["constString"])
-              }))
+                  : p.valueSourceTypes
+                    ? [p.valueSourceTypes]
+                    : ["constString"],
+              })),
             };
             break;
           }
@@ -290,7 +287,14 @@ export async function visuDashboardHandler(args: {
               throw new Error(`File already exists at ${path}`);
             }
 
-            const verKey = op.kind === "controlTemplate" ? "controlTemplateVersion" : (op.kind === "globalDashboard" ? "globalDashboardVersion" : (op.kind === "window" ? "windowVersion" : "dashboardVersion"));
+            const verKey =
+              op.kind === "controlTemplate"
+                ? "controlTemplateVersion"
+                : op.kind === "globalDashboard"
+                  ? "globalDashboardVersion"
+                  : op.kind === "window"
+                    ? "windowVersion"
+                    : "dashboardVersion";
             const version = getFileEntryVersion(lvpPath, verKey);
 
             const content = {
@@ -312,9 +316,9 @@ export async function visuDashboardHandler(args: {
                 { name: "height", value: op.height || "800px", typeId: 0, propTypeId: 2 },
                 { name: "width", value: op.width || "1024px", typeId: 0, propTypeId: 2 },
                 { name: "overflow", value: "visible", typeId: 0, propTypeId: 2 },
-                { name: "background", value: "transparent", typeId: 0, propTypeId: 2 }
+                { name: "background", value: "transparent", typeId: 0, propTypeId: 2 },
               ],
-              dashboardelements: []
+              dashboardelements: [],
             };
 
             writeTabIndentedJson(path, content);
@@ -344,9 +348,9 @@ export async function visuDashboardHandler(args: {
               properties: [
                 { name: "position", value: "absolute", typeId: 0, propTypeId: 2 },
                 { name: "overflow", value: "visible", typeId: 0, propTypeId: 2 },
-                { name: "background", value: "transparent", typeId: 0, propTypeId: 2 }
+                { name: "background", value: "transparent", typeId: 0, propTypeId: 2 },
               ],
-              dashboardelements: []
+              dashboardelements: [],
             };
             writeTabIndentedJson(path, content);
             opResult.ok = true;
@@ -400,7 +404,7 @@ export async function visuDashboardHandler(args: {
               name: op.name,
               instanceId: newInstanceId("lvd"),
               controlId: op.controlId,
-              properties: elementProperties
+              properties: elementProperties,
             };
 
             data.dashboardelements.push(newEl);
@@ -444,7 +448,11 @@ export async function visuDashboardHandler(args: {
             let targetProps: any[] | null = null;
             let controlId = "sig-dashboard";
 
-            if (targetName === "" || targetName === "__root" || targetName.toLowerCase() === op.dashboardName.toLowerCase()) {
+            if (
+              targetName === "" ||
+              targetName === "__root" ||
+              targetName.toLowerCase() === op.dashboardName.toLowerCase()
+            ) {
               targetProps = data.properties;
               controlId = data.controlId || "sig-dashboard";
             } else {
@@ -464,7 +472,13 @@ export async function visuDashboardHandler(args: {
 
             for (const propBind of op.properties) {
               const manifestProp = manifest?.properties?.find((p: any) => p.name === propBind.name);
-              const encoded = encodeProperty(projectDir, propBind.name, manifestProp, propBind.sourceType, propBind.value);
+              const encoded = encodeProperty(
+                projectDir,
+                propBind.name,
+                manifestProp,
+                propBind.sourceType,
+                propBind.value,
+              );
 
               const idx = targetProps.findIndex((p: any) => p.name === propBind.name);
               if (idx >= 0) {
@@ -583,7 +597,7 @@ export async function visuDashboardHandler(args: {
               value: op.templateName,
               typeId: 23,
               propTypeId: 5,
-              refId: templateId
+              refId: templateId,
             });
             updateLayoutProp(elementProperties, "--theme-sig-element-left", op.left || "0px");
             updateLayoutProp(elementProperties, "--theme-sig-element-top", op.top || "0px");
@@ -598,7 +612,7 @@ export async function visuDashboardHandler(args: {
               designTimeId: newDesignTimeId(),
               name: op.name,
               instanceId: newInstanceId("lvd"),
-              properties: elementProperties
+              properties: elementProperties,
             };
 
             data.dashboardelements = data.dashboardelements || [];
@@ -629,11 +643,11 @@ export async function visuDashboardHandler(args: {
 
   const responseBody = {
     results,
-    backups: backups.map((b) => basename(b))
+    backups: backups.map((b) => basename(b)),
   };
 
   return {
     content: [{ type: "text" as const, text: JSON.stringify(responseBody, null, 2) }],
-    isError
+    isError,
   };
 }

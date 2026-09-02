@@ -1,0 +1,35 @@
+name: ✨ Feature Request
+description: Suggest a new feature, tool, or improvement for Lasal-MCP
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to improve Lasal-MCP? We'd love to hear it!
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: Is your feature request related to a problem or limitation?
+      placeholder: I often need to ... but currently there is no way to ...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: What would you like to happen? Describe the new tool, option, or behavior.
+      placeholder: Add a new tool `...` or support parameter `...`
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative solutions or workarounds you have considered?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context or LASAL Engine Details
+      description: Any relevant Sigmatek LASAL CLI commands, script syntax, or documentation references?

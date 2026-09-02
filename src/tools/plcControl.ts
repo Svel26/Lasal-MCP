@@ -31,14 +31,14 @@ function getProjectFiles(dir: string, files: string[] = []): string[] {
 // Resolve Structured Text channel type for coercion
 function resolveChannelType(projDir: string, objectName: string, channelName: string): string | null {
   const files = getProjectFiles(projDir);
-  const lcnFiles = files.filter(f => f.endsWith(".lcn"));
-  const stFiles = files.filter(f => f.endsWith(".st"));
+  const lcnFiles = files.filter((f) => f.endsWith(".lcn"));
+  const stFiles = files.filter((f) => f.endsWith(".st"));
 
   let className: string | null = null;
   for (const lcnFile of lcnFiles) {
     try {
       const info = parseLcn(lcnFile);
-      const obj = info.objects.find(o => o.name === objectName);
+      const obj = info.objects.find((o) => o.name === objectName);
       if (obj) {
         className = obj.className;
         break;
@@ -47,7 +47,7 @@ function resolveChannelType(projDir: string, objectName: string, channelName: st
   }
   if (!className) return null;
 
-  const stFile = stFiles.find(f => {
+  const stFile = stFiles.find((f) => {
     const base = f.substring(f.lastIndexOf("\\") + 1, f.lastIndexOf("."));
     return base.toLowerCase() === className?.toLowerCase();
   });
@@ -64,17 +64,11 @@ function resolveChannelType(projDir: string, objectName: string, channelName: st
   return null;
 }
 
-
 // ─── build_project ────────────────────────────────────────────────────────────
 
 export const buildProjectSchema = {
-  action: z
-    .enum(["compile", "download"])
-    .describe("'compile' builds the project; 'download' transfers it to the PLC."),
-  lcp_path: z
-    .string()
-    .optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
+  action: z.enum(["compile", "download"]).describe("'compile' builds the project; 'download' transfers it to the PLC."),
+  lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
   options: z
     .enum(["RebuildAll", "BuildChanges", "UserClassesOnly", "NoDebugInfo"])
     .optional()
@@ -84,7 +78,7 @@ export const buildProjectSchema = {
     .string()
     .optional()
     .describe(
-      "Connection string (e.g. 'TCPIP:192.168.1.100') or address-book name (download only). Omit to use the connection saved in the .lss file."
+      "Connection string (e.g. 'TCPIP:192.168.1.100') or address-book name (download only). Omit to use the connection saved in the .lss file.",
     ),
   add_loader_anyway: z
     .boolean()
@@ -114,7 +108,11 @@ export async function buildProjectHandler(args: {
 
     if (args.action === "compile") {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
-      const br = await runBatchOps(resolved.path, [{ type: "compile", optionName: args.options ?? "RebuildAll" }], timeoutMs);
+      const br = await runBatchOps(
+        resolved.path,
+        [{ type: "compile", optionName: args.options ?? "RebuildAll" }],
+        timeoutMs,
+      );
       return batchResultToResponse(br);
     }
 
@@ -134,8 +132,8 @@ export async function buildProjectHandler(args: {
         preflight: pf,
         connectionUsed,
         ipUsed,
-        errors: pf.problems.map(p => p.message),
-        hints: pf.problems.map(p => p.fix)
+        errors: pf.problems.map((p) => p.message),
+        hints: pf.problems.map((p) => p.fix),
       });
     }
 
@@ -144,16 +142,16 @@ export async function buildProjectHandler(args: {
     let br = await runBatchOps(
       resolved.path,
       [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
-      timeoutMs
+      timeoutMs,
     );
 
     // Auto-retry transient connection errors once
     if (!br.ok && isTransientError(br.errors)) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       br = await runBatchOps(
         resolved.path,
         [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
-        timeoutMs
+        timeoutMs,
       );
       br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
     }
@@ -162,7 +160,7 @@ export async function buildProjectHandler(args: {
       connectionUsed,
       ipUsed,
       postDownloadState: br.postDownloadState,
-      lcpPath: resolved.path
+      lcpPath: resolved.path,
     });
   });
 }
@@ -173,10 +171,7 @@ export const controlPlcSchema = {
   action: z
     .enum(["start", "stop", "get_state"])
     .describe("'start' runs the PLC project; 'stop' halts it; 'get_state' queries its current state."),
-  lcp_path: z
-    .string()
-    .optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
+  lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
   connection: z
     .string()
     .optional()
@@ -213,8 +208,8 @@ export async function controlPlcHandler(args: {
           preflight: pf,
           connectionUsed: conn,
           ipUsed,
-          errors: pf.problems.map(p => p.message),
-          hints: pf.problems.map(p => p.fix)
+          errors: pf.problems.map((p) => p.message),
+          hints: pf.problems.map((p) => p.fix),
         });
       }
     }
@@ -236,40 +231,47 @@ export async function controlPlcHandler(args: {
         "import json",
         `f_state = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f_state)",
-        "f_state.close()"
+        "f_state.close()",
       ];
 
       const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["start"]);
       let br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
 
       if (!br.ok && isTransientError(br.errors)) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
         br.hints = [...(br.hints ?? []), "Retried start once due to a transient connection failure."];
       }
 
       let stateData: Record<string, unknown> = {};
       if (existsSync(resultPath)) {
-        try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+        try {
+          stateData = JSON.parse(readFileSync(resultPath, "utf-8"));
+        } catch {}
       }
 
       // LARS resets SRAM on first boot after a fresh download, leaving the runtime in
       // SRAM_Error until the project is started again. Retry once so callers see Run_RAM.
       const stateName = stateData.stateName as string | undefined;
       if (br.ok && stateName === "SRAM_Error") {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
         br = await runScript(script, logPath, TIMEOUTS.script, ["start"], stepsPath);
-        br.hints = [...(br.hints ?? []), "SRAM was reset on first start (fresh LARS download). Retried start automatically."];
+        br.hints = [
+          ...(br.hints ?? []),
+          "SRAM was reset on first start (fresh LARS download). Retried start automatically.",
+        ];
         stateData = {};
         if (existsSync(resultPath)) {
-          try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+          try {
+            stateData = JSON.parse(readFileSync(resultPath, "utf-8"));
+          } catch {}
         }
       }
 
       return batchResultToResponse(br, {
         connectionUsed: conn,
         ipUsed,
-        postStartState: stateData
+        postStartState: stateData,
       });
     }
 
@@ -290,27 +292,29 @@ export async function controlPlcHandler(args: {
         "import json",
         `f_state = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f_state)",
-        "f_state.close()"
+        "f_state.close()",
       ];
 
       const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["stop"]);
       let br = await runScript(script, logPath, TIMEOUTS.script, ["stop"], stepsPath);
 
       if (!br.ok && isTransientError(br.errors)) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         br = await runScript(script, logPath, TIMEOUTS.script, ["stop"], stepsPath);
         br.hints = [...(br.hints ?? []), "Retried stop once due to a transient connection failure."];
       }
 
       let stateData: Record<string, unknown> = {};
       if (existsSync(resultPath)) {
-        try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+        try {
+          stateData = JSON.parse(readFileSync(resultPath, "utf-8"));
+        } catch {}
       }
 
       return batchResultToResponse(br, {
         connectionUsed: conn,
         ipUsed,
-        postStopState: stateData
+        postStopState: stateData,
       });
     }
 
@@ -328,27 +332,29 @@ export async function controlPlcHandler(args: {
       "import json",
       `f_state = open(${emitPath(resultPath)}, 'w')`,
       "json.dump(result, f_state)",
-      "f_state.close()"
+      "f_state.close()",
     ];
 
     const script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["get_state"]);
     let br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"], stepsPath);
 
     if (!br.ok && isTransientError(br.errors)) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       br = await runScript(script, logPath, TIMEOUTS.script, ["get_state"], stepsPath);
       br.hints = [...(br.hints ?? []), "Retried get_state once due to a transient connection failure."];
     }
 
     let stateData: Record<string, unknown> = {};
     if (existsSync(resultPath)) {
-      try { stateData = JSON.parse(readFileSync(resultPath, "utf-8")); } catch {}
+      try {
+        stateData = JSON.parse(readFileSync(resultPath, "utf-8"));
+      } catch {}
     }
 
     return batchResultToResponse(br, {
       connectionUsed: conn,
       ipUsed,
-      ...stateData
+      ...stateData,
     });
   });
 }
@@ -356,13 +362,8 @@ export async function controlPlcHandler(args: {
 // ─── plc_values ──────────────────────────────────────────────────────────────
 
 export const plcValuesSchema = {
-  action: z
-    .enum(["read", "write"])
-    .describe("'read' fetches live channel values; 'write' pushes new values."),
-  lcp_path: z
-    .string()
-    .optional()
-    .describe("Absolute path to the .lcp file. Omit to use the selected project."),
+  action: z.enum(["read", "write"]).describe("'read' fetches live channel values; 'write' pushes new values."),
+  lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
   connection: z
     .string()
     .optional()
@@ -376,7 +377,7 @@ export const plcValuesSchema = {
       z.object({
         channel: z.string().describe("Channel path in 'ObjectName.ChannelName' format."),
         value: z.string().describe("New value as string."),
-      })
+      }),
     )
     .optional()
     .describe("Channel/value pairs to write (write only)."),
@@ -413,8 +414,8 @@ export async function plcValuesHandler(args: {
         preflight: pf,
         connectionUsed: conn,
         ipUsed,
-        errors: pf.problems.map(p => p.message),
-        hints: pf.problems.map(p => p.fix)
+        errors: pf.problems.map((p) => p.message),
+        hints: pf.problems.map((p) => p.fix),
       });
     }
 
@@ -465,7 +466,7 @@ export async function plcValuesHandler(args: {
         "    result = {'ok': False, 'error': 'Failed to open PLC connection - check connection string and PLC state'}",
         `f = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f)",
-        "f.close()"
+        "f.close()",
       ];
       script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["read"]);
     } else {
@@ -530,14 +531,20 @@ export async function plcValuesHandler(args: {
         "    result = {'ok': False, 'error': 'Failed to open PLC connection - check connection string and PLC state'}",
         `f = open(${emitPath(resultPath)}, 'w')`,
         "json.dump(result, f)",
-        "f.close()"
+        "f.close()",
       ];
       script = buildRawScript(resolved.path, bodyLines, logPath, stepsPath, ["write"]);
     }
 
-    let br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"], stepsPath);
+    let br = await runScript(
+      script,
+      logPath,
+      TIMEOUTS.script,
+      args.action === "read" ? ["read"] : ["write"],
+      stepsPath,
+    );
     if (!br.ok && isTransientError(br.errors)) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       br = await runScript(script, logPath, TIMEOUTS.script, args.action === "read" ? ["read"] : ["write"], stepsPath);
       br.hints = [...(br.hints ?? []), `Retried ${args.action} once due to a transient connection failure.`];
     }
@@ -590,7 +597,7 @@ export async function plcValuesHandler(args: {
       connectionUsed: conn,
       ipUsed,
       hints,
-      ...(failedChannels.length ? { failedChannels } : {})
+      ...(failedChannels.length ? { failedChannels } : {}),
     };
     return respond(body as any);
   });
