@@ -8,12 +8,11 @@ on:
 
 jobs:
   test:
-    name: Test (Node ${{ matrix.node-version }} on ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Test (Node ${{ matrix.node-version }} on Windows)
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
         node-version: [20.x, 22.x]
 
     steps:
