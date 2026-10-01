@@ -79,10 +79,17 @@ describe("class file manifest edits", () => {
     expect(readFileSync(lcp, "latin1")).toBe(content);
   });
 
-  it("adds a header file with the Global attribute", () => {
-    const { lcp } = makeProject();
+  it("adds a header file with the Global attribute and auto-injects into Include/global.h", () => {
+    const { dir, lcp } = makeProject();
+    mkdirSync(join(dir, "Include"), { recursive: true });
+    writeFileSync(join(dir, "Include", "global.h"), '#include "unit.h"\n', "latin1");
+
     addHeaderFileToManifest(lcp, ".\\Class\\PbLib\\C_PbLib.h", true);
     expect(readFileSync(lcp, "latin1")).toContain('<File Path=".\\Class\\PbLib\\C_PbLib.h" Global="true"/>');
+
+    const globalH = readFileSync(join(dir, "Include", "global.h"), "latin1");
+    expect(globalH).toContain('#include "..\\Class\\PbLib\\C_PbLib.h"');
+    expect(globalH).toContain('#include "unit.h"');
   });
 
   it("adds a class into an existing folder", () => {
@@ -178,6 +185,8 @@ describe("createClass", () => {
     expect(st).toContain('#include "..\\..\\Class\\PbLib\\C_PbLib.h"');
     expect(st).toContain("ClassSvr.pMeth");
     expect(st).toContain('TO_UDINT(619352855), "ClassSvr"');
+    expect(st).toContain('TO_UDINT(264570932), "PbLib", //Class');
+    expect(st).toContain('TO_UDINT(1422331979), "State"');
     expect(st).toContain("(::PbLib.State.pMeth)$UINT, _CH_SVR$UINT, 2#0000000000001000$UINT");
     expect(st).toContain("FUNCTION GLOBAL TAB PbLib::@CT_");
     expect(st).toContain("C_PbLib.cpp");

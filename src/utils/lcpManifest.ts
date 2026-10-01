@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { newGuid, parseLcp, readLatin1, writeLatin1 } from "./lasalXml.js";
 import { validateMbcsEncodable } from "./batchScript.js";
+import { lasalCrc32 } from "./crc.js";
 
 // ============================================================================
 // CLASS 2 project manifest (.lcp) editing + class scaffolding.
@@ -138,16 +139,39 @@ export function addClassFileToManifest(lcpPath: string, relPathInput: string): M
 export function addHeaderFileToManifest(lcpPath: string, relPathInput: string, global = false): ManifestEditResult {
   const relPath = normalizeManifestPath(relPathInput);
   const content = readLatin1(lcpPath);
-  if (hasPathInSection(content, "HeaderFiles", relPath)) {
-    return { changed: false, added: [], alreadyPresent: [relPath] };
+  let changed = false;
+  if (!hasPathInSection(content, "HeaderFiles", relPath)) {
+    const unit = indentUnit(content);
+    const globalAttr = global ? ` Global="true"` : "";
+    const line = `${unit}${unit}<File Path="${relPath}"${globalAttr}/>`;
+    const { content: next, found } = insertBeforeClose(content, "</HeaderFiles>", line, "<HeaderFiles>");
+    if (!found) throw new Error(`<HeaderFiles> section not found in ${lcpPath}`);
+    writeLatin1(lcpPath, next);
+    changed = true;
   }
-  const unit = indentUnit(content);
-  const globalAttr = global ? ` Global="true"` : "";
-  const line = `${unit}${unit}<File Path="${relPath}"${globalAttr}/>`;
-  const { content: next, found } = insertBeforeClose(content, "</HeaderFiles>", line, "<HeaderFiles>");
-  if (!found) throw new Error(`<HeaderFiles> section not found in ${lcpPath}`);
-  writeLatin1(lcpPath, next);
-  return { changed: true, added: [relPath], alreadyPresent: [] };
+
+  // If marked global, also ensure it is included in Include/global.h if present
+  if (global) {
+    const globalH = join(dirname(lcpPath), "Include", "global.h");
+    if (existsSync(globalH)) {
+      const gContent = readLatin1(globalH);
+      const cleanRel = relPath.replace(/^(\.[\\/])+/, "");
+      const incLine = `#include "..\\${cleanRel}"`;
+      if (!gContent.includes(incLine)) {
+        let nextG: string;
+        const unitIdx = gContent.indexOf('#include "unit.h"');
+        if (unitIdx >= 0) {
+          nextG = gContent.slice(0, unitIdx) + incLine + "\n\n" + gContent.slice(unitIdx);
+        } else {
+          nextG = gContent + "\n" + incLine + "\n";
+        }
+        writeLatin1(globalH, nextG);
+        changed = true;
+      }
+    }
+  }
+
+  return { changed, added: changed ? [relPath] : [], alreadyPresent: changed ? [] : [relPath] };
 }
 
 /**
@@ -283,7 +307,7 @@ export function registerProjectFile(
 function classTable(root: string, name: string, servers: ClassServerSpec[]): string {
   const lines = servers.map((s) => {
     const retentiveFlag = s.retentive ? "2#0000000000001000$UINT" : "2#0000000000000000$UINT";
-    return `(::${root}.${s.name}.pMeth)$UINT, _CH_SVR$UINT, ${retentiveFlag}, TO_UDINT(0), "${s.name}", `;
+    return `(::${root}.${s.name}.pMeth)$UINT, _CH_SVR$UINT, ${retentiveFlag}, TO_UDINT(${lasalCrc32(s.name)}), "${s.name}", `;
   });
   return (
     `FUNCTION GLOBAL TAB ${name}::@CT_\n` +
@@ -291,10 +315,10 @@ function classTable(root: string, name: string, servers: ClassServerSpec[]): str
     `2#0100000000000010$UINT, //TY_${name.toUpperCase()}\n` +
     `0$UINT, 0$UINT, (SIZEOF(::${name}))$UINT, \n` +
     `${servers.length + 1}$UINT, 0$UINT, 0$UINT, \n` +
-    `TO_UDINT(0), "${name}", //Class\n` +
+    `TO_UDINT(${lasalCrc32(name)}), "${name}", //Class\n` +
     `TO_UDINT(0), 0, 0$UINT, 0$UINT, //Baseclass\n` +
     `//Servers:\n` +
-    `(::${name}.ClassSvr.pMeth)$UINT, _CH_CMD$UINT, 2#0000000000000000$UINT, TO_UDINT(619352855), "ClassSvr", \n` +
+    `(::${name}.ClassSvr.pMeth)$UINT, _CH_CMD$UINT, 2#0000000000000000$UINT, TO_UDINT(${lasalCrc32("ClassSvr")}), "ClassSvr", \n` +
     lines.map((l) => `${l}\n`).join("") +
     `//Clients:\n` +
     `END_FUNCTION\n`

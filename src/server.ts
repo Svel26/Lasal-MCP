@@ -28,6 +28,7 @@ import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
 import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
 import { larsRuntimeSchema, larsRuntimeHandler } from "./tools/larsRuntime.js";
+import { validateGuidsSchema, validateGuidsHandler } from "./tools/validateGuids.js";
 import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
@@ -56,6 +57,15 @@ server.tool(
   "Read-only inventory of the CLASS 2 project: classes (name, channels, tasks), networks and objects, from the .lcp manifest and class sources. Use it to plan changes before apply_project_changes.",
   inspectProjectSchema,
   inspectProjectHandler,
+);
+
+server.tool(
+  "validate_guids",
+  "Scan a LASAL station project for duplicate GUID collisions and uninitialized TO_UDINT(0) placeholders in classes. " +
+    "Auto-resolves duplicate GUID collisions (generating fresh GUIDs and updating MaeExp.txt/xml) and populates exact LASAL CRC32 @CT_ hashes. " +
+    "Also cleans dangling network metadata.",
+  validateGuidsSchema,
+  validateGuidsHandler,
 );
 
 server.tool(
@@ -306,8 +316,10 @@ FUNCTION VIRTUAL GLOBAL Motor::CyWork … END_FUNCTION
 
 A name must match in three places: the XML \`<Server>/<Client>\` entry, the
 \`//Servers:\`/\`//Clients:\` declaration, and the \`@CT_\` table. The
-\`TO_UDINT(...)\` numbers are IDE-generated GUID hashes; a hand-written class
-keeps placeholder values until CLASS 2 runs *Project → Validate GUID*. Prefer
+\`TO_UDINT(...)\` numbers in \`@CT_\` are standard IEEE 802.3 CRC-32 hashes of the
+uppercase identifier strings (e.g. \`CRC32("CLASSSVR")\`). These are generated
+automatically by \`create_class\` or can be verified and populated across all
+classes using the \`validate_guids\` tool. Prefer
 \`apply_project_changes\` with \`create_class\` / \`add_project_file\` for new
 classes, and \`read_class_source\` for edits.
 
@@ -412,9 +424,9 @@ document.querySelector('sig-app').activeView
   removed manually and the linker reports \`Classtable 'X::@CT_' not found\`, run
   \`clean_project\` with \`deep: true\` (purges the generated .lcb and
   Network/ConfigObjects artifacts) and rebuild
-- A hand-written/generated class keeps placeholder \`TO_UDINT(0)\` GUID hashes;
-  open the project once in CLASS 2 and run *Project → Validate GUID* before the
-  class takes part in online/multimaster identity
+- \`@CT_\` class tables require valid IEEE 802.3 CRC-32 hashes instead of \`TO_UDINT(0)\`.
+  Use \`validate_guids\` to automatically compute missing CRC-32 hashes and resolve
+  any duplicate XML GUID collisions across the station.
 - C functions called from ST need C linkage (\`extern "C"\`), and a class's C file
   must not share the class name (\`C_<Name>.cpp\`)
 - After any code changes, **always compile** to check for errors before deploying

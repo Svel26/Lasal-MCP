@@ -603,7 +603,7 @@ export async function applyProjectChangesHandler(args: {
     }
     if (ops.some((op) => op.type === "create_class")) {
       hints.push(
-        "Generated channels use placeholder GUID hashes (TO_UDINT(0)). Open the project once in CLASS 2 and run Project -> Validate GUID before online/multimaster use.",
+        "Generated class and channels have valid IEEE 802.3 CRC-32 GUID hashes populated automatically in the @CT_ table.",
       );
       hints.push(
         "The generated class has no task methods (CyWork/Init) yet - add them in CLASS 2 or via read_class_source before scheduling a task.",
