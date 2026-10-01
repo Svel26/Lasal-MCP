@@ -2,6 +2,13 @@ import { z } from "zod";
 import { runBatchOps, type BatchOp } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, killClass2, killVisuDesigner } from "../utils/engine.js";
+import {
+  createClass,
+  registerProjectFile,
+  clearProjectCaches,
+  clearProjectBuildArtifacts,
+  type CreateClassOptions,
+} from "../utils/lcpManifest.js";
 import { respond, fail } from "../utils/respond.js";
 
 // ─── Batch operation schemas (all require CLASS 2 engine) ────────────────────
@@ -177,6 +184,73 @@ const SetParameterValueOp = z.object({
   value: z.string(),
 });
 
+const SetCompilerVersionOp = z.object({
+  type: z.literal("set_compiler_version"),
+  version: z.string().describe("Compiler version string accepted by batch.SetCompilerVersion (e.g. 'C75')."),
+});
+
+// ─── File-level operations (no CLASS 2 batch API) ────────────────────────────
+
+const ClassServerSpec = z.object({
+  name: z.string().describe("Server (channel) name."),
+  type: z.string().optional().default("SvrCh_DINT").describe("ST channel type (SvrCh_*, default SvrCh_DINT)."),
+  visualized: z.boolean().optional().default(true),
+  retentive: z.boolean().optional().default(false),
+  initialize: z.boolean().optional().default(false),
+});
+
+const ClassFileSpec = z.object({
+  path: z.string().describe("Path relative to the project (e.g. .\\Class\\PbLib\\C_PbLib.cpp) or absolute."),
+  include: z.boolean().optional().describe("Header: emit an #include in the class .st (default true for *.h)."),
+  global: z.boolean().optional().describe('Header: set Global="true" in <HeaderFiles>.'),
+  content: z.string().optional().describe("Optional latin1 content to write to the file."),
+});
+
+const CreateClassOp = z.object({
+  type: z.literal("create_class"),
+  name: z.string().describe("Class name ([A-Za-z_][A-Za-z0-9_]*)."),
+  folder: z.string().optional().default("IQ").describe("Class browser folder under <ClassFolders>."),
+  revision: z.string().optional().default("0.1"),
+  comment: z.string().optional(),
+  company: z.string().optional().default("Votech"),
+  author: z.string().optional().default("lasal-mcp"),
+  cyclicTask: z.boolean().optional().default(false),
+  realtimeTask: z.boolean().optional().default(false),
+  backgroundTask: z.boolean().optional().default(false),
+  defCyclicTime: z.string().optional().default("cCyTb"),
+  defBackgroundTime: z.string().optional().default("cBgTb"),
+  servers: z
+    .array(ClassServerSpec)
+    .optional()
+    .default([])
+    .describe("Extra server channels (ClassSvr is always added)."),
+  files: z
+    .array(ClassFileSpec)
+    .optional()
+    .default([])
+    .describe("Class dependency files (.h/.cpp), optionally created."),
+});
+
+const AddProjectFileOp = z.object({
+  type: z.literal("add_project_file"),
+  path: z.string().describe("Existing file to register (relative to the project or absolute)."),
+  header: z.boolean().optional().describe("Force registration in <HeaderFiles> even when the name does not end in .h."),
+  global: z.boolean().optional().default(false).describe('Header: set Global="true".'),
+});
+
+const CleanProjectOp = z.object({
+  type: z.literal("clean_project"),
+  caches: z.boolean().optional().default(true).describe("Delete ProjectInternal/BrowserInfo.bin and LobInfo.bin."),
+  deep: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Also delete the generated .lcb and Network/ConfigObjects .lob/.lba (forces a full relink). " +
+        "Use to recover after a class was removed by deleting its folder instead of the batch delete_class operation.",
+    ),
+});
+
 const OperationSchema = z.discriminatedUnion("type", [
   CreateNetworkOp,
   DeleteNetworkOp,
@@ -203,9 +277,19 @@ const OperationSchema = z.discriminatedUnion("type", [
   ResetNetworkOptionsOp,
   MoveNetworkToFolderOp,
   SetParameterValueOp,
+  SetCompilerVersionOp,
+  CreateClassOp,
+  AddProjectFileOp,
+  CleanProjectOp,
 ]);
 
 type Operation = z.infer<typeof OperationSchema>;
+type FileOperation = Extract<Operation, { type: "create_class" | "add_project_file" | "clean_project" }>;
+type BatchOperation = Exclude<Operation, FileOperation>;
+
+function isFileOperation(op: Operation): op is FileOperation {
+  return op.type === "create_class" || op.type === "add_project_file" || op.type === "clean_project";
+}
 
 export const applyProjectChangesSchema = {
   lcp_path: z
@@ -215,18 +299,62 @@ export const applyProjectChangesSchema = {
   operations: z
     .array(OperationSchema)
     .describe(
-      "Ordered list of CLASS 2 batch engine operations. " +
-        "Available types: create_network, delete_network, rename_network, duplicate_network, " +
-        "add_object, remove_object, rename_object, change_object_class, " +
-        "create_connection, delete_connection, set_init_value, delete_class, " +
-        "compile, download, set_task_order, set_task_time, set_task_cpu_core, " +
-        "set_multi_cpu_core, set_visualized_flag, set_comment_network, set_comment_object, " +
-        "set_network_options, reset_network_options, move_network_to_folder, set_parameter_value",
+      "Ordered list of operations. Batch engine types: create_network, delete_network, rename_network, " +
+        "duplicate_network, add_object, remove_object, rename_object, change_object_class, " +
+        "create_connection, delete_connection, set_init_value, delete_class, compile, download, " +
+        "set_task_order, set_task_time, set_task_cpu_core, set_multi_cpu_core, set_visualized_flag, " +
+        "set_comment_network, set_comment_object, set_network_options, reset_network_options, " +
+        "move_network_to_folder, set_parameter_value, set_compiler_version. " +
+        "File-level types (applied before the batch engine, no CLASS 2 API): create_class, " +
+        "add_project_file, clean_project.",
     ),
   dry_run: z.boolean().optional().default(false).describe("Validate operations without applying them."),
 };
 
-function toBatchOp(op: Operation): BatchOp {
+function fileOperationTarget(op: FileOperation): string {
+  switch (op.type) {
+    case "create_class":
+      return op.name;
+    case "add_project_file":
+      return op.path;
+    case "clean_project":
+      return "ProjectInternal";
+  }
+}
+
+function executeFileOperation(lcpPath: string, op: FileOperation): Record<string, unknown> {
+  switch (op.type) {
+    case "create_class": {
+      const options: CreateClassOptions = {
+        name: op.name,
+        folder: op.folder,
+        revision: op.revision,
+        comment: op.comment,
+        company: op.company,
+        author: op.author,
+        cyclicTask: op.cyclicTask,
+        realtimeTask: op.realtimeTask,
+        backgroundTask: op.backgroundTask,
+        defCyclicTime: op.defCyclicTime,
+        defBackgroundTime: op.defBackgroundTime,
+        servers: op.servers,
+        files: op.files,
+      };
+      return { ...createClass(lcpPath, options) };
+    }
+    case "add_project_file":
+      return { ...registerProjectFile(lcpPath, op.path, { header: op.header, global: op.global }) };
+    case "clean_project": {
+      if (op.deep) {
+        return { buildArtifactsCleared: clearProjectBuildArtifacts(lcpPath) };
+      }
+      const cleared = op.caches === false ? [] : clearProjectCaches(lcpPath);
+      return { cachesCleared: cleared };
+    }
+  }
+}
+
+function toBatchOp(op: BatchOperation): BatchOp {
   switch (op.type) {
     case "create_network":
       return { type: "create_network", name: op.name };
@@ -332,7 +460,14 @@ function toBatchOp(op: Operation): BatchOp {
         parameterName: op.parameterName,
         value: op.value,
       };
+    case "set_compiler_version":
+      return { type: "set_compiler_version", version: op.version };
   }
+}
+
+function batchOperationTarget(op: BatchOperation): string {
+  const rec = op as Record<string, unknown>;
+  return String(rec.name ?? rec.objectName ?? rec.network ?? "");
 }
 
 export async function applyProjectChangesHandler(args: {
@@ -364,7 +499,7 @@ export async function applyProjectChangesHandler(args: {
       const plan = ops.map((op, i) => ({
         index: i,
         type: op.type,
-        target: (op as any).name ?? (op as any).network ?? (op as any).objectName ?? "",
+        target: isFileOperation(op) ? fileOperationTarget(op) : batchOperationTarget(op),
       }));
       return respond({
         ok: true,
@@ -375,41 +510,117 @@ export async function applyProjectChangesHandler(args: {
       });
     }
 
-    killClass2();
-    killVisuDesigner();
+    const hasFileOps = ops.some(isFileOperation);
+    if (hasFileOps) {
+      // File-level operations rewrite the .lcp; the IDE must not hold the project.
+      killClass2();
+      killVisuDesigner();
+    }
 
-    const batchOps: BatchOp[] = ops.map(toBatchOp);
-    const results = ops.map((op) => ({
-      op: op.type,
-      target: (op as any).name ?? (op as any).objectName ?? (op as any).network ?? "",
-      ok: true,
-      message: "Queued for batch",
-    }));
+    interface OpOutcome {
+      index: number;
+      type: string;
+      target: string;
+      ok: boolean;
+      message: string;
+      detail?: unknown;
+    }
+    const outcomes: OpOutcome[] = [];
+    const batchOps: BatchOp[] = [];
+    let fileFailure = false;
 
-    const br = await runBatchOps(resolved.path, batchOps);
-
-    const batchResult = {
-      ok: br.ok,
-      exitCode: br.exitCode,
-      durationMs: br.durationMs,
-      errors: br.errors,
-      warnings: br.warnings,
-      logPath: br.logPath,
-    };
-
-    for (const r of results) {
-      if (br.ok) {
-        r.message = "Applied via batch";
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i]!;
+      if (isFileOperation(op)) {
+        if (fileFailure) {
+          outcomes.push({
+            index: i,
+            type: op.type,
+            target: fileOperationTarget(op),
+            ok: false,
+            message: "Skipped because an earlier file operation failed.",
+          });
+          continue;
+        }
+        try {
+          const detail = executeFileOperation(resolved.path, op);
+          outcomes.push({
+            index: i,
+            type: op.type,
+            target: fileOperationTarget(op),
+            ok: true,
+            message: "Applied to project files",
+            detail,
+          });
+        } catch (e) {
+          fileFailure = true;
+          outcomes.push({
+            index: i,
+            type: op.type,
+            target: fileOperationTarget(op),
+            ok: false,
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
       } else {
-        r.ok = false;
-        r.message = "Batch script failed — see batchResult.errors";
+        batchOps.push(toBatchOp(op));
+        outcomes.push({
+          index: i,
+          type: op.type,
+          target: batchOperationTarget(op),
+          ok: true,
+          message: "Queued for batch",
+        });
       }
     }
 
+    let batchResult: Record<string, unknown> | undefined;
+    let batchOk = true;
+    if (batchOps.length > 0 && !fileFailure) {
+      killClass2();
+      killVisuDesigner();
+      const br = await runBatchOps(resolved.path, batchOps);
+      batchOk = br.ok;
+      batchResult = {
+        ok: br.ok,
+        exitCode: br.exitCode,
+        durationMs: br.durationMs,
+        errors: br.errors,
+        warnings: br.warnings,
+        logPath: br.logPath,
+      };
+      for (const o of outcomes) {
+        if (o.message === "Queued for batch") {
+          o.ok = br.ok;
+          o.message = br.ok ? "Applied via batch" : "Batch script failed - see batchResult.errors";
+        }
+      }
+    }
+
+    const hints: string[] = [];
+    if (hasFileOps) {
+      hints.push("Run a compile operation (or build_project) to validate the project files after these edits.");
+    }
+    if (ops.some((op) => op.type === "create_class")) {
+      hints.push(
+        "Generated channels use placeholder GUID hashes (TO_UDINT(0)). Open the project once in CLASS 2 and run Project -> Validate GUID before online/multimaster use.",
+      );
+      hints.push(
+        "The generated class has no task methods (CyWork/Init) yet - add them in CLASS 2 or via read_class_source before scheduling a task.",
+      );
+    }
+    const batchErrors = batchResult && Array.isArray(batchResult.errors) ? (batchResult.errors as string[]) : [];
+    if (batchErrors.some((e) => /No file entry found/i.test(e))) {
+      hints.push(
+        "The compiler referenced a file missing from the .lcp manifest (or ProjectInternal/BrowserInfo.bin is stale): run clean_project, re-register via add_project_file/create_class, then rebuild.",
+      );
+    }
+
     return respond({
-      ok: br.ok,
-      operations: results,
-      batchResult,
+      ok: !fileFailure && batchOk,
+      operations: outcomes,
+      ...(batchResult ? { batchResult } : {}),
+      hints,
     });
   });
 }

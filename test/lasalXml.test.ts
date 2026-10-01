@@ -7,6 +7,7 @@ import {
   parseLcp,
   parseStClass,
   parseLcn,
+  isStClassFile,
   addServerToSt,
   removeServerFromSt,
   renameServerInSt,
@@ -357,5 +358,23 @@ describe("ST body type declarations", () => {
     const content = readFileSync(path, "latin1");
     expect(content).not.toMatch(/c_Enable\s*:\s*BOOL;/);
     expect(content).toMatch(/c_SetSpeed\s*:\s*DINT;/);
+  });
+});
+
+// ─── class vs project-source detection ───────────────────────────────────────
+
+describe("isStClassFile", () => {
+  it("accepts a class .st containing a (*! declaration block", () => {
+    expect(isStClassFile(join(FIXTURES, "Motor.st"))).toBe(true);
+  });
+
+  it("rejects a project-level source .st without a declaration block", () => {
+    const path = join(WORK, "PbLibProbe.st");
+    writeFileSync(path, "FUNCTION GLOBAL PbLibProbe\nEND_FUNCTION\n", "latin1");
+    expect(isStClassFile(path)).toBe(false);
+  });
+
+  it("returns false for a missing file", () => {
+    expect(isStClassFile(join(WORK, "does-not-exist.st"))).toBe(false);
   });
 });

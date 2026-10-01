@@ -11,7 +11,7 @@ A Model Context Protocol (MCP) server for automating the **Sigmatek LASAL** soft
 
 ## Design Philosophy
 
-The MCP only exposes tools for operations that **require an external engine or hardware** — compiling, deploying, PLC control, browser automation. For everything else (reading/editing `.st`, `.lcp`, `.lcn`, `.lss`, `.lvp`, dashboard JSON), the AI agent works with the files directly using its native file tools. This keeps the tool set small, reliable, and focused.
+The MCP only exposes tools for operations that **require an external engine or hardware** — compiling, deploying, PLC control, browser automation — plus the class/manifest operations whose generated formats and caches make raw file edits error-prone (creating a class, registering project files, latin1-safe class source access). For everything else (reading/editing `.lcp`, `.lcn`, `.lss`, `.lvp`, dashboard JSON), the AI agent works with the files directly using its native file tools. This keeps the tool set small, reliable, and focused.
 
 ## Features
 
@@ -125,13 +125,17 @@ When running from a local clone, point your MCP client to:
 |---|---|
 | `select_project` | Set the active project root directory. |
 | `lasal_status` | Check project, stations, engines, processes, HMI health. |
+| `inspect_project` | Read-only class/network/object inventory (channels, tasks) from the manifest + class sources. |
+| `read_class_source` | Read or write a class `.st` (and optional `.h`) by class name; latin1-validated. |
+| `set_target_ip` | Update a station's target IP/port/SSL in its `.lss`, preserving other settings. |
 | `manage_class2` | Open or close the CLASS 2 IDE. |
 | `manage_visudesigner` | Open or close VISUDesigner. |
 | `build_project` | Compile or download to PLC. |
 | `control_plc` | Start, stop, or query PLC runtime state. |
 | `plc_values` | Read/write live channel values on a running PLC. |
 | `lars_runtime` | Local LARS simulation: list/setup workspaces per station, start/stop, point stations at LARS (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
-| `apply_project_changes` | CLASS 2 batch engine operations (networks, objects, connections, tasks). |
+| `apply_project_changes` | Batch engine operations (networks, objects, connections, tasks, compiler version, compile/download) **and** file-level class operations: `create_class`, `add_project_file`, `clean_project` (incl. `deep` artifact purge). |
+| `run_class2_script` | Escape hatch: run arbitrary Python 2.7 `batch` statements through Lasal2.exe for API calls not exposed as operations. |
 | `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
 | `hmi_runtime` | Start/stop local HMI web simulation (DataService). |
 | `hmi_browser` | Headless Edge browser for HMI testing and screenshots. |
@@ -147,7 +151,7 @@ The agent edits these files directly with its native file tools:
 | `.lsm` | XML | latin1 | Solution — lists all stations |
 | `.lss` | XML | latin1 | Station settings — target IP, project references |
 | `.lcp` | XML | latin1 | CLASS 2 project manifest — class and network file paths |
-| `.st` | XML + ST | latin1 | Class source — XML header + Structured Text body |
+| `.st` | Generated declaration + ST | latin1 | Class source — `//{{LSL_DECLARATION` metadata, class body, `@CT_` table, methods; prefer `read_class_source` |
 | `.lcn` | XML | latin1 | Network definitions — objects, connections, init values |
 | `.lvp` | Mixed | utf-8 | VISUDesigner project manifest |
 | Dashboard JSON | JSON | utf-8 | HMI dashboards, windows, controls, property bindings |

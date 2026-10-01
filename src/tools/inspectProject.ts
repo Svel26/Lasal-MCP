@@ -1,6 +1,14 @@
 import { existsSync } from "fs";
 import { z } from "zod";
-import { parseLcp, parseStClass, parseLcn, type LcpInfo, type StClassInfo, type LcnInfo } from "../utils/lasalXml.js";
+import {
+  parseLcp,
+  parseStClass,
+  parseLcn,
+  isStClassFile,
+  type LcpInfo,
+  type StClassInfo,
+  type LcnInfo,
+} from "../utils/lasalXml.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 
 export const inspectProjectSchema = {
@@ -52,10 +60,16 @@ export async function inspectProjectHandler(args: {
 
   // Parse class definitions
   const classErrors: string[] = [];
+  const projectSources: string[] = [];
   const parsedClasses: Array<StClassInfo & { stPath: string; hPath: string }> = [];
 
   for (const cf of lcpInfo.classFiles) {
     if (!cf.absPath.endsWith(".st") || !existsSync(cf.absPath)) continue;
+    // Project-level sources share the <ClassFiles> list but are not classes.
+    if (!isStClassFile(cf.absPath)) {
+      projectSources.push(cf.relativePath);
+      continue;
+    }
     try {
       const info = parseStClass(cf.absPath);
       if (filterNames && !filterNames.has(info.name)) continue;
@@ -97,6 +111,10 @@ export async function inspectProjectHandler(args: {
     const allClasses: Array<{ name: string; revision?: string; servers: number; clients: number }> = [];
     for (const cf of lcpInfo.classFiles) {
       if (!cf.absPath.endsWith(".st") || !existsSync(cf.absPath)) continue;
+      if (!isStClassFile(cf.absPath)) {
+        projectSources.push(cf.relativePath);
+        continue;
+      }
       try {
         const info = parseStClass(cf.absPath);
         allClasses.push({
@@ -105,18 +123,21 @@ export async function inspectProjectHandler(args: {
           servers: info.servers.length,
           clients: info.clients.length,
         });
-      } catch {
-        /* skip */
+      } catch (e: any) {
+        classErrors.push(`${cf.relativePath}: ${e.message}`);
       }
     }
     classesOutput = allClasses;
   }
 
+  const stFileCount = lcpInfo.classFiles.filter((f) => f.absPath.endsWith(".st")).length;
+
   const result: Record<string, unknown> = {
     projectName: lcpInfo.projectName,
     lcpPath: lcpInfo.lcpPath,
     projectDir: lcpInfo.projectDir,
-    totalClasses: lcpInfo.classFiles.filter((f) => f.absPath.endsWith(".st")).length,
+    totalClasses: stFileCount - projectSources.length,
+    ...(projectSources.length ? { projectSources: projectSources.length } : {}),
     totalNetworks: lcpInfo.networkFiles.length,
     ...(filterNames ? { classDetail: classesOutput } : { classSummary: classesOutput }),
   };
