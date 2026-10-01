@@ -3,6 +3,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { selectProjectSchema, selectProjectHandler } from "./tools/selectProject.js";
 import { lasalStatusSchema, lasalStatusHandler } from "./tools/status.js";
+import { inspectProjectSchema, inspectProjectHandler } from "./tools/inspectProject.js";
+import { classSourceSchema, classSourceHandler } from "./tools/readClassSource.js";
+import { setTargetIpSchema, setTargetIpHandler } from "./tools/setTargetIp.js";
 import {
   manageVisuDesignerSchema,
   manageVisuDesignerHandler,
@@ -45,6 +48,27 @@ server.tool(
   "Check project selection, station discovery, PLC/HMI reachability, engine paths, running processes, and HMI runtime health. Call to orient or diagnose connection issues.",
   lasalStatusSchema,
   lasalStatusHandler,
+);
+
+server.tool(
+  "inspect_project",
+  "Read-only inventory of the CLASS 2 project: classes (name, channels, tasks), networks and objects, from the .lcp manifest and class sources. Use it to plan changes before apply_project_changes.",
+  inspectProjectSchema,
+  inspectProjectHandler,
+);
+
+server.tool(
+  "read_class_source",
+  "Read or write a CLASS 2 class source (.st) by class name, with optional .h access. Writes are latin1-validated and require the CLASS 2 IDE to be closed.",
+  classSourceSchema,
+  classSourceHandler,
+);
+
+server.tool(
+  "set_target_ip",
+  "Update the target IP/port/SSL of a station in its .lss (surgical edit, other settings preserved). Use when a station moved networks; connection strings can also be passed per call.",
+  setTargetIpSchema,
+  setTargetIpHandler,
 );
 
 server.tool(
@@ -219,49 +243,65 @@ Use it to discover which .st and .lcn files belong to the project.
 Paths are relative to the .lcp file's directory.
 
 ### Class source (.st)
-Structured Text class files. Each .st file defines one class. The format has two parts:
+Structured Text class files. Each .st file defines one class in the CLASS 2
+generated format:
 
-1. **XML header block** (between \`(* BEGIN_CLASS ... END_CLASS *)\` comment markers):
-   Contains class metadata — servers, clients, methods, inheritance.
+1. \`//{{LSL_DECLARATION\` … \`//}}LSL_DECLARATION\` wraps the generated declaration region.
+2. \`(*! <Class …> … </Class> *)\` metadata: class GUID, task flags
+   (RealtimeTask/CyclicTask/BackgroundTask + DefCyclictime/DefBackground),
+   \`<Channels>\` (Server/Client entries with GUIDs), optional
+   \`<Dependencies><Files><File Path=".\\Class\\X\\C_X.cpp" Include="true"/></Files></Dependencies>\`,
+   and the class's internal \`<Network>\` when it contains objects.
+3. \`Name : CLASS … END_CLASS;\` declarations: servers \`SvrCh_*\`/\`SvrChCmd_*\`,
+   clients \`CltChCmd_*\`, locals under \`//Variables:\`, methods under
+   \`//Functions:\`, then \`FUNCTION @STD\` and \`FUNCTION GLOBAL TAB @CT_;\`.
+4. The \`@CT_\` class table (channel table with 32-bit GUID hashes \`TO_UDINT(...)\`)
+   and \`FUNCTION Name::@STD\` with \`StoreCmd\`/\`StoreMethod\` channel registrations.
+5. Method bodies after \`//{{LSL_IMPLEMENTATION\`, e.g.
+   \`FUNCTION VIRTUAL GLOBAL Motor::CyWork … END_FUNCTION\`.
 
-2. **ST body**: Variable declarations and method implementations in IEC 61131-3 Structured Text.
-
-Example structure:
+Example skeleton:
 \`\`\`
-(* BEGIN_CLASS
-<ClassDef Name="Motor" SuperClass="UserDef0" ...>
-  <Servers>
-    <Server Name="s_Speed" ... />
-  </Servers>
-  <Clients>
-    <Client Name="c_Enable" ... />
-  </Clients>
-  <Methods>
-    <Method Name="CyWork" ... />
-  </Methods>
-</ClassDef>
-END_CLASS *)
-
-//Variables:
+//{{LSL_DECLARATION
+#include "..\\..\\Class\\Motor\\Motor.h"
+(*!
+<Class Name="Motor" GUID="{...}" CyclicTask="true" DefCyclictime="cCyTb" SharedCommandTable="true" Objectsize="(284,120)">
+  <Channels>
+    <Server Name="ClassSvr" GUID="{...}" WriteProtected="true"/>
+    <Server Name="s_Speed" GUID="{...}" Visualized="true" Retentive="SRam"/>
+  </Channels>
+</Class>
+*)
+Motor : CLASS
+  //Servers:
+  ClassSvr : SvrChCmd_DINT;
   s_Speed : SvrCh_DINT;
-  c_Enable : CltCh_BOOL;
-  localVar : DINT;
-
-//Methods:
-FUNCTION Motor::CyWork
-  IF c_Enable THEN
-    s_Speed := 100;
-  END_IF;
-END_FUNCTION
+  //Functions:
+  FUNCTION VIRTUAL GLOBAL CyWork
+    VAR_INPUT EAX : UDINT; END_VAR
+    VAR_OUTPUT state (EAX) : UDINT; END_VAR;
+  FUNCTION @STD
+    VAR_OUTPUT ret_code : CONFSTATES; END_VAR;
+  FUNCTION GLOBAL TAB @CT_;
+END_CLASS;
+//}}LSL_DECLARATION
+FUNCTION GLOBAL TAB Motor::@CT_ … END_FUNCTION
+FUNCTION Motor::@STD … END_FUNCTION
+//{{LSL_IMPLEMENTATION
+FUNCTION VIRTUAL GLOBAL Motor::CyWork … END_FUNCTION
 \`\`\`
 
-**Server channels** (outputs): Prefixed \`s_\` by convention. Types like \`SvrCh_DINT\`, \`SvrCh_BOOL\`, \`SvrCh_REAL\`.
-**Client channels** (inputs): Prefixed \`c_\` by convention. Types like \`CltCh_DINT\`, \`CltChCmd_General2\`.
+**Server channels** (outputs): prefixed \`s_\` by convention, types \`SvrCh_DINT\`,
+\`SvrCh_BOOL\`, \`SvrChCmd_DINT\`, …
+**Client channels** (inputs): prefixed \`c_\` by convention, types \`CltCh_DINT\`,
+\`CltChCmd_General2\` (linked to another class), …
 
-When adding a server/client:
-1. Add the XML element in the header block (\`<Server>\` or \`<Client>\`)
-2. Add the variable declaration in the \`//Variables:\` section
-3. Both must match in name
+A name must match in three places: the XML \`<Server>/<Client>\` entry, the
+\`//Servers:\`/\`//Clients:\` declaration, and the \`@CT_\` table. The
+\`TO_UDINT(...)\` numbers are IDE-generated GUID hashes; a hand-written class
+keeps placeholder values until CLASS 2 runs *Project → Validate GUID*. Prefer
+\`apply_project_changes\` with \`create_class\` / \`add_project_file\` for new
+classes, and \`read_class_source\` for edits.
 
 When editing .st files, always use **latin1** encoding. Non-latin1 characters will corrupt the file.
 
@@ -286,8 +326,28 @@ XML files defining object networks — instances of classes and their connection
 Network operations (create/delete networks, add/remove objects, create connections) **require the CLASS 2 batch engine** — use \`apply_project_changes\` for these.
 Init values and connections reference object instances, not class definitions.
 
-### Class header (.h)
-Auto-generated companion to .st files. Contains C-like declarations. Usually read-only — changes are made to .st files.
+### Class header / C source (.h / .cpp)
+Dependency files listed in the class \`<Dependencies>\`. A header with
+\`Include="true"\` is parsed by the LASAL compiler and can expose C functions to
+ST with the dual-use pattern:
+
+\`\`\`
+#ifdef cCompile
+  cExtern unsigned long my_encode(void* pBuf, unsigned long maxLen);
+#else
+  function global __cdecl my_encode
+  var_input pBuf : ^void; maxLen : udint; end_var
+  var_output retcode : udint; end_var;
+#endif
+\`\`\`
+
+Implement it in an accompanying \`.cpp\`; when compiled as C++ (the LASAL C
+compiler treats .cpp as C++) the definition must have C linkage
+(\`extern "C" { … }\`). A class's C file must NOT share the class base name — both
+would emit \`<Name>.lob\` and the linker reports a redefinition; use
+\`C_<Name>.cpp\` (SigCLib convention). Every dependency file must also be listed
+in the .lcp \`<ClassFiles>\` (\`<HeaderFiles>\` for headers), otherwise the
+compiler fails with "No file entry found".
 
 ### VISUDesigner project (.lvp)
 Binary/text project manifest for the HMI side. References dashboard JSON files, datapoint configurations, text lists, schemes, and media.
@@ -304,11 +364,12 @@ Dashboard files can be edited directly — they are standard JSON. Each element 
 
 1. **Orient**: Call \`lasal_status\` to check project state and connectivity.
 2. **Select**: Call \`select_project\` with your project path.
-3. **Edit code**: Read and edit .st files directly using file tools. Use latin1 encoding.
-4. **Structural changes**: Use \`apply_project_changes\` for network/object/connection operations that need the CLASS 2 engine.
-5. **Build & Deploy**: Call \`build_project\` to compile, then \`deploy_all\` to push everything.
-6. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then \`hmi_browser\` to open, screenshot, and interact.
-7. **Live debug**: Use \`plc_values\` to read/write PLC channels in real time.
+3. **Inventory**: Call \`inspect_project\` to list classes, networks and objects before changing anything.
+4. **Edit code**: Use \`read_class_source\` to read/write class .st sources (latin1). Use file tools for other text files.
+5. **Structural changes**: Use \`apply_project_changes\` for network/object/connection operations (batch engine) and for \`create_class\`, \`add_project_file\`, \`clean_project\` (file-level).
+6. **Build & Deploy**: Call \`build_project\` to compile, then \`deploy_all\` to push everything.
+7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then \`hmi_browser\` to open, screenshot, and interact.
+8. **Live debug**: Use \`plc_values\` to read/write PLC channels in real time.
 
 ## HMI Runtime JavaScript API
 
@@ -334,6 +395,20 @@ document.querySelector('sig-app').activeView
 - VISUDesigner must be **closed** before visu engine operations
 - Network operations (create network, add object, create connection) **require the batch engine** — you cannot do these by editing files alone
 - Dashboard JSON files **can** be edited directly — no engine needed
+- After editing the .lcp manifest (adding/renaming class files), delete
+  \`ProjectInternal/BrowserInfo.bin\` and \`LobInfo.bin\` (\`apply_project_changes\`
+  with \`clean_project\`) — CLASS 2 caches the file list there and otherwise fails
+  with "No file entry found"
+- To delete a class use \`apply_project_changes\` with the batch \`delete_class\`
+  operation — never delete the class folder by hand. If a folder was already
+  removed manually and the linker reports \`Classtable 'X::@CT_' not found\`, run
+  \`clean_project\` with \`deep: true\` (purges the generated .lcb and
+  Network/ConfigObjects artifacts) and rebuild
+- A hand-written/generated class keeps placeholder \`TO_UDINT(0)\` GUID hashes;
+  open the project once in CLASS 2 and run *Project → Validate GUID* before the
+  class takes part in online/multimaster identity
+- C functions called from ST need C linkage (\`extern "C"\`), and a class's C file
+  must not share the class name (\`C_<Name>.cpp\`)
 - After any code changes, **always compile** to check for errors before deploying
 `;
 

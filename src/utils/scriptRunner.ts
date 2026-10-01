@@ -32,7 +32,10 @@ export interface EngineRunResult {
 
 const HINT_TABLE = [
   {
-    pattern: /connect|timeout|1954|offline/i,
+    // Deliberately tight: the word "connection" alone appears in every successful
+    // compile log ("Writing multimaster connection file") and must not trigger.
+    pattern:
+      /unreachable|connection refused|ECONNREFUSED|no route to host|cannot connect|not connected|connect(?:ion)? (?:failed|timed out)|host not reachable|ETIMEDOUT|error 1006[01]/i,
     hint: "PLC or HMI is unreachable. Check network/power, target IP with lasal_status, or set it via set_target_ip.",
   },
   {
@@ -42,6 +45,24 @@ const HINT_TABLE = [
   {
     pattern: /lock|locked|sharing violation|permission denied/i,
     hint: "Project files or engine locked. Close CLASS 2 or VISUDesigner via manage_class2/manage_visudesigner close.",
+  },
+  {
+    pattern: /no file entry found/i,
+    hint:
+      "A class dependency or source file is missing from the .lcp manifest (or ProjectInternal/BrowserInfo.bin is stale). " +
+      "Run apply_project_changes clean_project, register the file via add_project_file/create_class, then rebuild.",
+  },
+  {
+    pattern: /classtable .*not found/i,
+    hint:
+      "A class was removed from disk but generated artifacts still reference it. Prefer the batch delete_class operation; " +
+      "if files were already removed manually, run apply_project_changes clean_project with deep:true, then rebuild.",
+  },
+  {
+    pattern: /unresolved external/i,
+    hint:
+      'C symbol not linked. Declare the function in an Include=true class header, wrap its definition in extern "C", ' +
+      "and register the .cpp in the class <Dependencies> and the .lcp <ClassFiles> section.",
   },
   {
     pattern: /compile|syntax error|declaration/i,
