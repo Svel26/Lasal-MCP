@@ -134,7 +134,8 @@ When running from a local clone, point your MCP client to:
 | `control_plc` | Start, stop, or query PLC runtime state. |
 | `plc_values` | Read/write live channel values on a running PLC. |
 | `lars_runtime` | Local LARS simulation: list/setup workspaces per station, start/stop, point stations at LARS (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
-| `apply_project_changes` | Batch engine operations (networks, objects, connections, tasks, compile/download) **and** file-level class operations: `create_class`, `add_project_file`, `clean_project` (incl. `deep` artifact purge). |
+| `apply_project_changes` | Batch engine operations (networks, objects, connections, tasks, compiler version, compile/download) **and** file-level class operations: `create_class`, `add_project_file`, `clean_project` (incl. `deep` artifact purge). |
+| `run_class2_script` | Escape hatch: run arbitrary Python 2.7 `batch` statements through Lasal2.exe for API calls not exposed as operations. |
 | `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
 | `hmi_runtime` | Start/stop local HMI web simulation (DataService). |
 | `hmi_browser` | Headless Edge browser for HMI testing and screenshots. |

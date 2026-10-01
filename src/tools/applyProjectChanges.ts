@@ -184,6 +184,11 @@ const SetParameterValueOp = z.object({
   value: z.string(),
 });
 
+const SetCompilerVersionOp = z.object({
+  type: z.literal("set_compiler_version"),
+  version: z.string().describe("Compiler version string accepted by batch.SetCompilerVersion (e.g. 'C75')."),
+});
+
 // ─── File-level operations (no CLASS 2 batch API) ────────────────────────────
 
 const ClassServerSpec = z.object({
@@ -272,6 +277,7 @@ const OperationSchema = z.discriminatedUnion("type", [
   ResetNetworkOptionsOp,
   MoveNetworkToFolderOp,
   SetParameterValueOp,
+  SetCompilerVersionOp,
   CreateClassOp,
   AddProjectFileOp,
   CleanProjectOp,
@@ -298,7 +304,7 @@ export const applyProjectChangesSchema = {
         "create_connection, delete_connection, set_init_value, delete_class, compile, download, " +
         "set_task_order, set_task_time, set_task_cpu_core, set_multi_cpu_core, set_visualized_flag, " +
         "set_comment_network, set_comment_object, set_network_options, reset_network_options, " +
-        "move_network_to_folder, set_parameter_value. " +
+        "move_network_to_folder, set_parameter_value, set_compiler_version. " +
         "File-level types (applied before the batch engine, no CLASS 2 API): create_class, " +
         "add_project_file, clean_project.",
     ),
@@ -454,6 +460,8 @@ function toBatchOp(op: BatchOperation): BatchOp {
         parameterName: op.parameterName,
         value: op.value,
       };
+    case "set_compiler_version":
+      return { type: "set_compiler_version", version: op.version };
   }
 }
 

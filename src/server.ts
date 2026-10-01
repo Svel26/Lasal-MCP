@@ -14,6 +14,7 @@ import {
 } from "./tools/lasalApps.js";
 import { deployAllSchema, deployAllHandler } from "./tools/deployAll.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
+import { runClass2ScriptSchema, runClass2ScriptHandler } from "./tools/runClass2Script.js";
 import {
   buildProjectSchema,
   buildProjectHandler,
@@ -113,6 +114,13 @@ server.tool(
   "Run CLASS 2 batch engine operations that cannot be done by editing files directly: create/delete/rename networks, add/remove/rename objects, create/delete connections, set init values, configure tasks, compile, download. Kills CLASS 2 IDE before running.",
   applyProjectChangesSchema,
   applyProjectChangesHandler,
+);
+
+server.tool(
+  "run_class2_script",
+  "Escape hatch: run arbitrary Python 2.7 batch statements through Lasal2.exe (module `batch`, project `prj` in scope). Use for batch API calls not covered by apply_project_changes; the project is NOT saved automatically.",
+  runClass2ScriptSchema,
+  runClass2ScriptHandler,
 );
 
 server.tool(

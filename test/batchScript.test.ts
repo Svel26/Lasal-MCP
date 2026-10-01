@@ -187,6 +187,19 @@ describe("buildBatchScript", () => {
     expect(script).toContain("batch.SetInitValue2(prj,");
   });
 
+  it("emits set_compiler_version operation", () => {
+    const ops: BatchOp[] = [{ type: "set_compiler_version", version: "C75" }];
+    const { script, expectedSteps } = buildBatchScript(
+      "C:\\proj\\test.lcp",
+      ops,
+      "C:\\tmp\\test.log",
+      "C:\\tmp\\test.steps",
+    );
+    expect(script).toContain("batch.SetCompilerVersion(prj,");
+    expect(script).toContain("C75");
+    expect(expectedSteps).toContain("0_set_compiler_version");
+  });
+
   it("wraps everything in try/except", () => {
     const { script } = buildBatchScript("C:\\proj\\test.lcp", [], "C:\\tmp\\test.log", "C:\\tmp\\test.steps");
     expect(script).toContain("except Exception as e:");

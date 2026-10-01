@@ -210,10 +210,22 @@ export function parseStClass(stPath: string): StClassInfo {
   };
 }
 
+/**
+ * A class .st carries a `(*! ... *)` declaration block; project-level source
+ * files (e.g. `Source/code/*.st`, registered in the same <ClassFiles> list)
+ * do not and must not be parsed as classes.
+ */
+export function isStClassFile(stPath: string): boolean {
+  try {
+    return readLatin1(stPath).includes("(*!");
+  } catch {
+    return false;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // .lcn parsing
 // ─────────────────────────────────────────────────────────────────────────────
-
 export interface LcnObject {
   name: string;
   guid?: string;

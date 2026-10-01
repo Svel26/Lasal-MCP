@@ -47,6 +47,7 @@ export interface BatchOp {
     | "reset_network_options"
     | "move_network_to_folder"
     | "set_parameter_value"
+    | "set_compiler_version"
     | "save";
   [key: string]: unknown;
 }
@@ -265,6 +266,9 @@ export function buildBatchScript(
         opLines.push(
           `batch.SetParameterValue(prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.parameterName as string)}, ${emitPy27String(op.value as string)})`,
         );
+        break;
+      case "set_compiler_version":
+        opLines.push(`batch.SetCompilerVersion(prj, ${emitPy27String(op.version as string)})`);
         break;
       case "save":
         break;

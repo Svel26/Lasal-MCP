@@ -412,10 +412,11 @@ optional `Start(prj, conn)` → `GetPlcState` for confirmation.
 {
   "type": "object",
   "properties": {
-    "scriptBody": { "type": "string", "description": "Python 2.7 using 'import sigmatek.lasal.batch as batch'" },
-    "args": { "type": "array", "items": { "type": "string" }, "default": [] }
+    "script_body": { "type": "string", "description": "Python 2.7 using 'import sigmatek.lasal.batch as batch'; `batch` and the loaded `prj` are in scope (project is NOT saved automatically)" },
+    "args": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "lcp_path": { "type": "string", "description": "optional: defaults to the selected project" }
   },
-  "required": ["scriptBody"], "additionalProperties": false
+  "required": ["script_body"], "additionalProperties": false
 }
 ```
 
