@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import { join, basename } from "path";
 import { readState } from "../state.js";
 import { findLcpFiles, findLvpFiles } from "./projectScanner.js";
@@ -18,7 +18,15 @@ export function resolveLcpPath(lcpPath?: string): { path: string } | { error: st
 
   // Multi-station layout: search via .lsm → .lss
   const found = findLcpFiles(state.currentProject);
-  if (found.length === 0) return { error: `No .lcp files found in ${state.currentProject}` };
+  if (found.length === 0) {
+    try {
+      const directLcps = readdirSync(state.currentProject)
+        .filter((f) => f.toLowerCase().endsWith(".lcp"))
+        .map((f) => join(state.currentProject!, f));
+      if (directLcps.length === 1) return { path: directLcps[0]! };
+    } catch {}
+    return { error: `No .lcp files found in ${state.currentProject}` };
+  }
   if (found.length === 1) return { path: found[0]! };
   // CLASS 2 operations target the PLC. When several stations exist and exactly
   // one is under a `PLC` station folder, prefer it so callers do not have to
