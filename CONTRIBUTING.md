@@ -82,6 +82,14 @@ test/                 # Vitest test suites (script generators, XML parsers, LARS
 
 ## Development Workflow
 
+### Branching Strategy
+We use a standard two-tier branching strategy:
+
+- **`main`**: Production and release branch. Contains stable, published code. Releases (`v*.*.*`) are tagged from here. Direct pushes and deletions are blocked by branch protection rules.
+- **`dev`**: Active development and integration branch. All feature work lands here first.
+- **Feature/Fix branches (`feat/*`, `fix/*`, `refactor/*`)**: Branch off `dev`. When your changes are ready and tests pass, submit a Pull Request targeting `dev`.
+- **Releases**: Merged from `dev` into `main` via PR when ready for release.
+
 ### Watch Mode
 To automatically recompile TypeScript files when changes are saved:
 ```bash
