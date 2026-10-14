@@ -13,6 +13,7 @@ import { respond, fail } from "../utils/respond.js";
 import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
+import { createProgressReporter } from "../utils/mcpProgress.js";
 
 export const deployAllSchema = {
   lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
@@ -88,24 +89,29 @@ export const deployAllSchema = {
   timeout_s: z.number().int().optional().describe("Timeout override in seconds for compile and download steps."),
 };
 
-export async function deployAllHandler(args: {
-  lcp_path?: string;
-  lvp_path?: string;
-  plc_connection?: string;
-  visu_connection?: string;
-  compile?: boolean;
-  compile_options?: string;
-  download_plc?: boolean;
-  update_visu_stations?: boolean;
-  download_visu?: boolean;
-  visu_download_flags?: number;
-  add_plc_loader?: boolean;
-  add_visu_runtime?: boolean;
-  start_plc?: boolean;
-  start_hmi_runtime?: boolean;
-  timeout_s?: number;
-}) {
+export async function deployAllHandler(
+  args: {
+    lcp_path?: string;
+    lvp_path?: string;
+    plc_connection?: string;
+    visu_connection?: string;
+    compile?: boolean;
+    compile_options?: string;
+    download_plc?: boolean;
+    update_visu_stations?: boolean;
+    download_visu?: boolean;
+    visu_download_flags?: number;
+    add_plc_loader?: boolean;
+    add_visu_runtime?: boolean;
+    start_plc?: boolean;
+    start_hmi_runtime?: boolean;
+    timeout_s?: number;
+  },
+  extra?: any,
+) {
+  const reporter = createProgressReporter(extra, "lasal.deploy");
   return withEngineLock(async () => {
+    await reporter.report(5, 100, "Validating deployment paths and options...");
     const doCompile = args.compile ?? true;
     const doDownloadPlc = args.download_plc ?? true;
     const doStartPlc = doDownloadPlc && (args.start_plc ?? true);
@@ -194,6 +200,7 @@ export async function deployAllHandler(args: {
 
     // Step 1: compile
     if (doCompile) {
+      await reporter.report(25, 100, "Compiling CLASS 2 project...");
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
       const br = await runBatchOps(
         lcpPath!,
@@ -206,6 +213,7 @@ export async function deployAllHandler(args: {
 
     // Step 2: download PLC
     if (doDownloadPlc) {
+      await reporter.report(50, 100, `Downloading project to PLC (${plcConnectionUsed})...`);
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
       // LARS (local runtime) targets need the PC loader or the download ends in "Linker_Error".
       const addLoaderAnyway = shouldAddLoader(args.add_plc_loader, plcConnectionInfo);
@@ -243,6 +251,7 @@ export async function deployAllHandler(args: {
 
     // Step 2a: verify PLC after download
     if (doDownloadPlc) {
+      await reporter.report(65, 100, "Verifying PLC status...");
       ensureScratch();
       const id = randomUUID();
       const logPath = join(SCRATCH, `${id}.log`);
@@ -285,6 +294,7 @@ export async function deployAllHandler(args: {
 
     // Step 2b: start PLC after download
     if (doStartPlc) {
+      await reporter.report(75, 100, "Starting PLC runtime...");
       ensureScratch();
       const id = randomUUID();
       const logPath = join(SCRATCH, `${id}.log`);
@@ -335,6 +345,7 @@ export async function deployAllHandler(args: {
 
     // Step 3: update visu stations + optional download
     if (doUpdateVisuStations || doDownloadVisu) {
+      await reporter.report(85, 100, "Updating VISU stations...");
       const visuOps: Parameters<typeof runVisuOps>[1] = [];
       if (doUpdateVisuStations) visuOps.push({ type: "update_all_stations" });
       if (doDownloadVisu)
@@ -352,6 +363,7 @@ export async function deployAllHandler(args: {
 
     // Step 4: start HMI runtime
     if (args.start_hmi_runtime) {
+      await reporter.report(95, 100, "Starting HMI web simulation runtime...");
       const startStart = Date.now();
       const hmiRes = await startHmiRuntime({ action: "start", lvp_path: lvpPath });
       steps.hmi_runtime = {
@@ -364,6 +376,7 @@ export async function deployAllHandler(args: {
       if (hmiRes.isError) return failResponse("HMI runtime start step failed.");
     }
 
+    await reporter.report(100, 100, "Deployment completed.");
     return respond({
       ok: true,
       steps,
