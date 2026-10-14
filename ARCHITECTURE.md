@@ -19,36 +19,42 @@ src/
     process.ts       — isPidRunning, getPortForPid (Windows-specific)
     response.ts      — batchResultToResponse, batchToStepResult, visuToStepResult
     scratch.ts       — ensureScratch (mkdir SCRATCH)
+    staticServer.ts  — embedded HTTP server for local web simulation/assets
+  resources/         — MCP resources
+    registerResources.ts — lasal://guide, lasal://project/status, lasal://stations, lasal://classes/{className}
   tools/             — one file per MCP tool (schema + handler)
     applyProjectChanges.ts — structural edits (.st + .lcn), transactional with rollback
     deployAll.ts     — full pipeline: compile -> download -> start -> visu update
-    hmiRuntime.ts    — start/stop/status of local DataService
-    hmiBrowser.ts    — headless Edge automation
+    hmiRuntime.ts    — start/stop/status of local DataService web runtime
     inspectProject.ts — read-only project scanning
-    inspectVisuProject.ts — read-only LVP scanning
     larsRuntime.ts   — local LARS simulation (setup/start/stop/target/target_pc)
+    lasalApps.ts     — open/close CLASS 2 and VISUDesigner GUIs
     plcControl.ts    — compile, download, start/stop/get_state, plc_values
     plcDiagnostics.ts — tracing, file transfer, code analysis
-    readClassSource.ts — read/write .st files
+    readClassSource.ts — read/write .st files (latin1 validated)
     selectProject.ts — set active project directory
     setTargetIp.ts   — surgical .lss IP edit
     status.ts        — system status (engines, processes, stations, HMI health, LARS)
+    validateGuids.ts — scan & auto-resolve duplicate GUIDs, compute CRC-32 @CT_ hashes
     visuControl.ts   — VISUDesigner batch ops and download
-    visuDashboard.ts — direct LVP JSON editing (dashboards, windows, styles)
-    lasalApps.ts     — open/close CLASS 2 and VISUDesigner GUIs
   utils/             — engine-level utilities
     batchScript.ts   — Python 2.7 script builder for Lasal2.exe batch API
-    visuScript.ts    — Python script builder for VISUDesigner scripting API
-    scriptRunner.ts  — async engine execution (execFile), log/step parsing, hints
-    engine.ts        — exe paths, process management, scratch dir, engine mutex
+    completions.ts   — MCP autocompletion providers for class & station names
     config.ts        — Zod-validated environment config (timeouts, paths)
+    crc.ts           — IEEE 802.3 CRC-32 calculation for @CT_ class tables
+    editTransaction.ts — filesystem transaction & rollback for project changes
+    engine.ts        — exe paths, process management, scratch dir, engine mutex
+    lars.ts          — LARS workspace config (lasalos2.xml), spawn/kill, ports, station targeting
     lasalXml.ts      — .lcp/.st/.lcn XML parsing, ST editing, round-trip safe
-    lars.ts          — LARS workspace config (lasalos2.xml), spawn/kill, ports, station targeting, ARM→PC target switch
+    lcpManifest.ts   — .lcp XML manipulation & class manifest operations
+    mcpProgress.ts   — MCP progress notifications and log reporting
     preflight.ts     — connection resolution, ping, preflight checks
     projectScanner.ts — .lsm/.lss parsing, station discovery
     resolvePaths.ts  — .lcp/.lvp path resolution from state
     respond.ts       — MCP response helpers
+    scriptRunner.ts  — async engine execution (execFile), log/step parsing, hints
     visuPropertyEncoding.ts — LVP property encoding/decoding
+    visuScript.ts    — Python script builder for VISUDesigner scripting API
   test/              — Vitest tests
     fixtures/        — sample .lcp/.st/.lcn/.lsm/.lss files
 ```
@@ -109,7 +115,6 @@ Tools that need a PLC/HMI connection first try the explicit `connection` paramet
 | `LASAL_CLASS2_EXE` | `C:\Program Files (x86)\...\Lasal2.exe` | CLASS 2 IDE path |
 | `LASAL_VISUDESIGNER_EXE` | `C:\Program Files\...\VISUDesigner.exe` | VISUDesigner path |
 | `LASAL_DATASERVICE_EXE` | auto-discovered | DataService path |
-| `LASAL_EDGE_EXE` | auto-discovered | Edge browser path |
 | `LASAL_LARS_EXE` | `C:\Program Files (x86)\Sigmatek\Lars\Lars.exe` | LARS runtime path |
 | `LASAL_LARS_CONFIG` | `%APPDATA%\lasalos2.xml` | LARS workspace config path |
 | `LASAL_MCP_TIMEOUT_COMPILE` | 600000 | Compile timeout (ms) |

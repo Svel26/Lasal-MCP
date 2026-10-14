@@ -5,24 +5,26 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A Model Context Protocol (MCP) server for automating the **Sigmatek LASAL** software suite. It gives AI coding assistants (Claude, Gemini, Cursor, etc.) the ability to compile, deploy to hardware, control PLCs, read/write live values, run HMI simulations, and automate a headless browser — while the agent edits project files directly.
+A Model Context Protocol (MCP) server for automating the **Sigmatek LASAL** software suite. It gives AI coding assistants (Claude, Gemini, Cursor, etc.) the ability to compile, deploy to hardware, control PLCs, read/write live values, run HMI simulations, and validate project GUIDs — while the agent edits project files directly.
 
 > **Warning:** This is NOT an official Sigmatek product. This project is in active development — bugs and unpredictable behavior are likely. **Do not use on production projects** without backups or version control.
 
 ## Design Philosophy
 
-The MCP only exposes tools for operations that **require an external engine or hardware** — compiling, deploying, PLC control, browser automation — plus the class/manifest operations whose generated formats and caches make raw file edits error-prone (creating a class, registering project files, latin1-safe class source access). For everything else (reading/editing `.lcp`, `.lcn`, `.lss`, `.lvp`, dashboard JSON), the AI agent works with the files directly using its native file tools. This keeps the tool set small, reliable, and focused.
+The MCP only exposes tools for operations that **require an external engine or hardware** — compiling, deploying, PLC control, LARS soft-runtime simulations — plus the class/manifest operations whose generated formats and caches make raw file edits error-prone (creating a class, registering project files, latin1-safe class source access, resolving GUID collisions). For everything else (reading/editing `.lcp`, `.lcn`, `.lss`, `.lvp`, dashboard JSON), the AI agent works with the files directly using its native file tools. This keeps the tool set small, reliable, and focused.
 
 ## Features
 
-- **Build & Deploy**: Compile CLASS 2 projects, download to PLC, full deploy pipelines.
-- **PLC Control**: Start/stop PLC runtime, read/write live channel values, query state.
-- **Local Simulation (LARS)**: Run one LASAL program per LARS instance — one workspace per station (PLC + HMI) so both run simultaneously on separate ports. Point stations at the local runtime with a single call, compile/download/start/read values exactly like a real PLC, and browse the HMI via DataService. No hardware needed.
-- **CLASS 2 Batch Engine**: Create/delete networks, add/remove objects, manage connections, configure tasks — operations that require the CLASS 2 scripting engine.
-- **VISUDesigner Engine**: Sync datapoints, manage text lists/schemes/media, publish, download to HMI.
-- **HMI Simulation**: Local web runtime via LasalVISUDataService with headless Edge browser automation for visual verification.
-- **PLC Diagnostics**: Tracing, file transfer, static code analysis.
-- **Project Guide**: Built-in resource (`lasal://guide`) documenting all LASAL file formats so the agent can edit project files directly.
+- **Build & Deploy**: Compile CLASS 2 projects, download to PLC, full deploy pipelines (`build_project`, `deploy_all`).
+- **PLC Control**: Start/stop PLC runtime, read/write live channel values, query state (`control_plc`, `plc_values`).
+- **Local Simulation (LARS)**: Run one LASAL program per LARS instance — one workspace per station (PLC + HMI) so both run simultaneously on separate ports. Point stations at the local runtime with a single call, compile/download/start/read values exactly like a real PLC, and browse the HMI via DataService. No hardware needed (`lars_runtime`).
+- **CLASS 2 Batch Engine**: Create/delete networks, add/remove objects, manage connections, configure tasks — operations that require the CLASS 2 scripting engine (`apply_project_changes`, `run_class2_script`).
+- **GUID & CRC-32 Validation**: Auto-resolve duplicate GUID collisions across classes/MaeExp.txt and compute exact IEEE 802.3 CRC-32 hashes for `@CT_` tables (`validate_guids`).
+- **VISUDesigner Engine**: Sync datapoints, manage text lists/schemes/media, publish, download to HMI (`visu_project`).
+- **HMI Simulation**: Local web runtime via LasalVISUDataService returning accessible HTTP URLs for browser inspection or external Playwright MCP testing (`hmi_runtime`).
+- **PLC Diagnostics**: Tracing, file transfer, static code analysis (`plc_diagnostics`).
+- **MCP Resources**: Built-in resources for file documentation (`lasal://guide`), live project status (`lasal://project/status`), active stations (`lasal://stations`), and class sources (`lasal://classes/{className}`).
+- **Autocompletions**: Context-aware MCP completions for class names and station names.
 
 ## Prerequisites
 
@@ -107,7 +109,6 @@ When running from a local clone, point your MCP client to:
 | `LASAL_CLASS2_EXE` | `C:\Program Files (x86)\Sigmatek\Lasal\Class2\Bin\Lasal2.exe` | CLASS 2 IDE path |
 | `LASAL_VISUDESIGNER_EXE` | `C:\Program Files\Sigmatek\Lasal\VISUDesigner\VISUDesigner.exe` | VISUDesigner path |
 | `LASAL_DATASERVICE_EXE` | auto-discovered (latest version) | DataService path |
-| `LASAL_EDGE_EXE` | auto-discovered | Edge browser path |
 | `LASAL_MCP_TIMEOUT_COMPILE` | `600000` | Compile timeout (ms) |
 | `LASAL_MCP_TIMEOUT_DOWNLOAD` | `600000` | Download timeout (ms) |
 | `LASAL_MCP_TIMEOUT_VISU` | `300000` | Visu operation timeout (ms) |
@@ -126,6 +127,7 @@ When running from a local clone, point your MCP client to:
 | `select_project` | Set the active project root directory. |
 | `lasal_status` | Check project, stations, engines, processes, HMI health. |
 | `inspect_project` | Read-only class/network/object inventory (channels, tasks) from the manifest + class sources. |
+| `validate_guids` | Scan a station project for duplicate GUID collisions and uninitialized `TO_UDINT(0)` placeholders; auto-resolves GUID collisions and populates exact CRC-32 `@CT_` hashes. |
 | `read_class_source` | Read or write a class `.st` (and optional `.h`) by class name; latin1-validated. |
 | `set_target_ip` | Update a station's target IP/port/SSL in its `.lss`, preserving other settings. |
 | `manage_class2` | Open or close the CLASS 2 IDE. |
@@ -137,10 +139,18 @@ When running from a local clone, point your MCP client to:
 | `apply_project_changes` | Batch engine operations (networks, objects, connections, tasks, compiler version, compile/download) **and** file-level class operations: `create_class`, `add_project_file`, `clean_project` (incl. `deep` artifact purge). |
 | `run_class2_script` | Escape hatch: run arbitrary Python 2.7 `batch` statements through Lasal2.exe for API calls not exposed as operations. |
 | `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
-| `hmi_runtime` | Start/stop local HMI web simulation (DataService). |
-| `hmi_browser` | Headless Edge browser for HMI testing and screenshots. |
+| `hmi_runtime` | Start/stop local HMI web simulation (DataService) and return accessible URL. |
 | `plc_diagnostics` | Tracing, file transfer, static code analysis. |
 | `deploy_all` | Full pipeline: compile → download → start PLC → sync visu → start HMI. |
+
+### MCP Resources
+
+| URI | Description |
+|---|---|
+| `lasal://guide` | Comprehensive guide on LASAL file formats, ST structure, and runtime JS API. |
+| `lasal://project/status` | Dynamic JSON resource reporting selected project, discovered stations, HMI runtime status, and LARS instances. |
+| `lasal://stations` | Live list of stations in the active solution and their target connections. |
+| `lasal://classes/{className}` | Direct read access to Structured Text (`.st`) sources by class name with autocompletion. |
 
 ### Direct File Editing (no MCP needed)
 

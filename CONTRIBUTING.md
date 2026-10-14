@@ -15,7 +15,7 @@ This project and everyone participating in it is governed by the [Code of Conduc
 ## Architecture & Design Philosophy
 
 Lasal-MCP follows a deliberate design principle:
-> **The MCP server only exposes tools for operations that require an external engine or hardware** (compiling, deploying, PLC control, browser automation, LARS simulations, and CLASS 2/VISU batch scripts).
+> **The MCP server only exposes tools for operations that require an external engine or hardware** (compiling, deploying, PLC control, LARS simulations, and CLASS 2/VISU batch scripts).
 >
 > For everything else (reading/editing `.st`, `.lcp`, `.lcn`, `.lss`, `.lvp`, dashboard JSON files), AI agents should work directly with files using native file tools. This keeps the tool surface small, dependable, and efficient.
 
@@ -23,24 +23,29 @@ Lasal-MCP follows a deliberate design principle:
 
 ```text
 src/
-├── core/             # Core primitives (process management, HTTP server, error envelopes, scratch dir)
+├── core/             # Core primitives (process management, HTTP server, error envelopes, scratch dir, static server)
+├── resources/        # MCP resources (lasal://guide, status, stations, class template)
 ├── tools/            # MCP tool handlers and Zod input schemas
-│   ├── applyProjectChanges.ts  # CLASS 2 batch engine commands
-│   ├── buildProject.ts         # Compilation and hardware download
+│   ├── applyProjectChanges.ts  # CLASS 2 batch engine commands & class manifests
 │   ├── deployAll.ts            # Complete compile → download → visu → HMI pipeline
 │   ├── hmiRuntime.ts           # LasalVISUDataService web runtime manager
+│   ├── inspectProject.ts       # Read-only CLASS 2 project scanning
 │   ├── larsRuntime.ts          # Local LARS simulation multi-station manager
 │   ├── lasalApps.ts            # CLASS 2 & VISUDesigner IDE window control
-│   ├── plcControl.ts           # Start/stop PLC runtime, read/write live channels
+│   ├── plcControl.ts           # Compile, download, start/stop PLC runtime, live channels
 │   ├── plcDiagnostics.ts       # Tracing, file transfer, static analysis
+│   ├── readClassSource.ts      # Structured Text (.st) reading & latin1-validated writing
+│   ├── runClass2Script.ts      # Python 2.7 batch script escape hatch
 │   ├── selectProject.ts        # Set active project directory
+│   ├── setTargetIp.ts          # Surgical .lss connection IP updating
 │   ├── status.ts               # Overall health & process inspection
+│   ├── validateGuids.ts        # GUID collision auto-resolution and CRC-32 hashing
 │   └── visuControl.ts          # VISUDesigner batch engine operations
-├── utils/            # Helper modules (batch script generators, XML parsing, LARS setup, config)
-├── server.ts         # MCP Server entrypoint, tool registrations, and prompts
+├── utils/            # Helper modules (batch script generators, XML parsing, LARS setup, completions, progress)
+├── server.ts         # MCP Server entrypoint, tool and resource registrations
 └── state.ts          # Global state (active project, target IPs, cached data)
 
-test/                 # Vitest test suites (script generators, XML parsers, LARS config, encoding)
+test/                 # Vitest test suites (script generators, XML parsers, LARS config, encoding, completions)
 ```
 
 ---
@@ -148,7 +153,7 @@ We encourage [Conventional Commits](https://www.conventionalcommits.org/):
 
 ## Pull Request Process
 
-1. Create a descriptive branch from `main`:
+1. Create a descriptive branch from `dev`:
    ```bash
    git checkout -b feature/my-new-feature
    ```
@@ -164,7 +169,7 @@ We encourage [Conventional Commits](https://www.conventionalcommits.org/):
    ```bash
    git push origin feature/my-new-feature
    ```
-5. Open a Pull Request on GitHub against `main`. Fill in the PR template with details about your changes and testing performed.
+5. Open a Pull Request on GitHub against `dev`. Fill in the PR template with details about your changes and testing performed.
 6. Address any feedback during code review. Once approved, maintainers will merge your PR.
 
 ---
