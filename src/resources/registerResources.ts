@@ -3,6 +3,7 @@ import { readState, getHmiForProject } from "../state.js";
 import { findLsmPath, parseSolution, findLcpFiles } from "../utils/projectScanner.js";
 import { parseLcp, parseStClass } from "../utils/lasalXml.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
+import { completeClassNames } from "../utils/completions.js";
 import { existsSync, readFileSync } from "fs";
 
 export function registerResources(server: McpServer, guideText: string) {
@@ -141,28 +142,7 @@ export function registerResources(server: McpServer, guideText: string) {
       }
     },
     complete: {
-      className: async (value) => {
-        const state = readState();
-        if (!state.currentProject) return [];
-        const resolved = resolveLcpPath();
-        if ("error" in resolved) return [];
-        try {
-          const lcp = parseLcp(resolved.path);
-          const names: string[] = [];
-          for (const cf of lcp.classFiles) {
-            if (!cf.absPath.endsWith(".st") || !existsSync(cf.absPath)) continue;
-            try {
-              const info = parseStClass(cf.absPath);
-              if (!value || info.name.toLowerCase().startsWith(value.toLowerCase())) {
-                names.push(info.name);
-              }
-            } catch {}
-          }
-          return names;
-        } catch {
-          return [];
-        }
-      },
+      className: async (value) => completeClassNames(value),
     },
   });
 
