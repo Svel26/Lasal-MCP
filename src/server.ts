@@ -28,6 +28,7 @@ import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
 import { larsRuntimeSchema, larsRuntimeHandler } from "./tools/larsRuntime.js";
 import { validateGuidsSchema, validateGuidsHandler } from "./tools/validateGuids.js";
+import { registerResources } from "./resources/registerResources.js";
 import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
@@ -178,28 +179,6 @@ server.tool(
   "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Returns the accessible HTTP URL (e.g. for testing via Playwright MCP or opening in a browser).",
   hmiRuntimeSchema,
   hmiRuntimeHandler,
-);
-
-// ─── Resource: LASAL file format guide ───────────────────────────────────────
-
-server.resource(
-  "LASAL Project Guide",
-  "lasal://guide",
-  {
-    description: "Complete guide to LASAL file formats, file editing, HMI debugging, and the runtime JS API",
-    mimeType: "text/markdown",
-  },
-  async () => {
-    return {
-      contents: [
-        {
-          uri: "lasal://guide",
-          mimeType: "text/markdown",
-          text: LASAL_GUIDE,
-        },
-      ],
-    };
-  },
 );
 
 const LASAL_GUIDE = `# LASAL Project Guide
@@ -423,6 +402,10 @@ document.querySelector('sig-app').activeView
   must not share the class name (\`C_<Name>.cpp\`)
 - After any code changes, **always compile** to check for errors before deploying
 `;
+
+// ─── Resources ───────────────────────────────────────────────────────────────
+
+registerResources(server, LASAL_GUIDE);
 
 cleanupScratch();
 
