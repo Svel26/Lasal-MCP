@@ -12,7 +12,7 @@ import { respond, fail } from "../utils/respond.js";
 import { batchResultToResponse } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
-import { createProgressReporter } from "../utils/mcpProgress.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 
 // Recursively find all project files
 function getProjectFiles(dir: string, files: string[] = []): string[] {
@@ -104,7 +104,7 @@ export async function buildProjectHandler(
     add_loader_anyway?: boolean;
     timeout_s?: number;
   },
-  extra?: any,
+  extra?: McpExtra,
 ) {
   const reporter = createProgressReporter(extra, "lasal.build");
   return withEngineLock(async () => {

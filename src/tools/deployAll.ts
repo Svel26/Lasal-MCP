@@ -13,7 +13,7 @@ import { respond, fail } from "../utils/respond.js";
 import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
-import { createProgressReporter } from "../utils/mcpProgress.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 
 export const deployAllSchema = {
   lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
@@ -107,7 +107,7 @@ export async function deployAllHandler(
     start_hmi_runtime?: boolean;
     timeout_s?: number;
   },
-  extra?: any,
+  extra?: McpExtra,
 ) {
   const reporter = createProgressReporter(extra, "lasal.deploy");
   return withEngineLock(async () => {
