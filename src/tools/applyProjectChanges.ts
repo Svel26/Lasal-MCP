@@ -11,6 +11,7 @@ import {
   type CreateClassOptions,
 } from "../utils/lcpManifest.js";
 import { respond, fail } from "../utils/respond.js";
+import { createProgressReporter } from "../utils/mcpProgress.js";
 
 // ─── Batch operation schemas (all require CLASS 2 engine) ────────────────────
 
@@ -475,12 +476,17 @@ function batchOperationTarget(op: BatchOperation): string {
   return String(rec.name ?? rec.objectName ?? rec.network ?? "");
 }
 
-export async function applyProjectChangesHandler(args: {
-  lcp_path?: string;
-  operations: unknown[];
-  dry_run?: boolean;
-}) {
+export async function applyProjectChangesHandler(
+  args: {
+    lcp_path?: string;
+    operations: unknown[];
+    dry_run?: boolean;
+  },
+  extra?: any,
+) {
+  const reporter = createProgressReporter(extra, "lasal.apply_project_changes");
   return withEngineLock(async () => {
+    await reporter.report(10, 100, `Validating ${args.operations.length} operations...`);
     const resolved = resolveLcpPath(args.lcp_path);
     if ("error" in resolved) {
       return fail(resolved.error, ["Select a project first using select_project or specify lcp_path."]);
@@ -584,6 +590,7 @@ export async function applyProjectChangesHandler(args: {
     if (batchOps.length > 0 && !fileFailure) {
       killClass2();
       killVisuDesigner();
+      await reporter.report(50, 100, `Executing ${batchOps.length} CLASS 2 batch operations...`);
       const br = await runBatchOps(resolved.path, batchOps);
       batchOk = br.ok;
       batchResult = {
@@ -621,6 +628,7 @@ export async function applyProjectChangesHandler(args: {
       );
     }
 
+    await reporter.report(100, 100, "Project changes completed.");
     return respond({
       ok: !fileFailure && batchOk,
       operations: outcomes,
