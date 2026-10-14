@@ -100,7 +100,14 @@ export async function startHmiRuntime(args: {
         const httpPort = await startStaticServer(running.dataDir);
         url = `http://127.0.0.1:${httpPort}/index.html`;
       } catch {}
-      return respond({ ok: true, running: true, healthy, ...running, url });
+      return respond({
+        ok: true,
+        running: true,
+        healthy,
+        ...running,
+        url,
+        message: `HMI web simulation running at ${url}. Connect using Playwright MCP or open in a browser to inspect, interact, or capture screenshots.`,
+      });
     } else {
       if (running) {
         clearHmiForProject(state);
@@ -291,6 +298,7 @@ export async function startHmiRuntime(args: {
       port,
       url,
       healthy,
+      message: `HMI web simulation running at ${url}. Connect using Playwright MCP or open in a browser to inspect, interact, or capture screenshots.`,
       ...(warnings.length ? { warnings } : {}),
     });
   } catch (e: unknown) {
