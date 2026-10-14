@@ -25,7 +25,6 @@ import {
 } from "./tools/plcControl.js";
 import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
 import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
-import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
 import { larsRuntimeSchema, larsRuntimeHandler } from "./tools/larsRuntime.js";
 import { validateGuidsSchema, validateGuidsHandler } from "./tools/validateGuids.js";
@@ -172,20 +171,13 @@ server.tool(
   deployAllHandler,
 );
 
-// ─── HMI runtime & browser ──────────────────────────────────────────────────
+// ─── HMI runtime ────────────────────────────────────────────────────────────
 
 server.tool(
   "hmi_runtime",
-  "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Use hmi_browser to interact with it afterwards.",
+  "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Returns the accessible HTTP URL (e.g. for testing via Playwright MCP or opening in a browser).",
   hmiRuntimeSchema,
   hmiRuntimeHandler,
-);
-
-server.tool(
-  "hmi_browser",
-  "Automate a headless Edge browser to test the HMI. Actions: open (navigate), screenshot (capture viewport or element), console (read logs/errors), eval (run JS), click, type, wait, close. ALWAYS use this after deploy to visually verify the HMI works.",
-  hmiBrowserSchema,
-  hmiBrowserHandler,
 );
 
 // ─── Resource: LASAL file format guide ───────────────────────────────────────
@@ -388,12 +380,12 @@ Dashboard files can be edited directly — they are standard JSON. Each element 
 4. **Edit code**: Use \`read_class_source\` to read/write class .st sources (latin1). Use file tools for other text files.
 5. **Structural changes**: Use \`apply_project_changes\` for network/object/connection operations (batch engine) and for \`create_class\`, \`add_project_file\`, \`clean_project\` (file-level).
 6. **Build & Deploy**: Call \`build_project\` to compile, then \`deploy_all\` to push everything.
-7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then \`hmi_browser\` to open, screenshot, and interact.
+7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then use Playwright MCP or any browser to open the returned URL and interact.
 8. **Live debug**: Use \`plc_values\` to read/write PLC channels in real time.
 
 ## HMI Runtime JavaScript API
 
-Within the HMI web environment (via \`hmi_browser\` eval):
+Within the HMI web environment (e.g. via Playwright MCP or browser console):
 \`\`\`javascript
 // Read a datapoint
 sig.datapoint.get('Motor1.s_Speed')
