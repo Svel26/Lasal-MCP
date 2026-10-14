@@ -25,10 +25,10 @@ import {
 } from "./tools/plcControl.js";
 import { visuProjectSchema, visuProjectHandler } from "./tools/visuControl.js";
 import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
-import { hmiBrowserSchema, hmiBrowserHandler } from "./tools/hmiBrowser.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
 import { larsRuntimeSchema, larsRuntimeHandler } from "./tools/larsRuntime.js";
 import { validateGuidsSchema, validateGuidsHandler } from "./tools/validateGuids.js";
+import { registerResources } from "./resources/registerResources.js";
 import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
@@ -42,6 +42,7 @@ server.tool(
   "select_project",
   "Set the active LASAL project by directory path. Call first — all other tools default to this project.",
   selectProjectSchema,
+  { idempotentHint: true, openWorldHint: false },
   selectProjectHandler,
 );
 
@@ -49,6 +50,7 @@ server.tool(
   "lasal_status",
   "Check project selection, station discovery, PLC/HMI reachability, engine paths, running processes, and HMI runtime health. Call to orient or diagnose connection issues.",
   lasalStatusSchema,
+  { readOnlyHint: true, idempotentHint: true },
   lasalStatusHandler,
 );
 
@@ -56,6 +58,7 @@ server.tool(
   "inspect_project",
   "Read-only inventory of the CLASS 2 project: classes (name, channels, tasks), networks and objects, from the .lcp manifest and class sources. Use it to plan changes before apply_project_changes.",
   inspectProjectSchema,
+  { readOnlyHint: true, idempotentHint: true },
   inspectProjectHandler,
 );
 
@@ -65,6 +68,7 @@ server.tool(
     "Auto-resolves duplicate GUID collisions (generating fresh GUIDs and updating MaeExp.txt/xml) and populates exact LASAL CRC32 @CT_ hashes. " +
     "Also cleans dangling network metadata.",
   validateGuidsSchema,
+  { destructiveHint: true },
   validateGuidsHandler,
 );
 
@@ -72,6 +76,7 @@ server.tool(
   "read_class_source",
   "Read or write a CLASS 2 class source (.st) by class name, with optional .h access. Writes are latin1-validated and require the CLASS 2 IDE to be closed.",
   classSourceSchema,
+  { openWorldHint: false },
   classSourceHandler,
 );
 
@@ -79,6 +84,7 @@ server.tool(
   "set_target_ip",
   "Update the target IP/port/SSL of a station in its .lss (surgical edit, other settings preserved). Use when a station moved networks; connection strings can also be passed per call.",
   setTargetIpSchema,
+  { idempotentHint: true },
   setTargetIpHandler,
 );
 
@@ -86,6 +92,7 @@ server.tool(
   "manage_class2",
   "Open or close the LASAL CLASS 2 IDE GUI. Close before running batch operations.",
   manageClass2Schema,
+  { destructiveHint: true },
   manageClass2Handler,
 );
 
@@ -93,6 +100,7 @@ server.tool(
   "manage_visudesigner",
   "Open or close the VISUDesigner GUI. Close before running automated visu operations.",
   manageVisuDesignerSchema,
+  { destructiveHint: true },
   manageVisuDesignerHandler,
 );
 
@@ -102,6 +110,7 @@ server.tool(
   "build_project",
   "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first.",
   buildProjectSchema,
+  { openWorldHint: true },
   buildProjectHandler,
 );
 
@@ -109,6 +118,7 @@ server.tool(
   "control_plc",
   "Start, stop, or query PLC runtime state. Pings the target PLC before start/stop.",
   controlPlcSchema,
+  { destructiveHint: true, openWorldHint: true },
   controlPlcHandler,
 );
 
@@ -116,6 +126,7 @@ server.tool(
   "plc_values",
   "Read or write live channel values on a running PLC. Channels use 'ObjectName.ChannelName' format. Auto-coerces types based on ST declarations.",
   plcValuesSchema,
+  { openWorldHint: true },
   plcValuesHandler,
 );
 
@@ -123,6 +134,7 @@ server.tool(
   "apply_project_changes",
   "Run CLASS 2 batch engine operations that cannot be done by editing files directly: create/delete/rename networks, add/remove/rename objects, create/delete connections, set init values, configure tasks, compile, download. Kills CLASS 2 IDE before running.",
   applyProjectChangesSchema,
+  { destructiveHint: true },
   applyProjectChangesHandler,
 );
 
@@ -130,6 +142,7 @@ server.tool(
   "run_class2_script",
   "Escape hatch: run arbitrary Python 2.7 batch statements through Lasal2.exe (module `batch`, project `prj` in scope). Use for batch API calls not covered by apply_project_changes; the project is NOT saved automatically.",
   runClass2ScriptSchema,
+  { destructiveHint: true },
   runClass2ScriptHandler,
 );
 
@@ -137,6 +150,7 @@ server.tool(
   "plc_diagnostics",
   "Run PLC diagnostics: trace recording, file upload/download/delete on PLC, or static code analysis.",
   plcDiagnosticsSchema,
+  { openWorldHint: true },
   plcDiagnosticsHandler,
 );
 
@@ -151,6 +165,7 @@ server.tool(
     "set_station_target (point a station's .lss at its LARS instance), restore (revert .lss to the real target. " +
     "After set_station_target, build_project/control_plc/plc_values/deploy_all operate on the LARS instance automatically.",
   larsRuntimeSchema,
+  { openWorldHint: true },
   larsRuntimeHandler,
 );
 
@@ -160,6 +175,7 @@ server.tool(
   "visu_project",
   "Run VISUDesigner engine operations: update stations, publish, manage text lists/schemes/media/code modules, set datapoint properties, or download to HMI. These need the VISUDesigner engine — for direct dashboard JSON editing, edit the files in the project directly.",
   visuProjectSchema,
+  { destructiveHint: true },
   visuProjectHandler,
 );
 
@@ -169,45 +185,18 @@ server.tool(
   "deploy_all",
   "Full deploy pipeline: compile → download PLC → start PLC → verify state → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags.",
   deployAllSchema,
+  { openWorldHint: true },
   deployAllHandler,
 );
 
-// ─── HMI runtime & browser ──────────────────────────────────────────────────
+// ─── HMI runtime ────────────────────────────────────────────────────────────
 
 server.tool(
   "hmi_runtime",
-  "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Use hmi_browser to interact with it afterwards.",
+  "Start, stop, or check the local HMI web simulation (LasalVISUDataService). Publishes the project, copies webroot, and spawns the DataService. Returns the accessible HTTP URL (e.g. for testing via Playwright MCP or opening in a browser).",
   hmiRuntimeSchema,
+  { openWorldHint: true },
   hmiRuntimeHandler,
-);
-
-server.tool(
-  "hmi_browser",
-  "Automate a headless Edge browser to test the HMI. Actions: open (navigate), screenshot (capture viewport or element), console (read logs/errors), eval (run JS), click, type, wait, close. ALWAYS use this after deploy to visually verify the HMI works.",
-  hmiBrowserSchema,
-  hmiBrowserHandler,
-);
-
-// ─── Resource: LASAL file format guide ───────────────────────────────────────
-
-server.resource(
-  "LASAL Project Guide",
-  "lasal://guide",
-  {
-    description: "Complete guide to LASAL file formats, file editing, HMI debugging, and the runtime JS API",
-    mimeType: "text/markdown",
-  },
-  async () => {
-    return {
-      contents: [
-        {
-          uri: "lasal://guide",
-          mimeType: "text/markdown",
-          text: LASAL_GUIDE,
-        },
-      ],
-    };
-  },
 );
 
 const LASAL_GUIDE = `# LASAL Project Guide
@@ -388,12 +377,12 @@ Dashboard files can be edited directly — they are standard JSON. Each element 
 4. **Edit code**: Use \`read_class_source\` to read/write class .st sources (latin1). Use file tools for other text files.
 5. **Structural changes**: Use \`apply_project_changes\` for network/object/connection operations (batch engine) and for \`create_class\`, \`add_project_file\`, \`clean_project\` (file-level).
 6. **Build & Deploy**: Call \`build_project\` to compile, then \`deploy_all\` to push everything.
-7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then \`hmi_browser\` to open, screenshot, and interact.
+7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then use Playwright MCP or any browser to open the returned URL and interact.
 8. **Live debug**: Use \`plc_values\` to read/write PLC channels in real time.
 
 ## HMI Runtime JavaScript API
 
-Within the HMI web environment (via \`hmi_browser\` eval):
+Within the HMI web environment (e.g. via Playwright MCP or browser console):
 \`\`\`javascript
 // Read a datapoint
 sig.datapoint.get('Motor1.s_Speed')
@@ -431,6 +420,10 @@ document.querySelector('sig-app').activeView
   must not share the class name (\`C_<Name>.cpp\`)
 - After any code changes, **always compile** to check for errors before deploying
 `;
+
+// ─── Resources ───────────────────────────────────────────────────────────────
+
+registerResources(server, LASAL_GUIDE);
 
 cleanupScratch();
 

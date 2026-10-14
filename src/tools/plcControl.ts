@@ -12,6 +12,7 @@ import { respond, fail } from "../utils/respond.js";
 import { batchResultToResponse } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
+import { createProgressReporter } from "../utils/mcpProgress.js";
 
 // Recursively find all project files
 function getProjectFiles(dir: string, files: string[] = []): string[] {
@@ -94,14 +95,18 @@ export const buildProjectSchema = {
     .describe("Timeout in seconds for compile or download. Omit for default (600s)."),
 };
 
-export async function buildProjectHandler(args: {
-  action: "compile" | "download";
-  lcp_path?: string;
-  options?: string;
-  connection?: string;
-  add_loader_anyway?: boolean;
-  timeout_s?: number;
-}) {
+export async function buildProjectHandler(
+  args: {
+    action: "compile" | "download";
+    lcp_path?: string;
+    options?: string;
+    connection?: string;
+    add_loader_anyway?: boolean;
+    timeout_s?: number;
+  },
+  extra?: any,
+) {
+  const reporter = createProgressReporter(extra, "lasal.build");
   return withEngineLock(async () => {
     const resolved = resolveLcpPath(args.lcp_path);
     if ("error" in resolved) {
@@ -109,16 +114,19 @@ export async function buildProjectHandler(args: {
     }
 
     if (args.action === "compile") {
+      await reporter.report(20, 100, `Compiling CLASS 2 project (${args.options ?? "RebuildAll"})...`);
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
       const br = await runBatchOps(
         resolved.path,
         [{ type: "compile", optionName: args.options ?? "RebuildAll" }],
         timeoutMs,
       );
+      await reporter.report(100, 100, "Compilation finished.");
       return batchResultToResponse(br);
     }
 
     // download
+    await reporter.report(15, 100, "Resolving connection & target preflight...");
     const connectionInfo = resolveConnection(resolved.path, args.connection);
     const ipUsed = connectionInfo.ip ?? "";
     const connectionUsed = connectionInfo.connection;
@@ -129,6 +137,7 @@ export async function buildProjectHandler(args: {
     // Preflight PLC target
     const pf = await preflightPlc(resolved.path, args.connection);
     if (!pf.ok) {
+      await reporter.log("warning", `Preflight failed for ${connectionUsed}`);
       return respond({
         ok: false,
         preflight: pf,
@@ -139,6 +148,7 @@ export async function buildProjectHandler(args: {
       });
     }
 
+    await reporter.report(40, 100, `Downloading project to ${connectionUsed}...`);
     const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
 
     let br = await runBatchOps(
@@ -149,6 +159,7 @@ export async function buildProjectHandler(args: {
 
     // Auto-retry transient connection errors once
     if (!br.ok && isTransientError(br.errors)) {
+      await reporter.log("info", "Transient error during download, retrying once...");
       await new Promise((resolve) => setTimeout(resolve, 1000));
       br = await runBatchOps(
         resolved.path,
@@ -158,6 +169,7 @@ export async function buildProjectHandler(args: {
       br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
     }
 
+    await reporter.report(100, 100, "Download finished.");
     return batchResultToResponse(br, {
       connectionUsed,
       ipUsed,

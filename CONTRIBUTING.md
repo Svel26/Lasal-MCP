@@ -28,7 +28,6 @@ src/
 │   ├── applyProjectChanges.ts  # CLASS 2 batch engine commands
 │   ├── buildProject.ts         # Compilation and hardware download
 │   ├── deployAll.ts            # Complete compile → download → visu → HMI pipeline
-│   ├── hmiBrowser.ts           # Playwright headless browser for HMI verification
 │   ├── hmiRuntime.ts           # LasalVISUDataService web runtime manager
 │   ├── larsRuntime.ts          # Local LARS simulation multi-station manager
 │   ├── lasalApps.ts            # CLASS 2 & VISUDesigner IDE window control
