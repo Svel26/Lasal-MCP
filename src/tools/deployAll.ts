@@ -185,7 +185,7 @@ export async function deployAllHandler(
     }
 
     function failResponse(msg?: string, hints: string[] = []) {
-      const body: Record<string, unknown> = {
+      const body: { ok: boolean; hints?: string[]; [k: string]: unknown } = {
         ok: false,
         steps,
         connections: {
@@ -195,7 +195,7 @@ export async function deployAllHandler(
         hints,
       };
       if (msg) body.error = msg;
-      return respond(body as any);
+      return respond(body);
     }
 
     // Step 1: compile
@@ -287,7 +287,7 @@ export async function deployAllHandler(
       steps.verify_plc = {
         ...batchToStepResult(br),
         plcState: stateData,
-      } as any;
+      };
 
       if (!br.ok) return failResponse("PLC verification step failed.", br.hints ?? []);
     }
@@ -338,7 +338,7 @@ export async function deployAllHandler(
       steps.start_plc = {
         ...batchToStepResult(br),
         postStartState: stateData,
-      } as any;
+      };
 
       if (!br.ok) return failResponse("PLC start step failed.", br.hints ?? []);
     }

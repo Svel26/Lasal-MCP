@@ -163,11 +163,11 @@ function findDashboardFile(projectDir: string, name: string): { path: string; ki
   return null;
 }
 
-function updateLayoutProp(properties: any[], name: string, value: string | undefined) {
+function updateLayoutProp(properties: Array<Record<string, unknown>>, name: string, value: string | undefined) {
   if (value === undefined) return;
   let typeId = 0;
   let propTypeId = 2;
-  let realVal: any = value;
+  let realVal: unknown = value;
 
   if (name === "rotation") {
     realVal = parseFloat(value) || 0.0;
@@ -181,7 +181,7 @@ function updateLayoutProp(properties: any[], name: string, value: string | undef
     propTypeId = 2;
   }
 
-  const existing = properties.find((p: any) => p.name === name);
+  const existing = properties.find((p) => p.name === name);
   if (existing) {
     existing.value = realVal;
     existing.typeId = typeId;
@@ -210,7 +210,7 @@ export async function visuDashboardHandler(args: {
   const lvpPath = resolved.path;
   const projectDir = dirname(lvpPath);
 
-  const results: any[] = [];
+  const results: Array<Record<string, unknown>> = [];
   const backups: string[] = [];
   let isError = false;
 
@@ -225,12 +225,12 @@ export async function visuDashboardHandler(args: {
     killVisuDesigner();
 
     for (const op of args.operations) {
-      const opResult: any = { op: op.op };
+      const opResult: Record<string, unknown> = { op: op.op };
 
       try {
         switch (op.op) {
           case "list_control_types": {
-            const list: any[] = [];
+            const list: Array<Record<string, unknown>> = [];
             const roots = [
               join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "user"),
               join(projectDir, "Runtime", "DesignerRuntime", "res", "components", "sigmatek"),
@@ -265,18 +265,33 @@ export async function visuDashboardHandler(args: {
             opResult.ok = true;
             opResult.controlType = {
               controlId: manifest.name,
-              description: manifest.description?.en || "",
-              properties: (manifest.properties || []).map((p: any) => ({
-                name: p.name,
-                dataType: p.dataType || "string",
-                group: p.group?.en || "Custom",
-                description: p.description?.en || "",
-                valueSourceTypes: Array.isArray(p.valueSourceTypes)
-                  ? p.valueSourceTypes
-                  : p.valueSourceTypes
-                    ? [p.valueSourceTypes]
-                    : ["constString"],
-              })),
+              description:
+                (manifest as Record<string, unknown>).description &&
+                typeof (manifest as Record<string, unknown>).description === "object"
+                  ? ((manifest as Record<string, unknown>).description as Record<string, string>)?.en || ""
+                  : "",
+              properties: (manifest.properties || []).map((p) => {
+                const rec = p as Record<string, unknown>;
+                const group =
+                  rec.group && typeof rec.group === "object"
+                    ? (rec.group as Record<string, string>)?.en || "Custom"
+                    : "Custom";
+                const desc =
+                  rec.description && typeof rec.description === "object"
+                    ? (rec.description as Record<string, string>)?.en || ""
+                    : "";
+                return {
+                  name: p.name,
+                  dataType: rec.dataType || "string",
+                  group,
+                  description: desc,
+                  valueSourceTypes: Array.isArray(rec.valueSourceTypes)
+                    ? rec.valueSourceTypes
+                    : rec.valueSourceTypes
+                      ? [rec.valueSourceTypes]
+                      : ["constString"],
+                };
+              }),
             };
             break;
           }
@@ -382,15 +397,17 @@ export async function visuDashboardHandler(args: {
               data.dashboardelements = [];
             }
 
-            if (data.dashboardelements.some((el: any) => el.name === op.name)) {
+            if ((data.dashboardelements as Array<Record<string, unknown>>).some((el) => el.name === op.name)) {
               throw new Error(`Element with name '${op.name}' already exists in dashboard '${op.dashboardName}'.`);
             }
 
             const manifest = loadControlManifest(projectDir, op.controlId);
-            const defaultWidth = manifest?.defaultDimensions?.width || "100px";
-            const defaultHeight = manifest?.defaultDimensions?.height || "100px";
+            const recManifest = manifest as Record<string, unknown> | null;
+            const defaultDimensions = recManifest?.defaultDimensions as Record<string, string> | undefined;
+            const defaultWidth = defaultDimensions?.width || "100px";
+            const defaultHeight = defaultDimensions?.height || "100px";
 
-            const elementProperties: any[] = [];
+            const elementProperties: Array<Record<string, unknown>> = [];
             updateLayoutProp(elementProperties, "--theme-sig-element-left", op.left || "0px");
             updateLayoutProp(elementProperties, "--theme-sig-element-top", op.top || "0px");
             updateLayoutProp(elementProperties, "--theme-sig-element-width", op.width || defaultWidth);
@@ -423,8 +440,9 @@ export async function visuDashboardHandler(args: {
             backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
-            const origCount = data.dashboardelements?.length || 0;
-            data.dashboardelements = (data.dashboardelements || []).filter((el: any) => el.name !== op.name);
+            const elements = (data.dashboardelements as Array<Record<string, unknown>>) || [];
+            const origCount = elements.length;
+            data.dashboardelements = elements.filter((el) => el.name !== op.name);
 
             if (data.dashboardelements.length === origCount) {
               throw new Error(`Element '${op.name}' not found in dashboard '${op.dashboardName}'.`);
@@ -445,7 +463,7 @@ export async function visuDashboardHandler(args: {
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
             const targetName = op.name || "";
 
-            let targetProps: any[] | null = null;
+            let targetProps: Array<Record<string, unknown>> | null = null;
             let controlId = "sig-dashboard";
 
             if (
@@ -453,15 +471,16 @@ export async function visuDashboardHandler(args: {
               targetName === "__root" ||
               targetName.toLowerCase() === op.dashboardName.toLowerCase()
             ) {
-              targetProps = data.properties;
+              targetProps = data.properties as Array<Record<string, unknown>>;
               controlId = data.controlId || "sig-dashboard";
             } else {
-              const el = (data.dashboardelements || []).find((x: any) => x.name === targetName);
+              const elements = (data.dashboardelements as Array<Record<string, unknown>>) || [];
+              const el = elements.find((x) => x.name === targetName);
               if (!el) {
                 throw new Error(`Element '${targetName}' not found in dashboard '${op.dashboardName}'.`);
               }
-              targetProps = el.properties;
-              controlId = el.controlId;
+              targetProps = el.properties as Array<Record<string, unknown>>;
+              controlId = String(el.controlId);
             }
 
             if (!targetProps) {
@@ -471,7 +490,7 @@ export async function visuDashboardHandler(args: {
             const manifest = loadControlManifest(projectDir, controlId);
 
             for (const propBind of op.properties) {
-              const manifestProp = manifest?.properties?.find((p: any) => p.name === propBind.name);
+              const manifestProp = manifest?.properties?.find((p) => p.name === propBind.name);
               const encoded = encodeProperty(
                 projectDir,
                 propBind.name,
@@ -480,7 +499,7 @@ export async function visuDashboardHandler(args: {
                 propBind.value,
               );
 
-              const idx = targetProps.findIndex((p: any) => p.name === propBind.name);
+              const idx = targetProps.findIndex((p) => p.name === propBind.name);
               if (idx >= 0) {
                 targetProps[idx] = encoded;
               } else {
@@ -501,13 +520,14 @@ export async function visuDashboardHandler(args: {
             backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
-            const el = (data.dashboardelements || []).find((x: any) => x.name === op.name);
+            const elements = (data.dashboardelements as Array<Record<string, unknown>>) || [];
+            const el = elements.find((x) => x.name === op.name);
             if (!el) {
               throw new Error(`Element '${op.name}' not found in '${op.dashboardName}'.`);
             }
 
-            updateLayoutProp(el.properties, "--theme-sig-element-left", op.left);
-            updateLayoutProp(el.properties, "--theme-sig-element-top", op.top);
+            updateLayoutProp(el.properties as Array<Record<string, unknown>>, "--theme-sig-element-left", op.left);
+            updateLayoutProp(el.properties as Array<Record<string, unknown>>, "--theme-sig-element-top", op.top);
 
             writeTabIndentedJson(found.path, data);
             opResult.ok = true;
@@ -522,13 +542,14 @@ export async function visuDashboardHandler(args: {
             backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
-            const el = (data.dashboardelements || []).find((x: any) => x.name === op.name);
+            const elements = (data.dashboardelements as Array<Record<string, unknown>>) || [];
+            const el = elements.find((x) => x.name === op.name);
             if (!el) {
               throw new Error(`Element '${op.name}' not found in '${op.dashboardName}'.`);
             }
 
-            updateLayoutProp(el.properties, "--theme-sig-element-width", op.width);
-            updateLayoutProp(el.properties, "--theme-sig-element-height", op.height);
+            updateLayoutProp(el.properties as Array<Record<string, unknown>>, "--theme-sig-element-width", op.width);
+            updateLayoutProp(el.properties as Array<Record<string, unknown>>, "--theme-sig-element-height", op.height);
 
             writeTabIndentedJson(found.path, data);
             opResult.ok = true;
@@ -543,12 +564,13 @@ export async function visuDashboardHandler(args: {
             backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
-            const srcEl = (data.dashboardelements || []).find((x: any) => x.name === op.name);
+            const elements = (data.dashboardelements as Array<Record<string, unknown>>) || [];
+            const srcEl = elements.find((x) => x.name === op.name);
             if (!srcEl) {
               throw new Error(`Element '${op.name}' to duplicate not found.`);
             }
 
-            if (data.dashboardelements.some((x: any) => x.name === op.newName)) {
+            if (elements.some((x) => x.name === op.newName)) {
               throw new Error(`An element with name '${op.newName}' already exists.`);
             }
 
@@ -558,7 +580,9 @@ export async function visuDashboardHandler(args: {
             duplicated.instanceId = newInstanceId(duplicated.type === "compositecontainer" ? "lvd" : "lvd");
 
             // shift duplicate slightly so it's visible if stacked directly
-            const leftProp = duplicated.properties.find((p: any) => p.name === "--theme-sig-element-left");
+            const leftProp = (duplicated.properties as Array<Record<string, unknown>>).find(
+              (p) => p.name === "--theme-sig-element-left",
+            );
             if (leftProp && typeof leftProp.value === "string" && leftProp.value.endsWith("px")) {
               const val = parseInt(leftProp.value) + 10;
               leftProp.value = `${val}px`;
@@ -587,11 +611,12 @@ export async function visuDashboardHandler(args: {
             backup(found.path);
 
             const data = JSON.parse(readFileSync(found.path, "utf-8"));
-            if (data.dashboardelements?.some((x: any) => x.name === op.name)) {
+            const elements = (data.dashboardelements as Array<Record<string, unknown>>) || [];
+            if (elements.some((x) => x.name === op.name)) {
               throw new Error(`Element with name '${op.name}' already exists.`);
             }
 
-            const elementProperties: any[] = [];
+            const elementProperties: Array<Record<string, unknown>> = [];
             elementProperties.push({
               name: "sigcompositectrl",
               value: op.templateName,
@@ -625,9 +650,9 @@ export async function visuDashboardHandler(args: {
             break;
           }
         }
-      } catch (e: any) {
+      } catch (e) {
         opResult.ok = false;
-        opResult.error = e.message;
+        opResult.error = e instanceof Error ? e.message : String(e);
         isError = true;
       }
 

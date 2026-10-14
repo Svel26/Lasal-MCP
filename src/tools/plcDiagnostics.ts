@@ -179,15 +179,16 @@ export async function plcDiagnosticsHandler(args: {
           ].join("\n") + "\n";
 
         const br = await runScript(script, logPath);
-        let summary: any = {};
+        let summary: unknown = {};
         if (br.ok && existsSync(outPath)) {
           try {
             const rawXml = readFileSync(outPath, "utf-8");
             const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
             const parsed = parser.parse(rawXml);
             summary = parsed;
-          } catch (e: any) {
-            summary = { error: `Failed to parse analysis XML: ${e.message}`, path: outPath };
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            summary = { error: `Failed to parse analysis XML: ${msg}`, path: outPath };
           }
         }
         return batchResultToResponse(br, { analysisResult: summary });

@@ -40,9 +40,10 @@ export async function setTargetIpHandler(args: { station?: string; ip?: string; 
   let solution;
   try {
     solution = parseSolution(lsmPath);
-  } catch (e: any) {
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     return {
-      content: [{ type: "text" as const, text: `Failed to parse solution: ${e.message}` }],
+      content: [{ type: "text" as const, text: `Failed to parse solution: ${msg}` }],
       isError: true,
     };
   }
@@ -91,9 +92,10 @@ export async function setTargetIpHandler(args: { station?: string; ip?: string; 
       port: args.port,
       ssltls: args.ssltls !== undefined ? (args.ssltls ? "1" : "0") : undefined,
     });
-  } catch (e: any) {
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     return {
-      content: [{ type: "text" as const, text: `Failed to update .lss: ${e.message}` }],
+      content: [{ type: "text" as const, text: `Failed to update .lss: ${msg}` }],
       isError: true,
     };
   }

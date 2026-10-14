@@ -28,8 +28,8 @@ export const inspectVisuProjectSchema = {
     .describe("Maximum matches to return when scope='datapoints'. Default 50."),
 };
 
-function readJson(filePath: string): any {
-  return JSON.parse(readFileSync(filePath, "utf-8"));
+function readJson(filePath: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(filePath, "utf-8")) as Record<string, unknown>;
 }
 
 async function scanDatapointsStream(
@@ -191,7 +191,7 @@ export async function inspectVisuProjectHandler(args: {
   const projectDir = dirname(lvpPath);
   const scope = args.scope ?? "summary";
 
-  const result: Record<string, any> = {
+  const result: Record<string, unknown> = {
     lvpPath,
     projectName: basename(lvpPath, ".lvp"),
     scope,
@@ -211,8 +211,9 @@ export async function inspectVisuProjectHandler(args: {
       try {
         const matches = await scanDatapointsStream(dpFile, new RegExp(args.filter, "i"), args.limit ?? 50);
         result.datapoints = matches;
-      } catch (e: any) {
-        errors.push(`datapoints scan error: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`datapoints scan error: ${msg}`);
       }
     } else {
       result.datapoints = [];
@@ -257,6 +258,7 @@ export async function inspectVisuProjectHandler(args: {
 
     try {
       const data = readJson(foundPath);
+      const rawElements = (data.dashboardelements as Array<Record<string, unknown>>) ?? [];
       result.dashboard = {
         name: data.name,
         type: data.type,
@@ -264,7 +266,7 @@ export async function inspectVisuProjectHandler(args: {
         designTimeId: data.designTimeId,
         instanceId: data.instanceId,
         properties: data.properties ?? [],
-        elements: (data.dashboardelements ?? []).map((el: any) => ({
+        elements: rawElements.map((el) => ({
           name: el.name,
           controlId: el.controlId,
           designTimeId: el.designTimeId,
@@ -272,8 +274,9 @@ export async function inspectVisuProjectHandler(args: {
           properties: el.properties ?? [],
         })),
       };
-    } catch (e: any) {
-      errors.push(`Error reading dashboard: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`Error reading dashboard: ${msg}`);
     }
     if (errors.length) result.errors = errors;
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
@@ -293,15 +296,16 @@ export async function inspectVisuProjectHandler(args: {
             const data = readJson(fullPath);
             const count = Array.isArray(data.dashboardelements) ? data.dashboardelements.length : 0;
             list.push({
-              name: data.name ?? basename(f, ".json"),
+              name: String(data.name ?? basename(f, ".json")),
               path: fullPath,
               elementCount: count,
               type: dirName.slice(0, -1).toLowerCase(), // dashboard, globaldashboard, window
             });
           } catch {}
         }
-      } catch (e: any) {
-        errors.push(`${dirName}: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`${dirName}: ${msg}`);
       }
     }
     result.dashboards = list;
@@ -311,7 +315,7 @@ export async function inspectVisuProjectHandler(args: {
 
   // ── 3. Function Blocks scope ───────────────────────────────────────────────
   if (scope === "function_blocks") {
-    const fbs: any[] = [];
+    const fbs: Array<Record<string, unknown>> = [];
     const fbDir = join(projectDir, "Functionblocks");
     if (existsSync(fbDir)) {
       try {
@@ -321,15 +325,16 @@ export async function inspectVisuProjectHandler(args: {
           try {
             const data = readJson(jsonPath);
             fbs.push({
-              name: data.name ?? basename(f, ".json"),
+              name: String(data.name ?? basename(f, ".json")),
               jsonPath,
               jsPath: jsonPath.replace(".json", ".js"),
               properties: data.properties ?? [],
             });
           } catch {}
         }
-      } catch (e: any) {
-        errors.push(`function_blocks: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`function_blocks: ${msg}`);
       }
     }
     result.functionBlocks = fbs;
@@ -345,8 +350,9 @@ export async function inspectVisuProjectHandler(args: {
       try {
         const modules = readdirSync(codeModulesDir).filter((f) => f.endsWith(".js") || f.endsWith(".ts"));
         list.push(...modules);
-      } catch (e: any) {
-        errors.push(`codeModules: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`codeModules: ${msg}`);
       }
     }
     result.codeModules = list;
@@ -359,15 +365,17 @@ export async function inspectVisuProjectHandler(args: {
   const stationsFile = join(projectDir, "Stations", "Stations.json");
   if (existsSync(stationsFile)) {
     try {
-      const data: any = readJson(stationsFile);
-      result.stations = (data.stations ?? []).map((s: any) => ({
+      const data = readJson(stationsFile);
+      const rawStations = (data.stations as Array<Record<string, unknown>>) ?? [];
+      result.stations = rawStations.map((s) => ({
         name: s.name,
         connection: s.connection,
         importFilePath: s.importFilePath,
         isRequired: s.isRequired,
       }));
-    } catch (e: any) {
-      errors.push(`stations: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`stations: ${msg}`);
     }
   }
 
@@ -382,8 +390,9 @@ export async function inspectVisuProjectHandler(args: {
           return false;
         }
       });
-    } catch (e: any) {
-      errors.push(`languages: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`languages: ${msg}`);
     }
   }
 
@@ -394,8 +403,9 @@ export async function inspectVisuProjectHandler(args: {
       const summary = await getDatapointSummary(dpFile);
       result.datapointRoots = summary.roots;
       result.totalDatapoints = summary.total;
-    } catch (e: any) {
-      errors.push(`datapoints summary: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`datapoints summary: ${msg}`);
     }
   }
 
@@ -411,15 +421,16 @@ export async function inspectVisuProjectHandler(args: {
             if (!f.endsWith(".json")) continue;
             try {
               const data = readJson(join(langPath, f));
-              const name = data.name ?? basename(f, ".json");
+              const name = String(data.name ?? basename(f, ".json"));
               if (!textLists.includes(name)) textLists.push(name);
             } catch {}
           }
         } catch {}
       }
       if (textLists.length) result.textLists = textLists;
-    } catch (e: any) {
-      errors.push(`textLists: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`textLists: ${msg}`);
     }
   }
 
@@ -436,12 +447,12 @@ export async function inspectVisuProjectHandler(args: {
             try {
               const data = readJson(join(typeFullPath, schemeFile));
               if (data && Array.isArray(data.schemes)) {
-                for (const s of data.schemes) {
+                for (const s of data.schemes as Array<Record<string, unknown>>) {
                   if (s && s.name) {
                     schemes.push({
                       type: typeDir,
-                      name: s.name,
-                      designTimeId: s.designTimeId,
+                      name: String(s.name),
+                      designTimeId: s.designTimeId as string | undefined,
                     });
                   }
                 }
@@ -451,8 +462,9 @@ export async function inspectVisuProjectHandler(args: {
         } catch {}
       }
       if (schemes.length) result.schemes = schemes;
-    } catch (e: any) {
-      errors.push(`schemes: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`schemes: ${msg}`);
     }
   }
 
@@ -464,14 +476,15 @@ export async function inspectVisuProjectHandler(args: {
       for (const f of readdirSync(alarmsDir)) {
         if (!f.endsWith(".json")) continue;
         try {
-          const data: any = readJson(join(alarmsDir, f));
-          const name: string = data.name ?? basename(f, ".json");
+          const data = readJson(join(alarmsDir, f));
+          const name = String(data.name ?? basename(f, ".json"));
           alarms.push(name);
         } catch {}
       }
       if (alarms.length) result.alarms = alarms;
-    } catch (e: any) {
-      errors.push(`alarms: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`alarms: ${msg}`);
     }
   }
 

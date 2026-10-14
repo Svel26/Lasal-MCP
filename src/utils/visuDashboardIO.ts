@@ -52,7 +52,9 @@ export function resolveTextRef(projectDir: string, listName: string, aliasName: 
         const content = readFileSync(listFile, "utf-8");
         const data = JSON.parse(content);
         if (data && Array.isArray(data.texts)) {
-          const item = data.texts.find((t: any) => t.aliasName === aliasName);
+          const item = (data.texts as Array<{ aliasName?: string; id?: string }>).find(
+            (t) => t.aliasName === aliasName,
+          );
           if (item && item.id) return item.id;
         }
       }
@@ -71,7 +73,7 @@ export function resolveSchemeRef(projectDir: string, schemeType: string, schemeN
       const content = readFileSync(join(dir, f), "utf-8");
       const data = JSON.parse(content);
       if (data && Array.isArray(data.schemes)) {
-        const s = data.schemes.find((x: any) => x.name === schemeName);
+        const s = (data.schemes as Array<{ name?: string; designTimeId?: string }>).find((x) => x.name === schemeName);
         if (s && s.designTimeId) return s.designTimeId;
       }
     }
@@ -89,7 +91,7 @@ export function resolveColorRef(projectDir: string, colorVal: string): string | 
       const content = readFileSync(path, "utf-8");
       const data = JSON.parse(content);
       if (data && Array.isArray(data.colors)) {
-        const c = data.colors.find((x: any) => x.name === name);
+        const c = (data.colors as Array<{ name?: string; id?: string }>).find((x) => x.name === name);
         if (c && c.id) return c.id;
       }
     } catch {}
@@ -105,7 +107,7 @@ export function resolveFontRef(projectDir: string, fontName: string): string | n
       const content = readFileSync(path, "utf-8");
       const data = JSON.parse(content);
       if (data && Array.isArray(data.fontStyles)) {
-        const f = data.fontStyles.find((x: any) => x.name === fontName);
+        const f = (data.fontStyles as Array<{ name?: string; designTimeId?: string }>).find((x) => x.name === fontName);
         if (f && f.designTimeId) return f.designTimeId;
       }
     } catch {}
@@ -121,7 +123,12 @@ export function resolveStyleClassRef(projectDir: string, className: string): str
     const content = readFileSync(path, "utf-8");
     const data = JSON.parse(content);
     if (data && Array.isArray(data.componentStyles)) {
-      const findInNode = (node: any): string | null => {
+      interface StyleNode {
+        name?: string;
+        designTimeId?: string;
+        children?: StyleNode[];
+      }
+      const findInNode = (node: StyleNode): string | null => {
         if (node.name === className && node.designTimeId) return node.designTimeId;
         if (Array.isArray(node.children)) {
           for (const child of node.children) {
@@ -131,7 +138,7 @@ export function resolveStyleClassRef(projectDir: string, className: string): str
         }
         return null;
       };
-      for (const style of data.componentStyles) {
+      for (const style of data.componentStyles as StyleNode[]) {
         const res = findInNode(style);
         if (res) return res;
       }
@@ -167,7 +174,7 @@ export function resolveMediaRef(projectDir: string, mediaPath: string): string |
             const content = readFileSync(join(subPath, file), "utf-8");
             const data = JSON.parse(content);
             if (data && Array.isArray(data.mediaItems)) {
-              const item = data.mediaItems.find((x: any) => x.name === filename);
+              const item = (data.mediaItems as Array<{ name?: string; id?: string }>).find((x) => x.name === filename);
               if (item && item.id) return item.id;
             }
           }
@@ -179,7 +186,7 @@ export function resolveMediaRef(projectDir: string, mediaPath: string): string |
 }
 
 // Tab indented JSON output
-export function writeTabIndentedJson(filePath: string, data: any): void {
+export function writeTabIndentedJson(filePath: string, data: unknown): void {
   const content = JSON.stringify(data, null, "\t");
   writeFileSync(filePath, content, "utf-8");
 }
