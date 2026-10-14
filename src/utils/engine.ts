@@ -71,19 +71,6 @@ const _dsResolved = resolveDataServiceExe();
 export const DATASERVICE_EXE = _dsResolved.path;
 export const DATASERVICE_SEARCHED = _dsResolved.searched;
 
-function findEdgePath(): string {
-  const paths = [
-    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  ];
-  for (const p of paths) {
-    if (existsSync(p)) return p;
-  }
-  return "";
-}
-
-export const EDGE_EXE = process.env.LASAL_EDGE_EXE || findEdgePath();
-
 // ─── Scratch Directory & Cleanup ─────────────────────────────────────────────
 
 export const SCRATCH = join(tmpdir(), "lasal-mcp");

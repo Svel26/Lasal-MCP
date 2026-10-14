@@ -33,7 +33,7 @@ import { cleanupScratch } from "./utils/engine.js";
 
 const server = new McpServer({
   name: "lasal-mcp",
-  version: "0.3.0",
+  version: "0.3.1",
 });
 
 // ─── Project management ──────────────────────────────────────────────────────
