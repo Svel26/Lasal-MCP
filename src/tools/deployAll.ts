@@ -8,7 +8,7 @@ import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { startHmiRuntime } from "./hmiRuntime.js";
 import { TIMEOUTS } from "../utils/config.js";
-import { preflightPlc, preflightHmi, resolveConnection, isLoopbackTarget } from "../utils/preflight.js";
+import { preflightPlc, preflightHmi, resolveConnection, shouldAddLoader } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
@@ -64,8 +64,10 @@ export const deployAllSchema = {
   add_plc_loader: z
     .boolean()
     .optional()
-    .default(false)
-    .describe("Force loader download to PLC even if the target already has a compatible loader."),
+    .describe(
+      "Force loader download to PLC even if the target already has a compatible loader. " +
+        "Default: auto — sent for local LARS/loopback targets, skipped otherwise. Set false to disable, true to force.",
+    ),
   add_visu_runtime: z
     .boolean()
     .optional()
@@ -206,7 +208,7 @@ export async function deployAllHandler(args: {
     if (doDownloadPlc) {
       const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
       // LARS (local runtime) targets need the PC loader or the download ends in "Linker_Error".
-      const addLoaderAnyway = args.add_plc_loader ?? isLoopbackTarget(plcConnectionInfo);
+      const addLoaderAnyway = shouldAddLoader(args.add_plc_loader, plcConnectionInfo);
       let br = await runBatchOps(
         lcpPath!,
         [

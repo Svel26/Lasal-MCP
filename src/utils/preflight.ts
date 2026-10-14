@@ -38,6 +38,16 @@ export function isLoopbackTarget(conn: ConnectionInfo | { ip?: string }): boolea
   return ip === "127.0.0.1" || ip === "localhost" || ip.startsWith("127.");
 }
 
+/**
+ * Decide whether the target loader must be force-sent. `undefined` means auto:
+ * local LARS/loopback targets need the PC loader or the download ends in
+ * "Linker_Error". Pass explicit true/false to force or suppress the transfer.
+ */
+export function shouldAddLoader(explicit: boolean | undefined, conn: ConnectionInfo | { ip?: string }): boolean {
+  if (explicit !== undefined) return explicit;
+  return isLoopbackTarget(conn);
+}
+
 /** Extract the IP and optional port from a connection string like 'TCPIP:10.0.0.5:1964'. */
 export function parseConnectionTarget(conn: string): { ip?: string; port?: number } {
   let target = conn;

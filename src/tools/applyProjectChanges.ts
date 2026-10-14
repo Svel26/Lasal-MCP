@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { runBatchOps, type BatchOp } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
+import { shouldAddLoader, parseConnectionTarget } from "../utils/preflight.js";
 import { withEngineLock, killClass2, killVisuDesigner } from "../utils/engine.js";
 import {
   createClass,
@@ -105,7 +106,7 @@ const CompileOp = z.object({
 const DownloadOp = z.object({
   type: z.literal("download"),
   connection: z.string().optional(),
-  add_loader_anyway: z.boolean().optional().default(false),
+  add_loader_anyway: z.boolean().optional(),
 });
 
 const SetTaskOrderOp = z.object({
@@ -409,7 +410,11 @@ function toBatchOp(op: BatchOperation): BatchOp {
     case "compile":
       return { type: "compile", optionName: op.options };
     case "download":
-      return { type: "download", connection: op.connection ?? "", addLoaderAnyway: op.add_loader_anyway };
+      return {
+        type: "download",
+        connection: op.connection ?? "",
+        addLoaderAnyway: shouldAddLoader(op.add_loader_anyway, parseConnectionTarget(op.connection ?? "")),
+      };
     case "set_task_order":
       return {
         type: "set_task_order",

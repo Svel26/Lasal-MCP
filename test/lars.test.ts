@@ -12,6 +12,8 @@ import {
   pointStationAtLars,
   gcLarsWorkspaces,
   mapStationsToLars,
+  findLarsInstancesForStation,
+  instanceBelongsToProject,
   type LarsInstanceInfo,
 } from "../src/utils/lars.js";
 import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
@@ -336,6 +338,82 @@ describe("gcLarsWorkspaces", () => {
     expect(result.removed.map((r) => r.name)).toEqual(["Proj_PLC"]);
     expect(readLarsWorkspaces()).toHaveLength(2);
   });
+
+  it("never collects workspaces of the protected project", () => {
+    upsertLarsWorkspace("Proj_PLC", { onlinePort: 1964 });
+    makeLss("10.195.0.50");
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: notRunning,
+      instances: makeInstance({ stationLssPath: lssPath, projectDir: "C:\\proj" }),
+      protectProjects: ["c:/proj/"],
+      larsGc: {},
+    });
+    expect(result.removed).toHaveLength(0);
+    const kept = result.kept.find((k) => k.name === "Proj_PLC");
+    expect(kept?.reason).toContain("selected project");
+    expect(readLarsWorkspaces()).toHaveLength(2);
+  });
+
+  it("still collects unreferenced workspaces from other projects when one is protected", () => {
+    upsertLarsWorkspace("Other_PLC", { onlinePort: 1964 });
+    upsertLarsWorkspace("Prot_PLC", { onlinePort: 1974 });
+    makeLss("10.195.0.50");
+    const instances: Record<string, LarsInstanceInfo> = {
+      Other_PLC: { name: "Other_PLC", onlinePort: 1964, stationLssPath: lssPath, projectDir: "C:\\other" },
+      Prot_PLC: { name: "Prot_PLC", onlinePort: 1974, projectDir: "C:\\proj" },
+    };
+    const result = gcLarsWorkspaces({
+      minAgeH: 0,
+      isRunning: notRunning,
+      instances,
+      protectProjects: ["C:\\proj"],
+      larsGc: {},
+    });
+    expect(result.removed.map((r) => r.name)).toEqual(["Other_PLC"]);
+    expect(readLarsWorkspaces().map((w) => w.name)).toEqual(["DEFAULT", "Prot_PLC"]);
+  });
+});
+
+describe("findLarsInstancesForStation / instanceBelongsToProject", () => {
+  const instances: Record<string, LarsInstanceInfo> = {
+    A_PLC: { name: "A_PLC", onlinePort: 1964, stationName: "PLC", projectDir: "C:\\Projects\\A" },
+    B_PLC: { name: "B_PLC", onlinePort: 1974, stationName: "PLC", projectDir: "C:\\Projects\\B" },
+    A_HMI: { name: "A_HMI", onlinePort: 1984, stationName: "HMI", projectDir: "C:\\Projects\\A" },
+  };
+
+  it("scopes a station to the requested project, case- and slash-insensitively", () => {
+    const lookup = findLarsInstancesForStation(instances, "PLC", "c:/projects/a/");
+    expect(lookup.matches.map((i) => i.name)).toEqual(["A_PLC"]);
+    expect(lookup.foreign.map((i) => i.name)).toEqual(["B_PLC"]);
+  });
+
+  it("reports all matches as ambiguous when no project is selected", () => {
+    const lookup = findLarsInstancesForStation(instances, "PLC");
+    expect(lookup.matches.map((i) => i.name)).toEqual(["A_PLC", "B_PLC"]);
+    expect(lookup.foreign).toHaveLength(0);
+  });
+
+  it("matches legacy instances without projectDir via their .lcp/.lss paths", () => {
+    const legacy: Record<string, LarsInstanceInfo> = {
+      L_PLC: { name: "L_PLC", onlinePort: 1994, stationName: "PLC", lcpPath: "C:\\Projects\\B\\Stations\\PLC\\x.lcp" },
+    };
+    expect(findLarsInstancesForStation(legacy, "PLC", "C:\\Projects\\B").matches.map((i) => i.name)).toEqual(["L_PLC"]);
+    expect(findLarsInstancesForStation(legacy, "PLC", "C:\\Projects\\C").matches).toHaveLength(0);
+  });
+
+  it("returns no matches for a station that only exists in another project", () => {
+    const lookup = findLarsInstancesForStation(instances, "PLC", "C:\\Projects\\C");
+    expect(lookup.matches).toHaveLength(0);
+    expect(lookup.foreign.map((i) => i.name).sort()).toEqual(["A_PLC", "B_PLC"]);
+  });
+
+  it("treats trailing separators and mixed case as the same project", () => {
+    expect(instanceBelongsToProject(instances.A_PLC!, "C:\\Projects\\A\\")).toBe(true);
+    expect(instanceBelongsToProject(instances.A_PLC!, "c:/PROJECTS/a")).toBe(true);
+    expect(instanceBelongsToProject(instances.A_PLC!, "C:\\Projects")).toBe(false);
+    expect(instanceBelongsToProject(instances.A_PLC!, null)).toBe(false);
+  });
 });
 
 describe("pointStationAtLars", () => {
@@ -427,5 +505,17 @@ describe("mapStationsToLars", () => {
     const changed = mapStationsToLars(stations as any, {});
     expect(changed).toHaveLength(0);
     expect((stations[0] as any).ip).toBe("10.195.0.10");
+  });
+
+  it("ignores running instances from other projects when a project scope is given", () => {
+    const scoped: Record<string, LarsInstanceInfo> = {
+      A_PLC: { name: "A_PLC", onlinePort: 1964, stationId: 10, projectDir: "C:\\Projects\\A" },
+      B_PLC: { name: "B_PLC", onlinePort: 1974, stationId: 10, projectDir: "C:\\Projects\\B" },
+    };
+    const stations = [{ station: 10, ip: "10.195.0.10", conType: "TCP" }];
+    const changed = mapStationsToLars(stations as any, scoped, () => true, "C:\\Projects\\A");
+    expect(changed).toHaveLength(1);
+    expect(changed[0]!.to).toBe("127.0.0.1:1964");
+    expect((stations[0] as any).port).toBe(1964);
   });
 });

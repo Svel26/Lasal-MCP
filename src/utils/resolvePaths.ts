@@ -20,6 +20,11 @@ export function resolveLcpPath(lcpPath?: string): { path: string } | { error: st
   const found = findLcpFiles(state.currentProject);
   if (found.length === 0) return { error: `No .lcp files found in ${state.currentProject}` };
   if (found.length === 1) return { path: found[0]! };
+  // CLASS 2 operations target the PLC. When several stations exist and exactly
+  // one is under a `PLC` station folder, prefer it so callers do not have to
+  // pass lcp_path for the common case (HMI tools still pass lvp_path).
+  const plcStations = found.filter((f) => /[\\/]stations[\\/]plc[\\/]/i.test(f));
+  if (plcStations.length === 1) return { path: plcStations[0]! };
   return {
     error: `Multiple .lcp stations found — specify lcp_path:\n` + found.map((f) => `  ${f}`).join("\n"),
   };

@@ -255,6 +255,50 @@ export interface LarsGcOptions {
   dataDirs?: string[];
   larsGc?: Record<string, LarsGcEntry>;
   instances?: Record<string, LarsInstanceInfo>;
+  /** Project directories whose workspaces must never be auto-collected (e.g. the selected project). */
+  protectProjects?: string[];
+}
+
+/** Normalize a directory path for comparison: separators unified, trailing slashes dropped, case-insensitive. */
+export function normalizeProjectDir(p: string): string {
+  return p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+}
+
+/**
+ * True when a LARS instance belongs to `projectDir`. Uses the recorded projectDir and falls
+ * back to the .lcp/.lss paths for legacy bookkeeping written before projectDir was stored.
+ */
+export function instanceBelongsToProject(inst: LarsInstanceInfo, projectDir: string | null | undefined): boolean {
+  if (!projectDir) return false;
+  const target = normalizeProjectDir(projectDir);
+  if (!target) return false;
+  if (inst.projectDir && normalizeProjectDir(inst.projectDir) === target) return true;
+  for (const p of [inst.lcpPath, inst.stationLssPath]) {
+    if (p && normalizeProjectDir(p).startsWith(`${target}\\`)) return true;
+  }
+  return false;
+}
+
+export interface StationInstanceLookup {
+  /** Instances matching the station name inside the requested project (all matches when no project is known). */
+  matches: LarsInstanceInfo[];
+  /** Instances with the same station name that belong to a different project. */
+  foreign: LarsInstanceInfo[];
+}
+
+/**
+ * Find LARS instances for a station name, scoped to `projectDir` when one is known.
+ * Never silently falls back to another project's workspace: those land in `foreign`.
+ */
+export function findLarsInstancesForStation(
+  instances: Record<string, LarsInstanceInfo> | undefined,
+  station: string,
+  projectDir?: string | null,
+): StationInstanceLookup {
+  const all = Object.values(instances ?? {}).filter((i) => i.stationName === station);
+  if (!projectDir) return { matches: all, foreign: [] };
+  const matches = all.filter((i) => instanceBelongsToProject(i, projectDir));
+  return { matches, foreign: all.filter((i) => !instanceBelongsToProject(i, projectDir)) };
 }
 
 function stationTargetsLars(value: string | undefined, onlinePort: number): boolean {
@@ -335,6 +379,7 @@ export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
   const kept: LarsGcResult["kept"] = [];
   const candidates: LarsGcResult["candidates"] = [];
   const stationsJsonFiles = findStationsJsonFiles(opts.dataDirs ?? []);
+  const protectProjects = opts.protectProjects ?? [];
 
   for (const ws of workspaces) {
     const inst = instances[ws.name];
@@ -343,6 +388,8 @@ export function gcLarsWorkspaces(opts: LarsGcOptions = {}): LarsGcResult {
       reason = "manual (no instance bookkeeping) — kept";
     } else if (isRunning(ws.name)) {
       reason = "running";
+    } else if (protectProjects.some((p) => instanceBelongsToProject(inst, p))) {
+      reason = "selected project — kept";
     } else {
       const lssPoints = inst.stationLssPath
         ? (() => {
@@ -513,11 +560,14 @@ export function mapStationsToLars(
   stations: Array<DataServiceStation>,
   larsInstances: Record<string, LarsInstanceInfo>,
   isRunning: (name: string) => boolean = (name) => getLarsPids(name).length > 0,
+  projectDir?: string | null,
 ): LarsStationMapping[] {
   const runningByName = new Map<string, LarsInstanceInfo>();
   const runningById = new Map<number, LarsInstanceInfo>();
   for (const inst of Object.values(larsInstances)) {
     if (!isRunning(inst.name)) continue;
+    // Never map a published stations.json onto another project's LARS workspace.
+    if (projectDir && !instanceBelongsToProject(inst, projectDir)) continue;
     if (inst.stationName) runningByName.set(inst.stationName, inst);
     if (inst.stationId !== undefined) runningById.set(inst.stationId, inst);
   }

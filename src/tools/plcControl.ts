@@ -7,7 +7,7 @@ import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { parseLcn } from "../utils/lasalXml.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { TIMEOUTS } from "../utils/config.js";
-import { preflightPlc, resolveConnection, isLoopbackTarget } from "../utils/preflight.js";
+import { preflightPlc, resolveConnection, shouldAddLoader } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 import { batchResultToResponse } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
@@ -83,8 +83,10 @@ export const buildProjectSchema = {
   add_loader_anyway: z
     .boolean()
     .optional()
-    .default(false)
-    .describe("Force loader download even if the target OS already has a compatible loader (download only)."),
+    .describe(
+      "Force loader download even if the target OS already has a compatible loader (download only). " +
+        "Default: auto — the loader is sent for local LARS/loopback targets, skipped otherwise. Set false to disable, true to force.",
+    ),
   timeout_s: z
     .number()
     .int()
@@ -122,7 +124,7 @@ export async function buildProjectHandler(args: {
     const connectionUsed = connectionInfo.connection;
     // LARS (local runtime) instances need the PC loader sent along or the
     // download ends in "Linker_Error" on the target.
-    const addLoaderAnyway = args.add_loader_anyway ?? isLoopbackTarget(connectionInfo);
+    const addLoaderAnyway = shouldAddLoader(args.add_loader_anyway, connectionInfo);
 
     // Preflight PLC target
     const pf = await preflightPlc(resolved.path, args.connection);

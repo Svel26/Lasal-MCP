@@ -183,7 +183,7 @@ export async function startHmiRuntime(args: {
         const list = Array.isArray(stations.stations) ? stations.stations : null;
         if (list) {
           const { mapStationsToLars } = await import("../utils/lars.js");
-          const mapping = mapStationsToLars(list, state.larsInstances ?? {});
+          const mapping = mapStationsToLars(list, state.larsInstances ?? {}, undefined, state.currentProject);
           if (mapping.length > 0) {
             writeFileSync(stationsJsonPath, JSON.stringify(stations, null, 2), "utf-8");
             warnings.push(
