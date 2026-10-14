@@ -11,7 +11,7 @@ import {
   type CreateClassOptions,
 } from "../utils/lcpManifest.js";
 import { respond, fail } from "../utils/respond.js";
-import { createProgressReporter } from "../utils/mcpProgress.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 
 // ─── Batch operation schemas (all require CLASS 2 engine) ────────────────────
 
@@ -482,7 +482,7 @@ export async function applyProjectChangesHandler(
     operations: unknown[];
     dry_run?: boolean;
   },
-  extra?: any,
+  extra?: McpExtra,
 ) {
   const reporter = createProgressReporter(extra, "lasal.apply_project_changes");
   return withEngineLock(async () => {

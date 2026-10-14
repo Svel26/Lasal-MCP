@@ -59,14 +59,16 @@ export function parseLss(lssPath: string): StationInfo {
   const lvpPaths: string[] = [];
 
   const projects = stn.SlnProjects ?? {};
-  for (const cp of (projects.SlnClassProject ?? []) as any[]) {
-    if (cp["@_File"]) {
+  const classProjects = (projects.SlnClassProject ?? []) as Array<Record<string, unknown>>;
+  for (const cp of classProjects) {
+    if (typeof cp["@_File"] === "string") {
       const abs = resolve(lssDir, cp["@_File"].replace(/\\/g, "/"));
       if (existsSync(abs)) lcpPaths.push(abs);
     }
   }
-  for (const vp of (projects.SlnVISUDesignerProject ?? []) as any[]) {
-    if (vp["@_File"]) {
+  const visuProjects = (projects.SlnVISUDesignerProject ?? []) as Array<Record<string, unknown>>;
+  for (const vp of visuProjects) {
+    if (typeof vp["@_File"] === "string") {
       const abs = resolve(lssDir, vp["@_File"].replace(/\\/g, "/"));
       if (existsSync(abs)) lvpPaths.push(abs);
     }

@@ -19,9 +19,21 @@ export function cleanJson(content: string): string {
   return content;
 }
 
+export interface ControlProperty {
+  name: string;
+  propertyType?: string;
+  [key: string]: unknown;
+}
+
+export interface ControlManifest {
+  baseComponent?: string;
+  properties?: ControlProperty[];
+  [key: string]: unknown;
+}
+
 // Load control manifest, merging inherited properties
-const manifestCache: Record<string, any> = {};
-export function loadControlManifest(projectDir: string, controlId: string): any {
+const manifestCache: Record<string, ControlManifest | null> = {};
+export function loadControlManifest(projectDir: string, controlId: string): ControlManifest | null {
   if (manifestCache[controlId]) return manifestCache[controlId];
 
   const userPath = join(
@@ -45,7 +57,7 @@ export function loadControlManifest(projectDir: string, controlId: string): any 
     `${controlId}.json`,
   );
 
-  let manifest: any = null;
+  let manifest: ControlManifest | null = null;
   if (existsSync(userPath)) {
     manifest = JSON.parse(cleanJson(readFileSync(userPath, "utf-8")));
   } else if (existsSync(sigmatekPath)) {
@@ -60,7 +72,7 @@ export function loadControlManifest(projectDir: string, controlId: string): any 
     if (parent && parent.properties) {
       const mergedProps = [...(parent.properties || [])];
       for (const prop of manifest.properties || []) {
-        const idx = mergedProps.findIndex((p: any) => p.name === prop.name);
+        const idx = mergedProps.findIndex((p) => p.name === prop.name);
         if (idx >= 0) mergedProps[idx] = prop;
         else mergedProps.push(prop);
       }
@@ -97,10 +109,10 @@ export function resolveFunctionBlockRef(projectDir: string, fbName: string): str
 export function encodeProperty(
   projectDir: string,
   propName: string,
-  manifestProp: any,
+  manifestProp: ControlProperty | null | undefined,
   sourceType: string,
-  value: any,
-): { name: string; value: any; typeId: number; propTypeId: number; refId?: string; targetName?: string } {
+  value: unknown,
+): { name: string; value: unknown; typeId: number; propTypeId: number; refId?: string; targetName?: string } {
   const propType = manifestProp ? manifestProp.propertyType || "none" : "none";
   let typeId = 0;
   let propTypeId = 2;
@@ -205,7 +217,14 @@ export function encodeProperty(
       propTypeId = 2;
   }
 
-  const result: any = {
+  const result: {
+    name: string;
+    value: unknown;
+    typeId: number;
+    propTypeId: number;
+    refId?: string;
+    targetName?: string;
+  } = {
     name: propName,
     value,
     typeId,

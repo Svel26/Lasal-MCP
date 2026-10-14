@@ -52,8 +52,9 @@ export async function runClass2ScriptHandler(args: { script_body: string; args?:
   try {
     validateMbcsEncodable(args.script_body);
     for (const a of argv) validateMbcsEncodable(a);
-  } catch (e: any) {
-    return fail(`Script is not mbcs/latin1 encodable: ${e.message}`, [
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return fail(`Script is not mbcs/latin1 encodable: ${msg}`, [
       "Escape-hatch scripts must be latin1-compatible (no characters above U+00FF).",
     ]);
   }

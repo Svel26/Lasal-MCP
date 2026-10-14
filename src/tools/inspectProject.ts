@@ -49,9 +49,10 @@ export async function inspectProjectHandler(args: {
   let lcpInfo: LcpInfo;
   try {
     lcpInfo = parseLcp(resolved.path);
-  } catch (e: any) {
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     return {
-      content: [{ type: "text" as const, text: `Failed to parse .lcp: ${e.message}` }],
+      content: [{ type: "text" as const, text: `Failed to parse .lcp: ${msg}` }],
       isError: true,
     };
   }
@@ -75,8 +76,9 @@ export async function inspectProjectHandler(args: {
       if (filterNames && !filterNames.has(info.name)) continue;
       const hPath = cf.absPath.replace(/\.st$/, ".h");
       parsedClasses.push({ ...info, stPath: cf.absPath, hPath });
-    } catch (e: any) {
-      classErrors.push(`${cf.relativePath}: ${e.message}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      classErrors.push(`${cf.relativePath}: ${msg}`);
     }
   }
 
@@ -123,8 +125,9 @@ export async function inspectProjectHandler(args: {
           servers: info.servers.length,
           clients: info.clients.length,
         });
-      } catch (e: any) {
-        classErrors.push(`${cf.relativePath}: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        classErrors.push(`${cf.relativePath}: ${msg}`);
       }
     }
     classesOutput = allClasses;
@@ -150,8 +153,9 @@ export async function inspectProjectHandler(args: {
       if (!existsSync(nf.absPath)) continue;
       try {
         networks.push(parseLcn(nf.absPath));
-      } catch (e: any) {
-        networkErrors.push(`${nf.relativePath}: ${e.message}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        networkErrors.push(`${nf.relativePath}: ${msg}`);
       }
     }
     result.networks = networks.map((n) => ({

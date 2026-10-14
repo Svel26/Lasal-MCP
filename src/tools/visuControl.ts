@@ -6,7 +6,7 @@ import { preflightHmi } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
 
 function visuResultToResponse(r: Awaited<ReturnType<typeof runVisuOps>>, extra?: Record<string, unknown>) {
-  const body: Record<string, unknown> = {
+  const body: { ok: boolean; hints?: string[]; [k: string]: unknown } = {
     ok: r.ok,
     durationMs: r.durationMs,
     ...(r.errors.length ? { errors: r.errors } : {}),
@@ -15,7 +15,7 @@ function visuResultToResponse(r: Awaited<ReturnType<typeof runVisuOps>>, extra?:
     ...(r.hints?.length ? { hints: r.hints } : {}),
     ...extra,
   };
-  return respond(body as any);
+  return respond(body);
 }
 
 // ── Operation schemas ─────────────────────────────────────────────────────────

@@ -28,8 +28,9 @@ function resolveStPath(lcpPath: string, className: string): { stPath: string } |
   let lcpInfo;
   try {
     lcpInfo = parseLcp(lcpPath);
-  } catch (e: any) {
-    return { error: `Failed to parse .lcp: ${e.message}` };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { error: `Failed to parse .lcp: ${msg}` };
   }
 
   for (const cf of lcpInfo.classFiles) {
@@ -90,7 +91,7 @@ export async function classSourceHandler(args: {
   const { stPath } = found;
 
   if (args.action === "read") {
-    const result: any = {
+    const result: { ok: boolean; [key: string]: unknown } = {
       ok: true,
       className: args.class_name,
       stPath,
@@ -138,12 +139,13 @@ export async function classSourceHandler(args: {
     }
   }
 
-  const result = { ok: true, className: args.class_name, stPath } as any;
+  const result: { ok: boolean; [key: string]: unknown } = { ok: true, className: args.class_name, stPath };
   try {
     writeFileSync(stPath, args.source, "latin1");
     result.stWritten = true;
-  } catch (e: any) {
-    return fail(`Failed to write .st file: ${e.message}`, []);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return fail(`Failed to write .st file: ${msg}`, []);
   }
 
   if (args.header_source !== undefined) {
@@ -152,8 +154,9 @@ export async function classSourceHandler(args: {
       writeFileSync(hPath, args.header_source, "latin1");
       result.hPath = hPath;
       result.hWritten = true;
-    } catch (e: any) {
-      result.hError = `Failed to write .h file: ${e.message}`;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      result.hError = `Failed to write .h file: ${msg}`;
     }
   }
 

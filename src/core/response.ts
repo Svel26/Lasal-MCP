@@ -11,6 +11,7 @@ export interface StepResult {
   logPath?: string;
   hints?: string[];
   timedOut?: boolean;
+  [key: string]: unknown;
 }
 
 export function batchToStepResult(br: BatchResult): StepResult {

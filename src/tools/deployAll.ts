@@ -13,7 +13,7 @@ import { respond, fail } from "../utils/respond.js";
 import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
-import { createProgressReporter } from "../utils/mcpProgress.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 
 export const deployAllSchema = {
   lcp_path: z.string().optional().describe("Absolute path to the .lcp file. Omit to use the selected project."),
@@ -107,7 +107,7 @@ export async function deployAllHandler(
     start_hmi_runtime?: boolean;
     timeout_s?: number;
   },
-  extra?: any,
+  extra?: McpExtra,
 ) {
   const reporter = createProgressReporter(extra, "lasal.deploy");
   return withEngineLock(async () => {
@@ -185,7 +185,7 @@ export async function deployAllHandler(
     }
 
     function failResponse(msg?: string, hints: string[] = []) {
-      const body: Record<string, unknown> = {
+      const body: { ok: boolean; hints?: string[]; [k: string]: unknown } = {
         ok: false,
         steps,
         connections: {
@@ -195,7 +195,7 @@ export async function deployAllHandler(
         hints,
       };
       if (msg) body.error = msg;
-      return respond(body as any);
+      return respond(body);
     }
 
     // Step 1: compile
@@ -287,7 +287,7 @@ export async function deployAllHandler(
       steps.verify_plc = {
         ...batchToStepResult(br),
         plcState: stateData,
-      } as any;
+      };
 
       if (!br.ok) return failResponse("PLC verification step failed.", br.hints ?? []);
     }
@@ -338,7 +338,7 @@ export async function deployAllHandler(
       steps.start_plc = {
         ...batchToStepResult(br),
         postStartState: stateData,
-      } as any;
+      };
 
       if (!br.ok) return failResponse("PLC start step failed.", br.hints ?? []);
     }

@@ -73,12 +73,14 @@ export function parseLcp(lcpPath: string): LcpInfo {
   }
 
   const classFiles: LcpClassEntry[] = [];
-  for (const f of (proj.ClassFiles?.File ?? []) as any[]) {
+  const rawClassFiles = (proj.ClassFiles?.File ?? []) as Array<Record<string, string>>;
+  for (const f of rawClassFiles) {
     if (f?.["@_Path"]) classFiles.push({ relativePath: f["@_Path"], absPath: abs(f["@_Path"]) });
   }
 
   const networkFiles: LcpNetworkEntry[] = [];
-  for (const f of (proj.NetworkFiles?.File ?? []) as any[]) {
+  const rawNetworkFiles = (proj.NetworkFiles?.File ?? []) as Array<Record<string, string>>;
+  for (const f of rawNetworkFiles) {
     if (f?.["@_Path"]) networkFiles.push({ relativePath: f["@_Path"], absPath: abs(f["@_Path"]) });
   }
 
@@ -253,46 +255,61 @@ function toArray<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
-function collectObjects(components: any[]): LcnObject[] {
+function collectObjects(components: Record<string, unknown> | Array<Record<string, unknown>> | undefined): LcnObject[] {
   const result: LcnObject[] = [];
   for (const obj of toArray(components)) {
-    const channels = obj.Channels;
+    const channels = obj.Channels as Record<string, unknown> | undefined;
     const channelValues: Record<string, string> = {};
-    for (const sv of toArray(channels?.Server)) {
-      if (sv["@_Value"]) channelValues[sv["@_Name"]] = sv["@_Value"];
+    for (const sv of toArray(channels?.Server as Record<string, string> | Array<Record<string, string>> | undefined)) {
+      if (sv?.["@_Value"] && sv?.["@_Name"]) channelValues[sv["@_Name"]] = sv["@_Value"];
     }
-    for (const cl of toArray(channels?.Client)) {
-      if (cl["@_Value"]) channelValues[cl["@_Name"]] = cl["@_Value"];
+    for (const cl of toArray(channels?.Client as Record<string, string> | Array<Record<string, string>> | undefined)) {
+      if (cl?.["@_Value"] && cl?.["@_Name"]) channelValues[cl["@_Name"]] = cl["@_Value"];
     }
     result.push({
-      name: obj["@_Name"] ?? "",
-      guid: obj["@_GUID"],
-      className: obj["@_Class"] ?? "",
-      position: obj["@_Position"],
+      name: String(obj["@_Name"] ?? ""),
+      guid: obj["@_GUID"] as string | undefined,
+      className: String(obj["@_Class"] ?? ""),
+      position: obj["@_Position"] as string | undefined,
       channelValues,
     });
     // recurse into sub-networks (Network may be array or single)
-    for (const subNet of toArray(obj.Networks?.Network)) {
-      result.push(...collectObjects(toArray(subNet.Components?.Object)));
+    const networks = obj.Networks as Record<string, unknown> | undefined;
+    for (const subNet of toArray(
+      networks?.Network as Record<string, unknown> | Array<Record<string, unknown>> | undefined,
+    )) {
+      const comps = subNet?.Components as Record<string, unknown> | undefined;
+      result.push(
+        ...collectObjects(comps?.Object as Record<string, unknown> | Array<Record<string, unknown>> | undefined),
+      );
     }
   }
   return result;
 }
 
-function collectConnections(network: any): LcnConnection[] {
+function collectConnections(network: Record<string, unknown>): LcnConnection[] {
   const result: LcnConnection[] = [];
-  for (const conn of toArray(network.Connections?.Connection)) {
+  const connections = network.Connections as Record<string, unknown> | undefined;
+  for (const conn of toArray(
+    connections?.Connection as Record<string, string> | Array<Record<string, string>> | undefined,
+  )) {
     result.push({
-      source: conn["@_Source"] ?? "",
-      destination: conn["@_Destination"] ?? "",
-      remote: !!conn["@_Station"],
-      station: conn["@_Station"],
+      source: conn?.["@_Source"] ?? "",
+      destination: conn?.["@_Destination"] ?? "",
+      remote: !!conn?.["@_Station"],
+      station: conn?.["@_Station"],
     });
   }
   // recurse into sub-networks inside objects
-  for (const obj of toArray(network.Components?.Object)) {
-    for (const subNet of toArray(obj.Networks?.Network)) {
-      result.push(...collectConnections(subNet));
+  const comps = network.Components as Record<string, unknown> | undefined;
+  for (const obj of toArray(comps?.Object as Record<string, unknown> | Array<Record<string, unknown>> | undefined)) {
+    const networks = obj?.Networks as Record<string, unknown> | undefined;
+    for (const subNet of toArray(
+      networks?.Network as Record<string, unknown> | Array<Record<string, unknown>> | undefined,
+    )) {
+      if (subNet) {
+        result.push(...collectConnections(subNet));
+      }
     }
   }
   return result;

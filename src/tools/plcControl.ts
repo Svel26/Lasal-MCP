@@ -12,7 +12,7 @@ import { respond, fail } from "../utils/respond.js";
 import { batchResultToResponse } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
-import { createProgressReporter } from "../utils/mcpProgress.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 
 // Recursively find all project files
 function getProjectFiles(dir: string, files: string[] = []): string[] {
@@ -104,7 +104,7 @@ export async function buildProjectHandler(
     add_loader_anyway?: boolean;
     timeout_s?: number;
   },
-  extra?: any,
+  extra?: McpExtra,
 ) {
   const reporter = createProgressReporter(extra, "lasal.build");
   return withEngineLock(async () => {
@@ -570,24 +570,24 @@ export async function plcValuesHandler(args: {
       rawContent = readFileSync(resultPath, "utf-8");
       try {
         plcData = JSON.parse(rawContent);
-      } catch (e: any) {
-        parseError = e.message;
+      } catch (e) {
+        parseError = e instanceof Error ? e.message : String(e);
       }
     }
 
     // Aggregate channel-level success
     let overallChannelsOk = true;
     const failedChannels: string[] = [];
-    if (args.action === "read" && plcData.channels) {
-      for (const [name, chInfo] of Object.entries(plcData.channels)) {
-        if (!(chInfo as any).ok) {
+    if (args.action === "read" && plcData.channels && typeof plcData.channels === "object") {
+      for (const [name, chInfo] of Object.entries(plcData.channels as Record<string, unknown>)) {
+        if (!(chInfo as { ok?: unknown } | null | undefined)?.ok) {
           overallChannelsOk = false;
           failedChannels.push(name);
         }
       }
-    } else if (args.action === "write" && plcData.writes) {
-      for (const [name, chInfo] of Object.entries(plcData.writes)) {
-        if (!(chInfo as any).ok) {
+    } else if (args.action === "write" && plcData.writes && typeof plcData.writes === "object") {
+      for (const [name, chInfo] of Object.entries(plcData.writes as Record<string, unknown>)) {
+        if (!(chInfo as { ok?: unknown } | null | undefined)?.ok) {
           overallChannelsOk = false;
           failedChannels.push(name);
         }
@@ -600,7 +600,7 @@ export async function plcValuesHandler(args: {
       hints.push("Some channels failed. Verify the channel casing and spelling using inspect_project.");
     }
 
-    const body: Record<string, unknown> = {
+    const body: { ok: boolean; hints?: string[]; [k: string]: unknown } = {
       ok,
       durationMs: br.durationMs,
       ...plcData,
@@ -613,6 +613,6 @@ export async function plcValuesHandler(args: {
       hints,
       ...(failedChannels.length ? { failedChannels } : {}),
     };
-    return respond(body as any);
+    return respond(body);
   });
 }
