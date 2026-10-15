@@ -130,7 +130,7 @@ server.tool(
 
 server.tool(
   "build_project",
-  "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first. Supports async: true (returns a jobId for check_job_status).",
+  "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first. Supports async: true — the call then returns immediately with a jobId and you MUST poll check_job_status until it reports status completed/failed (the result is delivered there).",
   buildProjectSchema,
   { openWorldHint: true },
   buildProjectHandler,
@@ -219,7 +219,7 @@ server.tool(
     "merge/fuse projects, export_xml/import_xml text round-trips, import_variables (CLASS 2 references), " +
     "textlist_* translations, server_get_property/server_set_property (limits, unit, menu, state schema, hostname, …), " +
     "bulk update_buttons/update_softkeys theming, settings_set (resolution/compiler/online), image_insert. " +
-    "The .lpr itself is binary — never edit it directly; use this tool or the editor. Supports async: true (returns a jobId for check_job_status).",
+    "The .lpr itself is binary — never edit it directly; use this tool or the editor. Supports async: true — the call then returns immediately with a jobId and you MUST poll check_job_status until it reports status completed/failed (the result is delivered there).",
   lseProjectSchema,
   { destructiveHint: true, openWorldHint: true },
   lseProjectHandler,
@@ -229,7 +229,7 @@ server.tool(
 
 server.tool(
   "deploy_all",
-  "Full deploy pipeline: compile → download PLC → start PLC → verify state → compile LASAL SCREEN (.lpr, when present) → optional SCREEN download → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags. Supports async: true (returns a jobId for check_job_status).",
+  "Full deploy pipeline: compile → download PLC → start PLC → verify state → compile LASAL SCREEN (.lpr, when present) → optional SCREEN download → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags. Supports async: true — the call then returns immediately with a jobId and you MUST poll check_job_status until it reports status completed/failed (the result is delivered there).",
   deployAllSchema,
   { openWorldHint: true },
   deployAllHandler,
@@ -238,7 +238,8 @@ server.tool(
 server.tool(
   "deploy_solution",
   "Multi-station deploy via MachineManager: generates a .lutc update file from the solution (class2/screen/visu downloads, OS updates, file transfers, run/boot, channel writes, CLI commands) and executes it with MachineManager.exe /update. " +
-    "This is the official flow for pushing LASAL SCREEN projects together with CLASS 2 to the same panel. Use dry_run to review the generated .lutc first. Supports async: true; the newest MachineManager per-run log is returned with the result.",
+    "This is the official flow for pushing LASAL SCREEN projects together with CLASS 2 to the same panel. Use dry_run to review the generated .lutc first. The newest MachineManager per-run log is returned with the result. " +
+    "Supports async: true — the call then returns immediately with a jobId and you MUST poll check_job_status until it reports status completed/failed (the result is delivered there).",
   deploySolutionSchema,
   { destructiveHint: true, openWorldHint: true },
   deploySolutionHandler,
