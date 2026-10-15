@@ -135,7 +135,11 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
 // exists yet.
 
 function unescapeXml(s: string): string {
-  return s.replace(/&quot;/g, '"').replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
 }
 
 /** Replace the text of an element, preserving its attributes. No-op when the element is absent. */

@@ -629,10 +629,8 @@ export async function larsRuntimeHandler(args: {
     if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
 
     const owned = runningInstancePorts(state.larsInstances, workspace.name);
-    const effectivePort = await resolveEffectiveOnlinePort(
-      [workspace.onlinePort, DEFAULT_ONLINE_PORT],
-      owned,
-      (p) => isLarsHealthy(p),
+    const effectivePort = await resolveEffectiveOnlinePort([workspace.onlinePort, DEFAULT_ONLINE_PORT], owned, (p) =>
+      isLarsHealthy(p),
     );
     const healthy = effectivePort !== null;
 
@@ -788,8 +786,12 @@ export async function larsRuntimeHandler(args: {
       if (port === undefined) {
         const owned = runningInstancePorts(state.larsInstances, workspace.name);
         port =
-          (await resolveEffectiveOnlinePort([workspace.onlinePort, DEFAULT_ONLINE_PORT], owned, (p) => isLarsHealthy(p), 10_000)) ??
-          undefined;
+          (await resolveEffectiveOnlinePort(
+            [workspace.onlinePort, DEFAULT_ONLINE_PORT],
+            owned,
+            (p) => isLarsHealthy(p),
+            10_000,
+          )) ?? undefined;
         if (port !== undefined) inst.effectiveOnlinePort = port;
       }
       const running = getLarsPids(workspace.name).length > 0;
