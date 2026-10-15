@@ -9,6 +9,8 @@ import { getLseRegistration } from "../utils/engine.js";
 import { respond, fail, type ToolResponse } from "../utils/respond.js";
 import { readState } from "../state.js";
 import { TIMEOUTS } from "../utils/config.js";
+import { startJob } from "../core/jobs.js";
+import { existsSync } from "fs";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -170,6 +172,21 @@ const OperationSchema = z.discriminatedUnion("type", [
     file: z.string().describe("Image file path to add (BMP)"),
     transparent_rgb: z.number().int().optional().describe("Transparent color as RGB integer (e.g. 16777215)"),
   }),
+  z.object({
+    type: z.literal("server_get_property"),
+    server: z.string().describe("Server name as listed by 'info' (e.g. '@STD_MerkerMainScreen' or 'Motor1.s_Speed')"),
+    property: z
+      .union([z.string(), z.number().int()])
+      .describe(
+        "LSServerProperty name or number: stationnumber, permanent, refreshtime, unit, lowerlimit, upperlimit, menu, stateschema, hostname, link1type, … (full list in docs/LSE_AUTOMATION_REFERENCE.md)",
+      ),
+  }),
+  z.object({
+    type: z.literal("server_set_property"),
+    server: z.string().describe("Server name as listed by 'info'"),
+    property: z.union([z.string(), z.number().int()]).describe("LSServerProperty name or number"),
+    value: z.union([z.string(), z.number(), z.boolean()]).describe("New value"),
+  }),
 ]);
 
 type Operation = z.infer<typeof OperationSchema>;
@@ -241,6 +258,10 @@ function toLseOp(op: Operation): LseOp {
       return { type: "settings_set", settings: op.settings };
     case "image_insert":
       return { type: "image_insert", file: op.file, transparent_rgb: op.transparent_rgb };
+    case "server_get_property":
+      return { type: "server_get_property", server: op.server, property: op.property };
+    case "server_set_property":
+      return { type: "server_set_property", server: op.server, property: op.property, value: op.value };
   }
 }
 
@@ -248,12 +269,13 @@ function toLseOp(op: Operation): LseOp {
 
 export const lseProjectSchema = {
   action: z
-    .enum(["info", "compile", "download", "apply_changes"])
+    .enum(["info", "compile", "download", "apply_changes", "create"])
     .describe(
       "'info' inventories the project (screens, windows, servers, text lists, languages, settings) read-only. " +
         "'compile' rebuilds the Runtime output folder. " +
         "'download' pushes the project to the panel (F6-equivalent) via the project's online settings. " +
-        "'apply_changes' loads the project, runs the operations list, saves, and closes.",
+        "'apply_changes' loads the project, runs the operations list, saves, and closes. " +
+        "'create' generates a NEW empty .lpr project at lpr_path (screens can then be laid out in the editor; text lists/data can be prepared via operations).",
     ),
   lpr_path: z
     .string()
@@ -266,7 +288,8 @@ export const lseProjectSchema = {
       "Ordered operations for action 'apply_changes'. Each has a 'type' field: " +
         "compile | merge | fuse | export_xml | import_xml | export | import_variables | import_scl | " +
         "textlist_import_file | textlist_import | textlist_create | textlist_add_text | textlist_set_text | textlist_get_texts | " +
-        "add_language | clear_languages | set_actual_language | update_buttons | update_softkeys | settings_set | image_insert",
+        "add_language | clear_languages | set_actual_language | update_buttons | update_softkeys | settings_set | image_insert | " +
+        "server_get_property | server_set_property",
     ),
   connection: z
     .string()
@@ -285,144 +308,207 @@ export const lseProjectSchema = {
     .default(true)
     .describe("With action 'apply_changes': save the project after the operations (set false for read-only exports)."),
   timeout_s: z.number().int().optional().describe("Timeout override in seconds."),
+  async: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Run in the background: returns { status: 'pending', jobId } — poll with check_job_status. Default false.",
+    ),
 };
 
 export async function lseProjectHandler(args: {
-  action: "info" | "compile" | "download" | "apply_changes";
+  action: "info" | "compile" | "download" | "apply_changes" | "create";
   lpr_path?: string;
   operations?: unknown[];
   connection?: string;
   run?: boolean;
   save?: boolean;
   timeout_s?: number;
+  async?: boolean;
 }): Promise<ToolResponse> {
-  return withEngineLock(async () => {
-    const registration = getLseRegistration();
-    if (!registration.registered) {
-      return fail(
-        "The LASAL Screen automation server (LASALScreen.Application) is not registered — the lse_project tool cannot drive the engine.",
-        [
-          "Open LASAL Screen (LSE_modeless.exe) once and use its registration dialog to register the automation components, then retry.",
-          "If the LASAL Screen editor is not installed, install it from the Sigmatek LASAL setup.",
-        ],
-      );
-    }
-
-    const resolved = resolveLprPath(args.lpr_path);
-    if ("error" in resolved) {
-      return fail(resolved.error, ["Call select_project first or pass lpr_path explicitly."]);
-    }
-    const lprPath = resolved.path;
-    const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.lse;
-
-    // ── info ──
-    if (args.action === "info") {
-      const r = await runLseOps(lprPath, [{ type: "info" }], { saveAtEnd: false, timeoutMs });
-      const runtime = lseRuntimeInfo(lprPath);
-      const onlineCfg = findLseOnlineConfig(lprPath);
-      const onlineTarget = onlineCfg ? readLseOnlineConfigTarget(onlineCfg) : null;
-      const owner = resolveStationForLpr(lprPath);
-      return lseResultToResponse(r, {
-        lprPath,
-        station: owner?.station ?? null,
-        onlineConfig: onlineCfg
-          ? { path: onlineCfg, target: "error" in (onlineTarget ?? {}) ? null : onlineTarget }
-          : null,
-        runtime: {
-          dir: runtime.runtimeDir,
-          compiled: runtime.exists,
-          fileCount: runtime.fileCount,
-          lastModifiedMs: runtime.lastModifiedMs || null,
-        },
-      });
-    }
-
-    // ── compile ──
-    if (args.action === "compile") {
-      const r = await runLseOps(lprPath, [{ type: "compile" }], { saveAtEnd: true, timeoutMs });
-      const runtime = lseRuntimeInfo(lprPath);
-      return lseResultToResponse(r, {
-        lprPath,
-        runtime: {
-          dir: runtime.runtimeDir,
-          compiled: runtime.exists,
-          fileCount: runtime.fileCount,
-          lastModifiedMs: runtime.lastModifiedMs || null,
-        },
-      });
-    }
-
-    // ── download ──
-    if (args.action === "download") {
-      const owner = resolveStationForLpr(lprPath);
-      let connection = args.connection;
-      if (!connection && owner?.ip) {
-        connection = `TCPIP:${owner.ip}${owner.port && owner.port !== "1954" ? `:${owner.port}` : ""}`;
+  const run = () =>
+    withEngineLock(async () => {
+      const registration = getLseRegistration();
+      if (!registration.registered) {
+        return fail(
+          "The LASAL Screen automation server (LASALScreen.Application) is not registered — the lse_project tool cannot drive the engine.",
+          [
+            "Open LASAL Screen (LSE_modeless.exe) once and use its registration dialog to register the automation components, then retry.",
+            "If the LASAL Screen editor is not installed, install it from the Sigmatek LASAL setup.",
+          ],
+        );
       }
-      if (!connection) {
-        const onlineCfg = findLseOnlineConfig(lprPath);
-        if (onlineCfg) {
-          const t = readLseOnlineConfigTarget(onlineCfg);
-          if (!("error" in t) && t.ip) {
-            connection = `TCPIP:${t.ip}${t.port && t.port !== "1954" ? `:${t.port}` : ""}`;
+
+      // ── create (fresh project) ──
+      if (args.action === "create") {
+        const target = args.lpr_path;
+        if (!target) {
+          return fail("lpr_path is required for action 'create' (path of the new .lpr project).", [
+            "Example: C:\\Projects\\MyMachine\\Stations\\HMI\\visu.lpr",
+          ]);
+        }
+        if (existsSync(target)) {
+          return fail(`File already exists: ${target}`, ["Delete it first or choose another path."]);
+        }
+        const createTimeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.lse;
+        const createOps: LseOp[] = [];
+        const createErrors: string[] = [];
+        for (let i = 0; i < (args.operations ?? []).length; i++) {
+          const parsed = OperationSchema.safeParse((args.operations ?? [])[i]);
+          if (parsed.success) {
+            try {
+              createOps.push(toLseOp(parsed.data));
+            } catch (e: unknown) {
+              createErrors.push(`Operation[${i}]: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          } else {
+            createErrors.push(`Operation[${i}]: ${parsed.error.message}`);
           }
         }
-      }
-      if (!connection) {
-        return fail("Could not resolve a download target for the screen project.", [
-          "Pass connection ('TCPIP:<ip>'), register the .lpr in a station .lss (SlnScreenProject), or set an online IP in LSEOnlineConfig.xml.",
-        ]);
-      }
-
-      const ip = connection.replace(/^TCPIP:/i, "").split(":")[0] ?? "";
-      const portStr = connection.split(":").pop() ?? "1954";
-      const port = parseInt(portStr, 10) || 1954;
-      const reachable = await pingHost(ip, port, 2000);
-      if (!reachable) {
-        return respond({
-          ok: false,
-          lprPath,
-          connectionUsed: connection,
-          ipUsed: ip,
-          errors: [`Target ${ip}:${port} is unreachable.`],
-          hints: [
-            "Ensure the panel/control is powered and reachable. Verify with lasal_status, or simulate locally with lars_runtime (SCREEN_PRJ_PATH workspaces).",
-          ],
+        if (createErrors.length) {
+          return fail(`Invalid operations:\n${createErrors.join("\n")}`, []);
+        }
+        const r = await runLseOps(target, createOps, { create: true, timeoutMs: createTimeoutMs });
+        const runtime = lseRuntimeInfo(target);
+        return lseResultToResponse(r, {
+          lprPath: target,
+          created: true,
+          runtime: {
+            dir: runtime.runtimeDir,
+            compiled: runtime.exists,
+            fileCount: runtime.fileCount,
+            lastModifiedMs: runtime.lastModifiedMs || null,
+          },
         });
       }
 
-      const r = await runLseOps(lprPath, [{ type: "download", run: args.run ?? true, connection }], {
-        saveAtEnd: false,
-        timeoutMs,
-      });
-      return lseResultToResponse(r, { lprPath, connectionUsed: connection, ipUsed: ip });
-    }
-
-    // ── apply_changes ──
-    const raw = args.operations ?? [];
-    const ops: LseOp[] = [];
-    const errors: string[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      const parsed = OperationSchema.safeParse(raw[i]);
-      if (parsed.success) {
-        try {
-          ops.push(toLseOp(parsed.data));
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          errors.push(`Operation[${i}]: ${msg}`);
-        }
-      } else {
-        errors.push(`Operation[${i}]: ${parsed.error.message}`);
+      const resolved = resolveLprPath(args.lpr_path);
+      if ("error" in resolved) {
+        return fail(resolved.error, ["Call select_project first or pass lpr_path explicitly."]);
       }
-    }
-    if (errors.length) {
-      return fail(`Invalid operations:\n${errors.join("\n")}`, []);
-    }
-    if (ops.length === 0) {
-      return fail("No operations provided for apply_changes.", ["Pass an operations array."]);
-    }
+      const lprPath = resolved.path;
+      const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.lse;
 
-    const r = await runLseOps(lprPath, ops, { saveAtEnd: args.save ?? true, timeoutMs });
-    return lseResultToResponse(r, { lprPath });
-  });
+      // ── info ──
+      if (args.action === "info") {
+        const r = await runLseOps(lprPath, [{ type: "info" }], { saveAtEnd: false, timeoutMs });
+        const runtime = lseRuntimeInfo(lprPath);
+        const onlineCfg = findLseOnlineConfig(lprPath);
+        const onlineTarget = onlineCfg ? readLseOnlineConfigTarget(onlineCfg) : null;
+        const owner = resolveStationForLpr(lprPath);
+        return lseResultToResponse(r, {
+          lprPath,
+          station: owner?.station ?? null,
+          onlineConfig: onlineCfg
+            ? { path: onlineCfg, target: "error" in (onlineTarget ?? {}) ? null : onlineTarget }
+            : null,
+          runtime: {
+            dir: runtime.runtimeDir,
+            compiled: runtime.exists,
+            fileCount: runtime.fileCount,
+            lastModifiedMs: runtime.lastModifiedMs || null,
+          },
+        });
+      }
+
+      // ── compile ──
+      if (args.action === "compile") {
+        const r = await runLseOps(lprPath, [{ type: "compile" }], { saveAtEnd: true, timeoutMs });
+        const runtime = lseRuntimeInfo(lprPath);
+        return lseResultToResponse(r, {
+          lprPath,
+          runtime: {
+            dir: runtime.runtimeDir,
+            compiled: runtime.exists,
+            fileCount: runtime.fileCount,
+            lastModifiedMs: runtime.lastModifiedMs || null,
+          },
+        });
+      }
+
+      // ── download ──
+      if (args.action === "download") {
+        const owner = resolveStationForLpr(lprPath);
+        let connection = args.connection;
+        if (!connection && owner?.ip) {
+          connection = `TCPIP:${owner.ip}${owner.port && owner.port !== "1954" ? `:${owner.port}` : ""}`;
+        }
+        if (!connection) {
+          const onlineCfg = findLseOnlineConfig(lprPath);
+          if (onlineCfg) {
+            const t = readLseOnlineConfigTarget(onlineCfg);
+            if (!("error" in t) && t.ip) {
+              connection = `TCPIP:${t.ip}${t.port && t.port !== "1954" ? `:${t.port}` : ""}`;
+            }
+          }
+        }
+        if (!connection) {
+          return fail("Could not resolve a download target for the screen project.", [
+            "Pass connection ('TCPIP:<ip>'), register the .lpr in a station .lss (SlnScreenProject), or set an online IP in LSEOnlineConfig.xml.",
+          ]);
+        }
+
+        const ip = connection.replace(/^TCPIP:/i, "").split(":")[0] ?? "";
+        const portStr = connection.split(":").pop() ?? "1954";
+        const port = parseInt(portStr, 10) || 1954;
+        const reachable = await pingHost(ip, port, 2000);
+        if (!reachable) {
+          return respond({
+            ok: false,
+            lprPath,
+            connectionUsed: connection,
+            ipUsed: ip,
+            errors: [`Target ${ip}:${port} is unreachable.`],
+            hints: [
+              "Ensure the panel/control is powered and reachable. Verify with lasal_status, or simulate locally with lars_runtime (SCREEN_PRJ_PATH workspaces).",
+            ],
+          });
+        }
+
+        const r = await runLseOps(lprPath, [{ type: "download", run: args.run ?? true, connection }], {
+          saveAtEnd: false,
+          timeoutMs,
+        });
+        return lseResultToResponse(r, { lprPath, connectionUsed: connection, ipUsed: ip });
+      }
+
+      // ── apply_changes ──
+      const raw = args.operations ?? [];
+      const ops: LseOp[] = [];
+      const errors: string[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const parsed = OperationSchema.safeParse(raw[i]);
+        if (parsed.success) {
+          try {
+            ops.push(toLseOp(parsed.data));
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            errors.push(`Operation[${i}]: ${msg}`);
+          }
+        } else {
+          errors.push(`Operation[${i}]: ${parsed.error.message}`);
+        }
+      }
+      if (errors.length) {
+        return fail(`Invalid operations:\n${errors.join("\n")}`, []);
+      }
+      if (ops.length === 0) {
+        return fail("No operations provided for apply_changes.", ["Pass an operations array."]);
+      }
+
+      const r = await runLseOps(lprPath, ops, { saveAtEnd: args.save ?? true, timeoutMs });
+      return lseResultToResponse(r, { lprPath });
+    });
+
+  if (args.async) {
+    const job = startJob("lse_project", run);
+    return respond({
+      ok: true,
+      status: "pending",
+      jobId: job.id,
+      hints: ["Poll check_job_status with this jobId until status is completed/failed."],
+    });
+  }
+  return run();
 }

@@ -48,6 +48,16 @@ export interface BatchOp {
     | "move_network_to_folder"
     | "set_parameter_value"
     | "set_compiler_version"
+    | "copy_class"
+    | "copy_network"
+    | "replace_object"
+    | "add_library"
+    | "import_lcz"
+    | "update_referenced"
+    | "calculate_resources"
+    | "mm_change_connection"
+    | "mm_update_server_list"
+    | "set_project_revision"
     | "save";
   [key: string]: unknown;
 }
@@ -269,6 +279,64 @@ export function buildBatchScript(
         break;
       case "set_compiler_version":
         opLines.push(`batch.SetCompilerVersion(prj, ${emitPy27String(op.version as string)})`);
+        break;
+      case "copy_class":
+      case "copy_network": {
+        const src = op.sourceProject as string;
+        opLines.push(`src_prj = batch.LoadProject(${emitPath(src)})`);
+        if (op.type === "copy_class") {
+          opLines.push(
+            `batch.CopyClass(prj, src_prj, ${emitPy27String(op.className as string)}, ${op.overwrite !== false ? "True" : "False"}, True)`,
+          );
+        } else {
+          opLines.push(
+            `batch.CopyNetwork(prj, src_prj, ${emitPy27String(op.network as string)}, ${op.overwrite !== false ? "True" : "False"}, True)`,
+          );
+        }
+        opLines.push(`batch.CloseProject(src_prj)`);
+        break;
+      }
+      case "replace_object": {
+        const src = op.sourceProject as string;
+        opLines.push(
+          `src_prj = batch.LoadProject(${emitPath(src)})`,
+          `batch.ReplaceObject(prj, src_prj, ${emitPy27String(op.network as string)}, ${emitPy27String(op.objectName as string)}, ${emitPy27String(op.sourceNetwork as string)}, ${emitPy27String(op.sourceObject as string)}, ${op.useSourceConnections ? "True" : "False"}, ${op.checkObjectName !== false ? "True" : "False"})`,
+          `batch.CloseProject(src_prj)`,
+        );
+        break;
+      }
+      case "add_library":
+        opLines.push(`batch.AddLibrary(prj, ${emitPy27String(op.library as string)})`);
+        break;
+      case "import_lcz":
+        opLines.push(
+          `batch.ImportFromFile(prj, ${emitPy27String(op.file as string)}, ${op.overwrite !== false ? "True" : "False"}, True, ${op.keepExistingLinked ? "True" : "False"})`,
+        );
+        break;
+      case "update_referenced":
+        opLines.push(
+          op.scope === "networks" ? `batch.UpdateReferencedNetworks(prj)` : `batch.UpdateReferencedClasses(prj)`,
+        );
+        break;
+      case "calculate_resources":
+        opLines.push(
+          `batch.CalculateResourcesAndExport(prj, ${op.outputPath ? emitPath(op.outputPath as string) : "u\"\".encode('mbcs')"})`,
+        );
+        break;
+      case "mm_change_connection":
+        opLines.push(
+          `batch.MMChangeConnectionOption(prj, ${emitPy27String(op.station as string)}, ${emitPy27String(op.newConnection as string)})`,
+        );
+        break;
+      case "mm_update_server_list":
+        opLines.push(
+          op.file
+            ? `batch.MMUpdateCurrentServerList(prj, ${emitPy27String(op.station as string)}, ${emitPy27String(op.file as string)})`
+            : `batch.MMUpdateCurrentServerList(prj, ${emitPy27String(op.station as string)})`,
+        );
+        break;
+      case "set_project_revision":
+        opLines.push(`batch.SetProjectRevision(prj, ${emitPy27String(op.revision as string)})`);
         break;
       case "save":
         break;

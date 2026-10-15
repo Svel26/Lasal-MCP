@@ -15,8 +15,10 @@ The MCP only exposes tools for operations that **require an external engine or h
 
 ## Features
 
-- **Build & Deploy**: Compile CLASS 2 projects, download to PLC, full deploy pipelines (`build_project`, `deploy_all`).
-- **Multi-Station Deploy**: MachineManager `.lutc` orchestration — CLASS 2, LASAL SCREEN and VISUDesigner downloads, OS updates, file transfer, run/boot, channel writes, CLI commands (`deploy_solution`).
+- **Build & Deploy**: Compile CLASS 2 projects, download to PLC, full deploy pipelines (`build_project`, `deploy_all`), bootdisk/update-stick creation (plain or Update-Tool flavor with Autoexec, LasalOS image, VISU publish folder; `create_class2_bootdisk`).
+- **Multi-Station Deploy**: MachineManager `.lutc` orchestration — CLASS 2, LASAL SCREEN and VISUDesigner downloads, OS updates, file transfer, run/boot, channel writes, CLI commands (`deploy_solution`), with the per-run MachineManager log returned for diagnosis.
+- **Background Jobs**: `build_project`, `deploy_all`, `deploy_solution` and `lse_project` accept `async: true` and return a `jobId` — poll with `check_job_status` (useful for clients with request timeouts).
+- **Headless Hardening**: modal engine dialogs (error boxes, crash reporters, WerFault) are auto-dismissed while script runs execute — their text is captured into the tool result instead of hanging the run until someone clicks OK (`LASAL_MCP_DIALOG_WATCHER=0` disables).
 - **PLC Control**: Start/stop PLC runtime, read/write live channel values, query state (`control_plc`, `plc_values`).
 - **Local Simulation (LARS)**: Run one LASAL program per LARS instance — one workspace per station (PLC + HMI) so both run simultaneously on separate ports. Point stations at the local runtime with a single call, compile/download/start/read values exactly like a real PLC, and browse the HMI via DataService. LARS also renders LASAL SCREEN projects locally, with window screenshots for visual verification. No hardware needed (`lars_runtime`).
 - **CLASS 2 Batch Engine**: Create/delete networks, add/remove objects, manage connections, configure tasks — operations that require the CLASS 2 scripting engine (`apply_project_changes`, `run_class2_script`).
@@ -121,6 +123,7 @@ When running from a local clone, point your MCP client to:
 | `LASAL_MCP_TIMEOUT_SCRIPT` | `120000` | Script execution timeout (ms) |
 | `LASAL_MCP_TIMEOUT_LSE` | `300000` | LASAL SCREEN operation timeout (ms) |
 | `LASAL_MCP_TIMEOUT_MM` | `900000` | MachineManager update timeout (ms) |
+| `LASAL_MCP_DIALOG_WATCHER` | `1` | Auto-dismiss modal engine dialogs during script runs and report their text. Set to `0` to disable. |
 | `LASAL_LARS_EXE` | `C:\Program Files (x86)\Sigmatek\Lars\Lars.exe` | LARS runtime path |
 | `LASAL_LARS_CONFIG` | `%APPDATA%\lasalos2.xml` | LARS workspace config file |
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
@@ -134,6 +137,7 @@ When running from a local clone, point your MCP client to:
 |---|---|
 | `select_project` | Set the active project root directory. |
 | `lasal_status` | Check project, stations, engines, processes, HMI health. |
+| `check_job_status` | Poll background jobs started with `async: true` (or list recent jobs). |
 | `inspect_project` | Read-only class/network/object inventory (channels, tasks) from the manifest + class sources. |
 | `validate_guids` | Scan a station project for duplicate GUID collisions and uninitialized `TO_UDINT(0)` placeholders; auto-resolves GUID collisions and populates exact CRC-32 `@CT_` hashes. |
 | `read_class_source` | Read or write a class `.st` (and optional `.h`) by class name; latin1-validated. |
@@ -141,16 +145,17 @@ When running from a local clone, point your MCP client to:
 | `manage_class2` | Open or close the CLASS 2 IDE. |
 | `manage_visudesigner` | Open or close VISUDesigner. |
 | `manage_lasalscreen` | Open or close the LASAL SCREEN (LSE) editor. |
-| `build_project` | Compile or download to PLC. |
+| `build_project` | Compile or download to PLC (supports `async: true`). |
+| `create_class2_bootdisk` | Create a CLASS 2 bootdisk / update stick (plain or Update-Tool flavor with Autoexec, OS image, VISU publish folder). |
 | `control_plc` | Start, stop, or query PLC runtime state. |
 | `plc_values` | Read/write live channel values on a running PLC. |
-| `lars_runtime` | Local LARS simulation: list/setup workspaces per station (wires CLASS 2 + LASAL SCREEN projects), start/stop, screenshot of the rendered screen, point stations at LARS (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
+| `lars_runtime` | Local LARS simulation: list/setup workspaces per station (wires CLASS 2 + LASAL SCREEN projects), start/stop, **simulate** (one-call loop: ARM→PC switch, compile, download, start), screenshot of the rendered screen, point stations at LARS (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
 | `apply_project_changes` | Batch engine operations (networks, objects, connections, tasks, compiler version, compile/download) **and** file-level class operations: `create_class`, `add_project_file`, `clean_project` (incl. `deep` artifact purge). |
 | `run_class2_script` | Escape hatch: run arbitrary Python 2.7 `batch` statements through Lasal2.exe for API calls not exposed as operations. |
 | `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
 | `lse_project` | LASAL SCREEN engine operations via COM automation: info, compile, download, merge/fuse, XML text export/import, CLASS 2 variable import, text-list translations, bulk button/softkey theming, settings, images. |
 | `hmi_runtime` | Start/stop local HMI web simulation (DataService) and return accessible URL. |
-| `plc_diagnostics` | Tracing, file transfer, static code analysis. |
+| `plc_diagnostics` | Tracing (DataAnalyzer), file transfer on the control, code analysis (project or single file), OS download, RAM-image clear, project-on-PLC backup, connection-file download. |
 | `deploy_all` | Full pipeline: compile → download → start PLC → compile LASAL SCREEN → optional SCREEN download → sync visu → start HMI. |
 | `deploy_solution` | Multi-station MachineManager deploy via generated `.lutc`: CLASS 2 / LASAL SCREEN / VISUDesigner downloads, OS, files, run/boot, writes, CLI. |
 
@@ -185,7 +190,8 @@ See the built-in `lasal://guide` resource for detailed file format documentation
 
 ```bash
 npm run dev          # Watch mode
-npm test             # Run tests (Vitest)
+npm test             # Run unit tests (Vitest)
+npm run test:lab     # Integration tests against the local LASAL installation (creates fresh projects)
 npm run test:watch   # Tests in watch mode
 npm run lint         # ESLint
 npm run format       # Prettier
@@ -202,6 +208,10 @@ instance runs one program, the MCP creates one workspace per station:
 3. `lars_runtime set_station_target <station>` — points the station's `.lss` at the LARS instance.
 4. Now `build_project`, `control_plc`, and `plc_values` work unchanged against the local runtime.
 5. `lars_runtime restore <station>` — reverts the `.lss` to the real hardware target.
+
+Shortcut: `lars_runtime simulate` does the whole loop in one call — creates the workspace
+if needed (CLASS 2 + LASAL SCREEN), switches ARM targets to PC, compiles, downloads to the
+LARS instance and starts it.
 
 Notes:
 - Projects compiled for `Processor="ARM"` (most machine PLCs) need

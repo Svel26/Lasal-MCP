@@ -13,6 +13,7 @@ import { batchResultToResponse } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
 import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
+import { startJob } from "../core/jobs.js";
 
 // Recursively find all project files
 function getProjectFiles(dir: string, files: string[] = []): string[] {
@@ -93,6 +94,13 @@ export const buildProjectSchema = {
     .int()
     .optional()
     .describe("Timeout in seconds for compile or download. Omit for default (600s)."),
+  async: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Run in the background: returns { status: 'pending', jobId } — poll with check_job_status. Default false.",
+    ),
 };
 
 export async function buildProjectHandler(
@@ -103,80 +111,93 @@ export async function buildProjectHandler(
     connection?: string;
     add_loader_anyway?: boolean;
     timeout_s?: number;
+    async?: boolean;
   },
   extra?: McpExtra,
 ) {
   const reporter = createProgressReporter(extra, "lasal.build");
-  return withEngineLock(async () => {
-    const resolved = resolveLcpPath(args.lcp_path);
-    if ("error" in resolved) {
-      return fail(resolved.error, ["Select a project first using select_project or specify lcp_path."]);
-    }
+  const run = () =>
+    withEngineLock(async () => {
+      const resolved = resolveLcpPath(args.lcp_path);
+      if ("error" in resolved) {
+        return fail(resolved.error, ["Select a project first using select_project or specify lcp_path."]);
+      }
 
-    if (args.action === "compile") {
-      await reporter.report(20, 100, `Compiling CLASS 2 project (${args.options ?? "RebuildAll"})...`);
-      const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
-      const br = await runBatchOps(
-        resolved.path,
-        [{ type: "compile", optionName: args.options ?? "RebuildAll" }],
-        timeoutMs,
-      );
-      await reporter.report(100, 100, "Compilation finished.");
-      return batchResultToResponse(br);
-    }
+      if (args.action === "compile") {
+        await reporter.report(20, 100, `Compiling CLASS 2 project (${args.options ?? "RebuildAll"})...`);
+        const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.compile;
+        const br = await runBatchOps(
+          resolved.path,
+          [{ type: "compile", optionName: args.options ?? "RebuildAll" }],
+          timeoutMs,
+        );
+        await reporter.report(100, 100, "Compilation finished.");
+        return batchResultToResponse(br);
+      }
 
-    // download
-    await reporter.report(15, 100, "Resolving connection & target preflight...");
-    const connectionInfo = resolveConnection(resolved.path, args.connection);
-    const ipUsed = connectionInfo.ip ?? "";
-    const connectionUsed = connectionInfo.connection;
-    // LARS (local runtime) instances need the PC loader sent along or the
-    // download ends in "Linker_Error" on the target.
-    const addLoaderAnyway = shouldAddLoader(args.add_loader_anyway, connectionInfo);
+      // download
+      await reporter.report(15, 100, "Resolving connection & target preflight...");
+      const connectionInfo = resolveConnection(resolved.path, args.connection);
+      const ipUsed = connectionInfo.ip ?? "";
+      const connectionUsed = connectionInfo.connection;
+      // LARS (local runtime) instances need the PC loader sent along or the
+      // download ends in "Linker_Error" on the target.
+      const addLoaderAnyway = shouldAddLoader(args.add_loader_anyway, connectionInfo);
 
-    // Preflight PLC target
-    const pf = await preflightPlc(resolved.path, args.connection);
-    if (!pf.ok) {
-      await reporter.log("warning", `Preflight failed for ${connectionUsed}`);
-      return respond({
-        ok: false,
-        preflight: pf,
-        connectionUsed,
-        ipUsed,
-        errors: pf.problems.map((p) => p.message),
-        hints: pf.problems.map((p) => p.fix),
-      });
-    }
+      // Preflight PLC target
+      const pf = await preflightPlc(resolved.path, args.connection);
+      if (!pf.ok) {
+        await reporter.log("warning", `Preflight failed for ${connectionUsed}`);
+        return respond({
+          ok: false,
+          preflight: pf,
+          connectionUsed,
+          ipUsed,
+          errors: pf.problems.map((p) => p.message),
+          hints: pf.problems.map((p) => p.fix),
+        });
+      }
 
-    await reporter.report(40, 100, `Downloading project to ${connectionUsed}...`);
-    const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
+      await reporter.report(40, 100, `Downloading project to ${connectionUsed}...`);
+      const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.download;
 
-    let br = await runBatchOps(
-      resolved.path,
-      [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
-      timeoutMs,
-    );
-
-    // Auto-retry transient connection errors once
-    if (!br.ok && isTransientError(br.errors)) {
-      await reporter.log("info", "Transient error during download, retrying once...");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      br = await runBatchOps(
+      let br = await runBatchOps(
         resolved.path,
         [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
         timeoutMs,
       );
-      br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
-    }
 
-    await reporter.report(100, 100, "Download finished.");
-    return batchResultToResponse(br, {
-      connectionUsed,
-      ipUsed,
-      postDownloadState: br.postDownloadState,
-      lcpPath: resolved.path,
+      // Auto-retry transient connection errors once
+      if (!br.ok && isTransientError(br.errors)) {
+        await reporter.log("info", "Transient error during download, retrying once...");
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        br = await runBatchOps(
+          resolved.path,
+          [{ type: "download", connection: connectionUsed, addLoaderAnyway }],
+          timeoutMs,
+        );
+        br.hints = [...(br.hints ?? []), "Retried download once due to a transient connection failure."];
+      }
+
+      await reporter.report(100, 100, "Download finished.");
+      return batchResultToResponse(br, {
+        connectionUsed,
+        ipUsed,
+        postDownloadState: br.postDownloadState,
+        lcpPath: resolved.path,
+      });
     });
-  });
+
+  if (args.async) {
+    const job = startJob("build_project", run);
+    return respond({
+      ok: true,
+      status: "pending",
+      jobId: job.id,
+      hints: ["Poll check_job_status with this jobId until status is completed/failed."],
+    });
+  }
+  return run();
 }
 
 // ─── control_plc ─────────────────────────────────────────────────────────────
@@ -342,7 +363,8 @@ export async function controlPlcHandler(args: {
       `state_val = batch.GetPlcState(prj, ${emitPy27String(conn)})`,
       "state_int = int(state_val)",
       "state_name = state_map.get(state_int, 'Unknown(%d)' % state_int)",
-      "result = {'stateValue': state_int, 'stateName': state_name}",
+      `arch = batch.GetProcessorArch(${emitPy27String(conn)})`,
+      "result = {'stateValue': state_int, 'stateName': state_name, 'processorArch': arch}",
       "import json",
       `f_state = open(${emitPath(resultPath)}, 'w')`,
       "json.dump(result, f_state)",

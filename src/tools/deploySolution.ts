@@ -6,6 +6,7 @@ import { readState } from "../state.js";
 import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
 import {
   buildLutc,
+  findLatestMachineManagerLog,
   runMachineManager,
   type LutcInstruction,
   type LutcInstructionData,
@@ -16,6 +17,7 @@ import { ensureScratch } from "../core/scratch.js";
 import { TIMEOUTS } from "../utils/config.js";
 import { respond, fail, type ToolResponse } from "../utils/respond.js";
 import { writeFileSync } from "fs";
+import { startJob } from "../core/jobs.js";
 
 // ─── deploy_solution ──────────────────────────────────────────────────────────
 //
@@ -114,6 +116,13 @@ export const deploySolutionSchema = {
     .default(false)
     .describe("Generate and return the .lutc without executing MachineManager (plan review)."),
   timeout_s: z.number().int().optional().describe("Timeout override for the whole update run."),
+  async: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Run in the background: returns { status: 'pending', jobId } — poll with check_job_status. Default false.",
+    ),
 };
 
 type StationDeploy = z.infer<typeof stationDeploySchema>;
@@ -233,89 +242,108 @@ export async function deploySolutionHandler(args: {
   machine_nr?: string;
   dry_run?: boolean;
   timeout_s?: number;
+  async?: boolean;
 }): Promise<ToolResponse> {
-  return withEngineLock(async () => {
-    const state = readState();
+  const run = () =>
+    withEngineLock(async () => {
+      const state = readState();
 
-    let lsmPath = args.lsm_path;
-    if (!lsmPath) {
-      if (!state.currentProject) {
-        return fail("No project selected.", ["Call select_project first or pass lsm_path."]);
+      let lsmPath = args.lsm_path;
+      if (!lsmPath) {
+        if (!state.currentProject) {
+          return fail("No project selected.", ["Call select_project first or pass lsm_path."]);
+        }
+        const found = findLsmPath(state.currentProject);
+        if (!found)
+          return fail(`No .lsm solution file found in ${state.currentProject}`, [
+            "Check the selected project directory.",
+          ]);
+        lsmPath = found;
       }
-      const found = findLsmPath(state.currentProject);
-      if (!found)
-        return fail(`No .lsm solution file found in ${state.currentProject}`, [
-          "Check the selected project directory.",
+      if (!existsSync(lsmPath)) {
+        return fail(`Solution file not found: ${lsmPath}`, ["Verify the path to the .lsm file."]);
+      }
+
+      let soln;
+      try {
+        soln = parseSolution(lsmPath);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return fail(`Failed to parse solution: ${msg}`, []);
+      }
+      if (soln.stations.length === 0) {
+        return fail("No stations found in the solution.", ["Ensure the .lsm references .lss station files."]);
+      }
+
+      const { targets, instructions, problems } = buildFromStations(soln, args.stations, new Map());
+      if (problems.length > 0) {
+        return fail(`Deploy plan has unresolved issues:\n${problems.join("\n")}`, [
+          "Fix the reported paths/targets, or use set_target_ip to define station TCPIP targets.",
         ]);
-      lsmPath = found;
-    }
-    if (!existsSync(lsmPath)) {
-      return fail(`Solution file not found: ${lsmPath}`, ["Verify the path to the .lsm file."]);
-    }
+      }
+      if (instructions.length === 0) {
+        return fail("No instructions to execute.", ["Configure at least one of class2/screen/visu/files per station."]);
+      }
 
-    let soln;
-    try {
-      soln = parseSolution(lsmPath);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return fail(`Failed to parse solution: ${msg}`, []);
-    }
-    if (soln.stations.length === 0) {
-      return fail("No stations found in the solution.", ["Ensure the .lsm references .lss station files."]);
-    }
+      let utcPath = args.utc_path;
+      if (!utcPath) {
+        ensureScratch();
+        utcPath = join(SCRATCH, `deploy_${randomUUID()}.lutc`);
+      }
+      const xml = buildLutc({ targets, instructions, machineNr: args.machine_nr });
+      try {
+        writeFileSync(utcPath, xml, "latin1");
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return fail(`Failed to write .lutc to ${utcPath}: ${msg}`, []);
+      }
 
-    const { targets, instructions, problems } = buildFromStations(soln, args.stations, new Map());
-    if (problems.length > 0) {
-      return fail(`Deploy plan has unresolved issues:\n${problems.join("\n")}`, [
-        "Fix the reported paths/targets, or use set_target_ip to define station TCPIP targets.",
-      ]);
-    }
-    if (instructions.length === 0) {
-      return fail("No instructions to execute.", ["Configure at least one of class2/screen/visu/files per station."]);
-    }
+      const plan = {
+        lsmPath,
+        targets: targets.map((t) => ({ station: t.station, ip: t.ip, port: t.port })),
+        instructions: instructions.map((i) => i.kind),
+        utcPath,
+      };
 
-    let utcPath = args.utc_path;
-    if (!utcPath) {
-      ensureScratch();
-      utcPath = join(SCRATCH, `deploy_${randomUUID()}.lutc`);
-    }
-    const xml = buildLutc({ targets, instructions, machineNr: args.machine_nr });
-    try {
-      writeFileSync(utcPath, xml, "latin1");
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return fail(`Failed to write .lutc to ${utcPath}: ${msg}`, []);
-    }
+      if (args.dry_run) {
+        return respond({
+          ok: true,
+          dryRun: true,
+          ...plan,
+          lutc: xml,
+        });
+      }
 
-    const plan = {
-      lsmPath,
-      targets: targets.map((t) => ({ station: t.station, ip: t.ip, port: t.port })),
-      instructions: instructions.map((i) => i.kind),
-      utcPath,
-    };
+      const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.mm;
+      const runStartedAt = Date.now();
+      const r = await runMachineManager(utcPath, timeoutMs);
+      const mmLog = findLatestMachineManagerLog(runStartedAt);
 
-    if (args.dry_run) {
       return respond({
-        ok: true,
-        dryRun: true,
+        ok: r.ok,
         ...plan,
-        lutc: xml,
+        exitCode: r.exitCode,
+        durationMs: r.durationMs,
+        timedOut: r.timedOut,
+        ...(r.stdoutTail.length ? { stdout: r.stdoutTail } : {}),
+        ...(r.stderrTail.length ? { stderr: r.stderrTail } : {}),
+        ...(r.errors.length ? { errors: r.errors } : {}),
+        ...(r.hints.length ? { hints: r.hints } : {}),
+        ...(r.dialogs.length ? { machineManagerDialogs: r.dialogs } : {}),
+        ...(mmLog
+          ? { machineManagerLog: { path: mmLog.path, lastModifiedMs: mmLog.lastModifiedMs, tail: mmLog.tail } }
+          : {}),
       });
-    }
-
-    const timeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.mm;
-    const r = await runMachineManager(utcPath, timeoutMs);
-
-    return respond({
-      ok: r.ok,
-      ...plan,
-      exitCode: r.exitCode,
-      durationMs: r.durationMs,
-      timedOut: r.timedOut,
-      ...(r.stdoutTail.length ? { stdout: r.stdoutTail } : {}),
-      ...(r.stderrTail.length ? { stderr: r.stderrTail } : {}),
-      ...(r.errors.length ? { errors: r.errors } : {}),
-      ...(r.hints.length ? { hints: r.hints } : {}),
     });
-  });
+
+  if (args.async) {
+    const job = startJob("deploy_solution", run);
+    return respond({
+      ok: true,
+      status: "pending",
+      jobId: job.id,
+      hints: ["Poll check_job_status with this jobId until status is completed/failed."],
+    });
+  }
+  return run();
 }
