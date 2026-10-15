@@ -1,7 +1,8 @@
 import { execFile } from "child_process";
-import { existsSync } from "fs";
-import { dirname } from "path";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { dirname, join } from "path";
 import { MACHINEMANAGER_EXE, killMachineManager } from "./engine.js";
+import { formatDialogEvents, startDialogWatchdog, type DialogEvent } from "./dialogWatchdog.js";
 
 // ─── MachineManager update files (.lutc) ──────────────────────────────────────
 //
@@ -223,6 +224,77 @@ export interface LutcRunResult {
   stderrTail: string[];
   errors: string[];
   hints: string[];
+  dialogs: DialogEvent[];
+}
+
+// ─── Update-run log discovery ─────────────────────────────────────────────────
+//
+// MachineManager writes one log file per run into its configured Update-Tool
+// log folder (path is user-configurable, so we scan the usual locations for
+// files touched after the run started).
+
+export interface MmLogInfo {
+  path: string;
+  lastModifiedMs: number;
+  tail: string[];
+}
+
+function collectLogCandidates(
+  dir: string,
+  sinceMs: number,
+  depth: number,
+  out: Array<{ path: string; mtime: number }>,
+): void {
+  let entries: Array<{ name: string; isDir: boolean }>;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    const full = join(dir, e.name);
+    if (e.isDir) {
+      if (depth > 0) collectLogCandidates(full, sinceMs, depth - 1, out);
+    } else if (/\.(log|txt)$/i.test(e.name)) {
+      try {
+        const st = statSync(full);
+        if (st.mtimeMs >= sinceMs && st.size < 5_000_000) out.push({ path: full, mtime: st.mtimeMs });
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/** Newest .log/.txt touched since `sinceMs` in the known MachineManager folders. */
+export function findLatestMachineManagerLog(sinceMs: number): MmLogInfo | null {
+  const localApp = process.env.LOCALAPPDATA ?? "";
+  const userProfile = process.env.USERPROFILE ?? "";
+  const dirs = [
+    join(localApp, "Sigmatek", "Lasal Machine Manager"),
+    join(localApp, "Sigmatek", "MachineManager"),
+    join(userProfile, "Documents", "MachineManager"),
+    join(userProfile, "Documents", "Sigmatek"),
+    dirname(MACHINEMANAGER_EXE),
+  ].filter((d) => d && existsSync(d));
+
+  const found: Array<{ path: string; mtime: number }> = [];
+  for (const d of dirs) collectLogCandidates(d, sinceMs - 5000, 3, found);
+  if (found.length === 0) return null;
+
+  found.sort((a, b) => b.mtime - a.mtime);
+  const best = found[0]!;
+  let tail: string[] = [];
+  try {
+    tail = readFileSync(best.path, "latin1")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(-40);
+  } catch {
+    /* ignore */
+  }
+  return { path: best.path, lastModifiedMs: best.mtime, tail };
 }
 
 export async function runMachineManager(lutcPath: string, timeoutMs: number): Promise<LutcRunResult> {
@@ -239,10 +311,12 @@ export async function runMachineManager(lutcPath: string, timeoutMs: number): Pr
       stderrTail: [],
       errors: [`MachineManager not found at ${MACHINEMANAGER_EXE}`],
       hints: ["Install LASAL MachineManager or set LASAL_MACHINEMANAGER_EXE."],
+      dialogs: [],
     };
   }
 
   return new Promise((resolve) => {
+    let watchdog: ReturnType<typeof startDialogWatchdog> = { stop: async () => [] };
     const child = execFile(
       MACHINEMANAGER_EXE,
       [`/update:${lutcPath}`],
@@ -282,7 +356,7 @@ export async function runMachineManager(lutcPath: string, timeoutMs: number): Pr
         }
         hints.push("Per-run logs are written to MachineManager's configured Update-Tool log folder.");
 
-        resolve({
+        const result: LutcRunResult = {
           ok: exitCode === 0 && !timedOut && errors.length === 0,
           exitCode,
           timedOut,
@@ -301,8 +375,17 @@ export async function runMachineManager(lutcPath: string, timeoutMs: number): Pr
             .slice(-20),
           errors,
           hints,
+          dialogs: [],
+        };
+
+        // Collect modal dialogs (if any) before resolving — their text is part of the diagnosis.
+        void watchdog.stop().then((dialogEvents) => {
+          result.dialogs = dialogEvents;
+          result.hints = [...formatDialogEvents(dialogEvents), ...result.hints];
+          resolve(result);
         });
       },
     );
+    watchdog = startDialogWatchdog(child.pid);
   });
 }

@@ -118,15 +118,50 @@ function insertBeforeClose(
   return { content: content.slice(0, insertAt) + line + "\n" + content.slice(insertAt), found: true };
 }
 
+/**
+ * Insert an empty container section when it does not exist yet. Fresh projects
+ * created by CLASS 2 02.04 (`batch.CreateProject`) start without a
+ * `<ClassFiles>` / `<ClassFolders>` section — the first class added via the
+ * batch file helpers creates it.
+ */
+function ensureSection(content: string, section: string, lcpPath: string): { content: string; created: boolean } {
+  if (content.includes(`<${section}>`)) return { content, created: false };
+
+  const unit = indentUnit(content);
+  const block = `${unit}<${section}>\n${unit}</${section}>\n`;
+
+  if (section === "ClassFiles") {
+    // Canonical position (see populated 02.04 projects): right after </HeaderFiles>.
+    const headerClose = content.indexOf("</HeaderFiles>");
+    if (headerClose >= 0) {
+      const insertAt = content.indexOf("\n", headerClose) + 1;
+      return { content: content.slice(0, insertAt) + block + content.slice(insertAt), created: true };
+    }
+  }
+
+  const projectOpen = content.search(/<Project\b[^>]*>/);
+  if (section === "HeaderFiles" && projectOpen >= 0) {
+    const openEnd = content.indexOf(">", projectOpen);
+    const insertAt = content.indexOf("\n", openEnd) + 1;
+    return { content: content.slice(0, insertAt) + block + content.slice(insertAt), created: true };
+  }
+
+  const projectClose = content.lastIndexOf("</Project>");
+  if (projectClose < 0) throw new Error(`Cannot insert <${section}> into ${lcpPath}`);
+  const insertAt = content.lastIndexOf("\n", projectClose) + 1;
+  return { content: content.slice(0, insertAt) + block + content.slice(insertAt), created: true };
+}
+
 // ─── manifest edits ──────────────────────────────────────────────────────────
 
-/** Adds <File Path=".\..."/> to <ClassFiles> (idempotent). */
+/** Adds <File Path=".\..."/> to <ClassFiles> (idempotent). Creates the section for fresh projects. */
 export function addClassFileToManifest(lcpPath: string, relPathInput: string): ManifestEditResult {
   const relPath = normalizeManifestPath(relPathInput);
-  const content = readLatin1(lcpPath);
+  let content = readLatin1(lcpPath);
   if (hasPathInSection(content, "ClassFiles", relPath)) {
     return { changed: false, added: [], alreadyPresent: [relPath] };
   }
+  content = ensureSection(content, "ClassFiles", lcpPath).content;
   const unit = indentUnit(content);
   const line = `${unit}${unit}<File Path="${relPath}"/>`;
   const { content: next, found } = insertBeforeClose(content, "</ClassFiles>", line, "<ClassFiles>");
@@ -135,12 +170,13 @@ export function addClassFileToManifest(lcpPath: string, relPathInput: string): M
   return { changed: true, added: [relPath], alreadyPresent: [] };
 }
 
-/** Adds <File Path=".\..."/> to <HeaderFiles> (idempotent). */
+/** Adds <File Path=".\..."/> to <HeaderFiles> (idempotent). Creates the section if missing. */
 export function addHeaderFileToManifest(lcpPath: string, relPathInput: string, global = false): ManifestEditResult {
   const relPath = normalizeManifestPath(relPathInput);
-  const content = readLatin1(lcpPath);
+  let content = readLatin1(lcpPath);
   let changed = false;
   if (!hasPathInSection(content, "HeaderFiles", relPath)) {
+    content = ensureSection(content, "HeaderFiles", lcpPath).content;
     const unit = indentUnit(content);
     const globalAttr = global ? ` Global="true"` : "";
     const line = `${unit}${unit}<File Path="${relPath}"${globalAttr}/>`;
@@ -183,7 +219,19 @@ export function addClassToFolders(lcpPath: string, className: string, folderName
   const foldersOpen = content.indexOf("<ClassFolders>");
   const foldersClose = content.indexOf("</ClassFolders>", foldersOpen);
   if (foldersOpen < 0 || foldersClose < 0) {
-    throw new Error(`<ClassFolders> section not found in ${lcpPath}`);
+    // Fresh 02.04 projects have no <ClassFolders> section yet — create it with the folder.
+    const projectClose = content.lastIndexOf("</Project>");
+    if (projectClose < 0) throw new Error(`<ClassFolders> section not found in ${lcpPath}`);
+    const unit = indentUnit(content);
+    const insertAt = content.lastIndexOf("\n", projectClose) + 1;
+    const block =
+      `${unit}<ClassFolders>\n` +
+      `${unit}${unit}<Folder Name="${folderName}">\n` +
+      `${unit}${unit}${unit}<Class Name="${className}"/>\n` +
+      `${unit}${unit}</Folder>\n` +
+      `${unit}</ClassFolders>\n`;
+    writeLatin1(lcpPath, content.slice(0, insertAt) + block + content.slice(insertAt));
+    return { changed: true, added: [className], alreadyPresent: [] };
   }
   const section = content.slice(foldersOpen, foldersClose);
   const classLower = className.toLowerCase();
@@ -370,8 +418,8 @@ export function generateClassSource(opts: CreateClassOptions): string {
     `\tRealtimeTask       = "${realtime}"\n` +
     `\tCyclicTask         = "${cyclic}"\n` +
     `\tBackgroundTask     = "${background}"\n` +
-    (cyclic ? `\tDefCyclictime      = "${opts.defCyclicTime ?? "cCyTb"}"\n` : "") +
-    (background ? `\tDefBackground      = "${opts.defBackgroundTime ?? "cBgTb"}"\n` : "");
+    (cyclic ? `\tDefCyclictime      = "${opts.defCyclicTime ?? "1 ms"}"\n` : "") +
+    (background ? `\tDefBackground      = "${opts.defBackgroundTime ?? "100 ms"}"\n` : "");
 
   const serverDecls = servers.map((s) => `\t${s.name} \t: ${s.type ?? "SvrCh_DINT"};`).join("\n");
   const storeMethods = servers

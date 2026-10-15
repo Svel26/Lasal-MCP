@@ -75,6 +75,8 @@ export type LseOp =
   | { type: "set_actual_language"; language_id: number }
   | { type: "update_buttons"; updates: LseButtonUpdate[] }
   | { type: "update_softkeys"; updates: LseButtonUpdate[] }
+  | { type: "server_get_property"; server: string; property: string | number }
+  | { type: "server_set_property"; server: string; property: string | number; value: string | number | boolean }
   | { type: "settings_set"; settings: LseSettingsSet }
   | { type: "image_insert"; file: string; transparent_rgb?: number };
 
@@ -106,6 +108,60 @@ export const LSE_BUTTON_PROPERTIES: Record<string, number> = {
 export const LSE_SOFTKEY_PROPERTIES: Record<string, number> = {
   theme: 2,
 };
+
+/** LSServerProperty constants (see docs/LSE_AUTOMATION_REFERENCE.md). */
+export const LSE_SERVER_PROPERTIES: Record<string, number> = {
+  stationnumber: 1,
+  permanent: 2,
+  refreshtime: 3,
+  accessnumber: 4,
+  bitnr: 5,
+  inversbit: 6,
+  stringsize: 7,
+  bitsize: 8,
+  timesize: 9,
+  datesize: 10,
+  leading0: 11,
+  lowerlimit: 12,
+  upperlimit: 13,
+  unit: 14,
+  unitschema: 15,
+  menu: 16,
+  listtext1: 17,
+  text1: 18,
+  listtext2: 19,
+  text2: 20,
+  listtext3: 21,
+  text3: 22,
+  listbubblehelptext: 23,
+  bubblehelptext: 24,
+  stateschema: 25,
+  userconfig: 26,
+  group: 27,
+  parameter: 28,
+  invers: 29,
+  checkbit: 30,
+  link1type: 31,
+  link1: 32,
+  link2type: 33,
+  link2: 34,
+  link3type: 35,
+  link3: 36,
+  link4type: 37,
+  link4: 38,
+  onlyascii: 39,
+  hostname: 40,
+};
+
+export function resolveLseServerProperty(property: string | number): number {
+  if (typeof property === "number") return property;
+  const n = LSE_SERVER_PROPERTIES[property.toLowerCase().replace(/^lssp_/, "")];
+  if (n === undefined) {
+    const names = Object.keys(LSE_SERVER_PROPERTIES).join(", ");
+    throw new Error(`Unknown server property '${property}'. Available: ${names} (or pass the numeric constant).`);
+  }
+  return n;
+}
 
 export function resolveLseButtonProperty(property: string | number, table: Record<string, number>): number {
   if (typeof property === "number") return property;
@@ -146,6 +202,8 @@ export interface BuildLseScriptOptions {
   stepsPath: string;
   resultPath: string;
   saveAtEnd: boolean;
+  /** "open" (default) loads an existing .lpr; "new" creates a fresh project at the path. */
+  openMode?: "open" | "new";
 }
 
 export function buildLseScript(
@@ -154,6 +212,7 @@ export function buildLseScript(
   opts: BuildLseScriptOptions,
 ): { script: string; expectedSteps: string[] } {
   const { logPath, stepsPath, resultPath } = opts;
+  const openMode = opts.openMode ?? "open";
   const body: string[] = [];
   const expectedSteps: string[] = ["CreateApp", "LoadProject"];
 
@@ -376,6 +435,30 @@ export function buildLseScript(
         }
         break;
       }
+      case "server_get_property": {
+        const propIdx = resolveLseServerProperty(op.property);
+        lines.push(
+          "$sv = $null",
+          "$n = Get-Count $prj.Servers",
+          `for ($i = 0; $i -lt $n; $i++) { $o = Get-ItemAt $prj.Servers $i; if ($o) { $nm = Get-ObjName $o; if ($nm -eq ${psStr(op.server)}) { $sv = $o; break } } }`,
+          `if ($null -eq $sv) { throw 'Server not found: ${op.server.replace(/'/g, "''")}' }`,
+          `$v = $sv.Property(${propIdx})`,
+          `$results['server_get_property'] = @{ server = ${psStr(op.server)}; property = ${propIdx}; value = "$v" }`,
+        );
+        break;
+      }
+      case "server_set_property": {
+        const propIdx = resolveLseServerProperty(op.property);
+        lines.push(
+          "$sv = $null",
+          "$n = Get-Count $prj.Servers",
+          `for ($i = 0; $i -lt $n; $i++) { $o = Get-ItemAt $prj.Servers $i; if ($o) { $nm = Get-ObjName $o; if ($nm -eq ${psStr(op.server)}) { $sv = $o; break } } }`,
+          `if ($null -eq $sv) { throw 'Server not found: ${op.server.replace(/'/g, "''")}' }`,
+          `$sv.Property(${propIdx}) = ${psValue(op.value)}`,
+          `try { $chk = $sv.Property(${propIdx}); $results['server_set_property'] = @{ server = ${psStr(op.server)}; property = ${propIdx}; value = "$chk" } } catch { }`,
+        );
+        break;
+      }
       case "settings_set": {
         const s = op.settings;
         if (s.screen_width !== undefined && s.screen_height !== undefined) {
@@ -476,7 +559,7 @@ export function buildLseScript(
     "try {",
     "  $app = New-Object -ComObject LASALScreen.Application",
     "  Write-Step 'CreateApp'",
-    `  $prj = $app.Open(${psPath(lprPath)})`,
+    openMode === "new" ? `  $prj = $app.New(${psPath(lprPath)})` : `  $prj = $app.Open(${psPath(lprPath)})`,
     "  if ($null -eq $prj) { throw 'LASALScreen.Application.Open returned no project' }",
     "  Write-Step 'LoadProject'",
     body.join("\n"),
@@ -535,10 +618,12 @@ const LSE_HINT_TABLE = [
 export interface RunLseOptions {
   saveAtEnd?: boolean;
   timeoutMs?: number;
+  /** true = create a fresh project at lprPath (IApplication.New) instead of opening an existing one. */
+  create?: boolean;
 }
 
 export async function runLseOps(lprPath: string, ops: LseOp[], options: RunLseOptions = {}): Promise<LseResult> {
-  const saveAtEnd = options.saveAtEnd ?? false;
+  const saveAtEnd = (options.saveAtEnd ?? false) || (options.create ?? false);
   const timeoutMs = options.timeoutMs ?? 300_000;
 
   const registration = getLseRegistration();
@@ -566,7 +651,13 @@ export async function runLseOps(lprPath: string, ops: LseOp[], options: RunLseOp
   const stepsPath = join(SCRATCH, `lse_${id}.steps`);
   const resultPath = join(SCRATCH, `lse_${id}.result.json`);
 
-  const { script, expectedSteps } = buildLseScript(lprPath, ops, { logPath, stepsPath, resultPath, saveAtEnd });
+  const { script, expectedSteps } = buildLseScript(lprPath, ops, {
+    logPath,
+    stepsPath,
+    resultPath,
+    saveAtEnd,
+    openMode: options.create ? "new" : "open",
+  });
   // BOM so Windows PowerShell 5.1 parses non-ASCII paths correctly.
   writeFileSync(scriptPath, `\uFEFF${script}`, "utf-8");
 

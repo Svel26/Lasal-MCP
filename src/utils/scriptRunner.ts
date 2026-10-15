@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { execFile } from "child_process";
+import { formatDialogEvents, startDialogWatchdog, type DialogEvent } from "./dialogWatchdog.js";
 
 export interface EngineRunOptions {
   exe: string;
@@ -28,6 +29,7 @@ export interface EngineRunResult {
   logPath: string;
   durationMs: number;
   hints: string[];
+  dialogs: DialogEvent[];
 }
 
 const HINT_TABLE = [
@@ -78,6 +80,7 @@ function executeEngine(
   exe: string,
   args: string[],
   timeoutMs: number,
+  onSpawn?: (pid: number | undefined) => void,
 ): Promise<{ exitCode: number; timedOut: boolean; stderr: string }> {
   return new Promise((resolve) => {
     const child = execFile(
@@ -101,6 +104,7 @@ function executeEngine(
         }
       },
     );
+    onSpawn?.(child.pid);
   });
 }
 
@@ -177,7 +181,14 @@ export async function runEngineScript(
   const start = Date.now();
   const args = opts.argsFor(scriptPath);
 
-  const { exitCode, timedOut, stderr } = await executeEngine(opts.exe, args, opts.timeoutMs);
+  // Modal engine dialogs would block the process until someone clicks them —
+  // the watchdog dismisses them and captures their text for the result.
+  let watchdog: ReturnType<typeof startDialogWatchdog> | undefined;
+  const { exitCode, timedOut, stderr } = await executeEngine(opts.exe, args, opts.timeoutMs, (pid) => {
+    watchdog = startDialogWatchdog(pid);
+  });
+  const dialogs = watchdog ? await watchdog.stop() : [];
+  const dialogLines = formatDialogEvents(dialogs);
 
   if (timedOut || exitCode !== 0) {
     opts.killOnFailure();
@@ -200,6 +211,7 @@ export async function runEngineScript(
   const hasFailed = exitCode !== 0 || errors.length > 0 || timedOut;
   const log = parseLog(logPath, opts.logEncoding, hasFailed);
   errors.push(...log.errors);
+  const warnings = [...log.warnings, ...dialogLines];
 
   const { steps, allConfirmed } = parseSteps(opts.stepsPath, opts.expectedSteps);
 
@@ -220,12 +232,18 @@ export async function runEngineScript(
       "Timed out — for large projects raise the timeout via the tool's timeout_s argument or LASAL_MCP_TIMEOUT_* environment variables.",
     );
   }
+  if (dialogLines.length > 0) {
+    hints.push(
+      "The engine raised modal dialog(s) during the run; they were auto-dismissed and their text is included in warnings. " +
+        "Set LASAL_MCP_DIALOG_WATCHER=0 to disable auto-dismissal.",
+    );
+  }
   const hasFailed2 = exitCode !== 0 || errors.length > 0 || timedOut || !allConfirmed;
   if (hasFailed2) {
     for (const mapping of HINT_TABLE) {
       const matched =
         errors.some((err) => mapping.pattern.test(err)) ||
-        log.warnings.some((warn) => mapping.pattern.test(warn)) ||
+        warnings.some((warn) => mapping.pattern.test(warn)) ||
         log.logTail.some((line) => mapping.pattern.test(line));
       if (matched && !hints.includes(mapping.hint)) {
         hints.push(mapping.hint);
@@ -239,10 +257,11 @@ export async function runEngineScript(
     timedOut,
     steps,
     errors,
-    warnings: log.warnings,
+    warnings,
     logTail: log.logTail,
     logPath,
     durationMs,
     hints,
+    dialogs,
   };
 }

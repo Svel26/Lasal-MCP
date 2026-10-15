@@ -25,8 +25,24 @@ function batchResultToResponse(br: BatchResult, extra?: Record<string, unknown>)
 
 export const plcDiagnosticsSchema = {
   action: z
-    .enum(["trace", "file_upload", "file_download", "file_delete", "code_analysis"])
-    .describe("PLC diagnostics/maintenance action to perform."),
+    .enum([
+      "trace",
+      "file_upload",
+      "file_download",
+      "file_delete",
+      "code_analysis",
+      "download_os",
+      "clear_ram_image",
+      "save_project_on_plc",
+      "download_connection_file",
+    ])
+    .describe(
+      "PLC diagnostics/maintenance action: " +
+        "trace (DataAnalyzer run), file_upload/file_download/file_delete (files on the control), " +
+        "code_analysis (static analysis on the project or one source file), " +
+        "download_os (install a LasalOS .lbi — control reboots), clear_ram_image, " +
+        "save_project_on_plc (backup the running project on the control), download_connection_file (.lcf).",
+    ),
   lcp_path: z
     .string()
     .optional()
@@ -40,19 +56,48 @@ export const plcDiagnosticsSchema = {
     .default(5000)
     .describe("Duration in milliseconds to run the trace (trace action only). Default 5000."),
   output_path: z.string().optional().describe("Destination path for the trace output or code analysis result."),
+  source_file: z
+    .string()
+    .optional()
+    .describe("Analyze a single source file instead of the whole project (code_analysis action only)."),
   plc_path: z.string().optional().describe("File path on the PLC (for file upload/download/delete)."),
   local_path: z.string().optional().describe("Local file path on the host (for file upload/download)."),
+  os_path: z.string().optional().describe("LasalOS update file (.lbi) to install (download_os action only)."),
+  connection_file: z
+    .string()
+    .optional()
+    .describe(
+      "Optional .lcf connection file path (download_connection_file action only; omit to use the project's active connection file).",
+    ),
+  timeout_s: z
+    .number()
+    .int()
+    .optional()
+    .describe("Timeout override in seconds. Defaults: 120s, or 600s for download_os."),
 };
 
 export async function plcDiagnosticsHandler(args: {
-  action: "trace" | "file_upload" | "file_download" | "file_delete" | "code_analysis";
+  action:
+    | "trace"
+    | "file_upload"
+    | "file_download"
+    | "file_delete"
+    | "code_analysis"
+    | "download_os"
+    | "clear_ram_image"
+    | "save_project_on_plc"
+    | "download_connection_file";
   lcp_path?: string;
   connection?: string;
   config_path?: string;
   duration_ms?: number;
   output_path?: string;
+  source_file?: string;
   plc_path?: string;
   local_path?: string;
+  os_path?: string;
+  connection_file?: string;
+  timeout_s?: number;
 }) {
   const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) {
@@ -63,6 +108,19 @@ export async function plcDiagnosticsHandler(args: {
   if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
   const logPath = join(SCRATCH, `diag_${id}.log`);
   const conn = args.connection ?? "";
+  const defaultTimeoutS = args.action === "download_os" ? 600 : 120;
+  const timeoutMs = (args.timeout_s ?? defaultTimeoutS) * 1000;
+
+  const baseLines = (extraLines: string[]): string =>
+    [
+      "# -*- coding: utf-8 -*-",
+      "import sigmatek.lasal.batch as batch",
+      `batch.SetExceptionOnError(True)`,
+      `batch.OpenLogfile(${emitPath(logPath)})`,
+      `prj = batch.LoadProject(${emitPath(resolved.path)})`,
+      ...extraLines,
+      "batch.CloseProject(prj)",
+    ].join("\n") + "\n";
 
   return withEngineLock(async () => {
     switch (args.action) {
@@ -81,6 +139,7 @@ export async function plcDiagnosticsHandler(args: {
             "# -*- coding: utf-8 -*-",
             "import sigmatek.lasal.batch as batch",
             "import time",
+            `batch.SetExceptionOnError(True)`,
             `batch.OpenLogfile(${emitPath(logPath)})`,
             `prj = batch.LoadProject(${emitPath(resolved.path)})`,
             `batch.DataAnalyzerLoadConfig(${emitPy27String(args.config_path)})`,
@@ -91,7 +150,7 @@ export async function plcDiagnosticsHandler(args: {
             "batch.CloseProject(prj)",
           ].join("\n") + "\n";
 
-        const br = await runScript(script, logPath);
+        const br = await runScript(script, logPath, timeoutMs);
         return batchResultToResponse(br, { outputPath: outPath });
       }
 
@@ -103,18 +162,12 @@ export async function plcDiagnosticsHandler(args: {
           };
         }
         // Upload transfers file from PLC (src) to host (dest)
-        const script =
-          [
-            "# -*- coding: utf-8 -*-",
-            "import sigmatek.lasal.batch as batch",
-            `batch.OpenLogfile(${emitPath(logPath)})`,
-            `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-            `ok = batch.UploadFile(prj, ${emitPy27String(conn)}, ${emitPy27String(args.plc_path)}, ${emitPy27String(args.local_path)})`,
-            "batch.CloseProject(prj)",
-            `if not ok: raise RuntimeError("UploadFile failed")`,
-          ].join("\n") + "\n";
+        const script = baseLines([
+          `ok = batch.UploadFile(prj, ${emitPy27String(conn)}, ${emitPy27String(args.plc_path)}, ${emitPy27String(args.local_path)})`,
+          `if not ok: raise RuntimeError("UploadFile failed")`,
+        ]);
 
-        const br = await runScript(script, logPath);
+        const br = await runScript(script, logPath, timeoutMs);
         return batchResultToResponse(br);
       }
 
@@ -128,18 +181,12 @@ export async function plcDiagnosticsHandler(args: {
           };
         }
         // Download transfers file from host (src) to PLC (dest)
-        const script =
-          [
-            "# -*- coding: utf-8 -*-",
-            "import sigmatek.lasal.batch as batch",
-            `batch.OpenLogfile(${emitPath(logPath)})`,
-            `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-            `ok = batch.DownloadFile(prj, ${emitPy27String(conn)}, ${emitPy27String(args.local_path)}, ${emitPy27String(args.plc_path)})`,
-            "batch.CloseProject(prj)",
-            `if not ok: raise RuntimeError("DownloadFile failed")`,
-          ].join("\n") + "\n";
+        const script = baseLines([
+          `ok = batch.DownloadFile(prj, ${emitPy27String(conn)}, ${emitPy27String(args.local_path)}, ${emitPy27String(args.plc_path)})`,
+          `if not ok: raise RuntimeError("DownloadFile failed")`,
+        ]);
 
-        const br = await runScript(script, logPath);
+        const br = await runScript(script, logPath, timeoutMs);
         return batchResultToResponse(br);
       }
 
@@ -150,35 +197,24 @@ export async function plcDiagnosticsHandler(args: {
             isError: true,
           };
         }
-        const script =
-          [
-            "# -*- coding: utf-8 -*-",
-            "import sigmatek.lasal.batch as batch",
-            `batch.OpenLogfile(${emitPath(logPath)})`,
-            `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-            `ok = batch.DeleteFileOnPLC(prj, ${emitPy27String(conn)}, ${emitPy27String(args.plc_path)})`,
-            "batch.CloseProject(prj)",
-            `if not ok: raise RuntimeError("DeleteFileOnPLC failed")`,
-          ].join("\n") + "\n";
+        const script = baseLines([
+          `ok = batch.DeleteFileOnPLC(prj, ${emitPy27String(conn)}, ${emitPy27String(args.plc_path)})`,
+          `if not ok: raise RuntimeError("DeleteFileOnPLC failed")`,
+        ]);
 
-        const br = await runScript(script, logPath);
+        const br = await runScript(script, logPath, timeoutMs);
         return batchResultToResponse(br);
       }
 
       case "code_analysis": {
         const outPath = args.output_path || join(SCRATCH, `analysis_${id}.xml`);
-        const script =
-          [
-            "# -*- coding: utf-8 -*-",
-            "import sigmatek.lasal.batch as batch",
-            `batch.OpenLogfile(${emitPath(logPath)})`,
-            `prj = batch.LoadProject(${emitPath(resolved.path)})`,
-            `ok = batch.DoCodeAnalysisOnProjekt(prj, ${emitPy27String(outPath)})`,
-            "batch.CloseProject(prj)",
-            `if not ok: raise RuntimeError("DoCodeAnalysisOnProjekt failed")`,
-          ].join("\n") + "\n";
+        // CLASS 2 >= 02.04 renamed DoCodeAnalysisOnProjekt -> DoCodeAnalysisOnProject.
+        const analysisCall = args.source_file
+          ? `ok = batch.DoCodeAnalysisOnFile(prj, ${emitPy27String(args.source_file)}, ${emitPy27String(outPath)})`
+          : `ok = batch.DoCodeAnalysisOnProject(prj, ${emitPy27String(outPath)})`;
+        const script = baseLines([analysisCall, `if not ok: raise RuntimeError("DoCodeAnalysisOnProject failed")`]);
 
-        const br = await runScript(script, logPath);
+        const br = await runScript(script, logPath, timeoutMs);
         let summary: unknown = {};
         if (br.ok && existsSync(outPath)) {
           try {
@@ -186,12 +222,81 @@ export async function plcDiagnosticsHandler(args: {
             const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
             const parsed = parser.parse(rawXml);
             summary = parsed;
-          } catch (e) {
+          } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
             summary = { error: `Failed to parse analysis XML: ${msg}`, path: outPath };
           }
         }
-        return batchResultToResponse(br, { analysisResult: summary });
+        return batchResultToResponse(br, { analysisResult: summary, outputPath: outPath });
+      }
+
+      case "download_os": {
+        if (!args.os_path) {
+          return {
+            content: [{ type: "text" as const, text: "os_path is required for action 'download_os'" }],
+            isError: true,
+          };
+        }
+        if (!existsSync(args.os_path)) {
+          return {
+            content: [{ type: "text" as const, text: `OS file not found: ${args.os_path}` }],
+            isError: true,
+          };
+        }
+        if (!conn) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "connection is required for action 'download_os' (the reboot after install aborts with a lost connection otherwise).",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const script = baseLines([
+          `ok = batch.DownloadOS(${emitPy27String(conn)}, ${emitPy27String(args.os_path)})`,
+          `if not ok: raise RuntimeError("DownloadOS failed")`,
+        ]);
+
+        const br = await runScript(script, logPath, timeoutMs);
+        return batchResultToResponse(br, {
+          hints: [
+            "The control reboots after the OS install; allow up to several minutes before it is reachable again.",
+          ],
+        });
+      }
+
+      case "clear_ram_image": {
+        if (!conn) {
+          return {
+            content: [{ type: "text" as const, text: "connection is required for action 'clear_ram_image'" }],
+            isError: true,
+          };
+        }
+        const script = baseLines([
+          `ok = batch.ClearRamImage(${emitPy27String(conn)})`,
+          `if not ok: raise RuntimeError("ClearRamImage failed")`,
+        ]);
+
+        const br = await runScript(script, logPath, timeoutMs);
+        return batchResultToResponse(br);
+      }
+
+      case "save_project_on_plc": {
+        const script = baseLines([`batch.SaveProjectOnPLC(prj, ${emitPy27String(conn)})`]);
+        const br = await runScript(script, logPath, timeoutMs);
+        return batchResultToResponse(br);
+      }
+
+      case "download_connection_file": {
+        const script = baseLines([
+          args.connection_file
+            ? `batch.DownloadConnectionFile(prj, ${emitPy27String(conn)}, ${emitPy27String(args.connection_file)})`
+            : `batch.DownloadConnectionFile(prj, ${emitPy27String(conn)})`,
+        ]);
+        const br = await runScript(script, logPath, timeoutMs);
+        return batchResultToResponse(br);
       }
 
       default:
