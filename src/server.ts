@@ -32,6 +32,8 @@ import { hmiRuntimeSchema, hmiRuntimeHandler } from "./tools/hmiRuntime.js";
 import { plcDiagnosticsSchema, plcDiagnosticsHandler } from "./tools/plcDiagnostics.js";
 import { larsRuntimeSchema, larsRuntimeHandler } from "./tools/larsRuntime.js";
 import { validateGuidsSchema, validateGuidsHandler } from "./tools/validateGuids.js";
+import { checkJobStatusSchema, checkJobStatusHandler } from "./tools/checkJobStatus.js";
+import { createBootdiskSchema, createBootdiskHandler } from "./tools/createBootdisk.js";
 import { registerResources } from "./resources/registerResources.js";
 import { cleanupScratch } from "./utils/engine.js";
 
@@ -56,6 +58,14 @@ server.tool(
   lasalStatusSchema,
   { readOnlyHint: true, idempotentHint: true },
   lasalStatusHandler,
+);
+
+server.tool(
+  "check_job_status",
+  "Poll the status of a background job started with async: true (build_project, deploy_all, deploy_solution, lse_project). Omit jobId to list recent jobs.",
+  checkJobStatusSchema,
+  { readOnlyHint: true, idempotentHint: true },
+  checkJobStatusHandler,
 );
 
 server.tool(
@@ -120,10 +130,18 @@ server.tool(
 
 server.tool(
   "build_project",
-  "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first.",
+  "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first. Supports async: true (returns a jobId for check_job_status).",
   buildProjectSchema,
   { openWorldHint: true },
   buildProjectHandler,
+);
+
+server.tool(
+  "create_class2_bootdisk",
+  "Create a CLASS 2 bootdisk (update stick): plain bootdisk or the full Update-Tool flavor with update script, Autoexec.lsl, LasalOS image, VISUDesigner publish folder and MultiMaster Stations.txt. Platform AUTO/ALL/ARM/X86.",
+  createBootdiskSchema,
+  { destructiveHint: true },
+  createBootdiskHandler,
 );
 
 server.tool(
@@ -196,11 +214,12 @@ server.tool(
 server.tool(
   "lse_project",
   "Run LASAL SCREEN (LSE) engine operations on a .lpr screen project via the LASALScreen COM automation: " +
-    "info (screens/windows/servers/text lists/languages/settings inventory), compile (Runtime output folder), " +
+    "info (screens/windows/servers/text lists/languages/settings inventory), create (fresh project), compile (Runtime output folder), " +
     "download to a panel (Download & Run), and apply_changes with granular operations: " +
     "merge/fuse projects, export_xml/import_xml text round-trips, import_variables (CLASS 2 references), " +
-    "textlist_* translations, bulk update_buttons/update_softkeys theming, settings_set (resolution/compiler/online), image_insert. " +
-    "The .lpr itself is binary — never edit it directly; use this tool or the editor.",
+    "textlist_* translations, server_get_property/server_set_property (limits, unit, menu, state schema, hostname, …), " +
+    "bulk update_buttons/update_softkeys theming, settings_set (resolution/compiler/online), image_insert. " +
+    "The .lpr itself is binary — never edit it directly; use this tool or the editor. Supports async: true (returns a jobId for check_job_status).",
   lseProjectSchema,
   { destructiveHint: true, openWorldHint: true },
   lseProjectHandler,
@@ -210,7 +229,7 @@ server.tool(
 
 server.tool(
   "deploy_all",
-  "Full deploy pipeline: compile → download PLC → start PLC → verify state → compile LASAL SCREEN (.lpr, when present) → optional SCREEN download → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags.",
+  "Full deploy pipeline: compile → download PLC → start PLC → verify state → compile LASAL SCREEN (.lpr, when present) → optional SCREEN download → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags. Supports async: true (returns a jobId for check_job_status).",
   deployAllSchema,
   { openWorldHint: true },
   deployAllHandler,
@@ -219,7 +238,7 @@ server.tool(
 server.tool(
   "deploy_solution",
   "Multi-station deploy via MachineManager: generates a .lutc update file from the solution (class2/screen/visu downloads, OS updates, file transfers, run/boot, channel writes, CLI commands) and executes it with MachineManager.exe /update. " +
-    "This is the official flow for pushing LASAL SCREEN projects together with CLASS 2 to the same panel. Use dry_run to review the generated .lutc first.",
+    "This is the official flow for pushing LASAL SCREEN projects together with CLASS 2 to the same panel. Use dry_run to review the generated .lutc first. Supports async: true; the newest MachineManager per-run log is returned with the result.",
   deploySolutionSchema,
   { destructiveHint: true, openWorldHint: true },
   deploySolutionHandler,
@@ -310,7 +329,7 @@ Example skeleton:
 //{{LSL_DECLARATION
 #include "..\\..\\Class\\Motor\\Motor.h"
 (*!
-<Class Name="Motor" GUID="{...}" CyclicTask="true" DefCyclictime="cCyTb" SharedCommandTable="true" Objectsize="(284,120)">
+<Class Name="Motor" GUID="{...}" CyclicTask="true" DefCyclictime="1 ms" SharedCommandTable="true" Objectsize="(284,120)">
   <Channels>
     <Server Name="ClassSvr" GUID="{...}" WriteProtected="true"/>
     <Server Name="s_Speed" GUID="{...}" Visualized="true" Retentive="SRam"/>
@@ -490,6 +509,74 @@ document.querySelector('sig-app').activeView
   must not share the class name (\`C_<Name>.cpp\`)
 - After any code changes, **always compile** to check for errors before deploying
 `;
+
+// ─── Prompts ─────────────────────────────────────────────────────────────────
+
+server.prompt(
+  "deploy-checklist",
+  "Guided deploy: orient, compile, deploy PLC + HMI (+ LASAL SCREEN), verify.",
+  {},
+  () => ({
+    messages: [
+      {
+        role: "user" as const,
+        content: {
+          type: "text" as const,
+          text: [
+            "Run a careful full deployment of the selected LASAL project. Follow these steps:",
+            "1. Call lasal_status and verify: selected project, stations, engine paths, LASALScreen automation registration, and target reachability.",
+            "2. Call build_project compile (and lse_project compile for screen projects) and STOP if a log shows errors.",
+            "3. Call deploy_all with compile:false, download_plc:true, start_plc:true, and enable the LSE/VISU steps that apply.",
+            "4. Verify: control_plc get_state (expect Run, note processorArch), a sample plc_values read, and for screens lars_runtime screenshot when simulating locally.",
+            "Report each step's ok/error and the exact log paths. Never ignore a failing step.",
+          ].join("\n"),
+        },
+      },
+    ],
+  }),
+);
+
+server.prompt(
+  "bring-up-simulation",
+  "Get a station running locally via LARS without hardware (compile, download, start, screenshot).",
+  {},
+  () => ({
+    messages: [
+      {
+        role: "user" as const,
+        content: {
+          type: "text" as const,
+          text: [
+            "Bring up a station in local LARS simulation (no hardware):",
+            "1. Call lars_runtime simulate (station or name as needed) — it creates the workspace (CLASS 2 + LASAL SCREEN), switches ARM targets to PC, compiles, downloads and starts the instance.",
+            "2. If the response is not healthy, call lars_runtime list and lasal_status to diagnose (LARS window/ports).",
+            "3. Call lars_runtime screenshot to verify the rendered screen visually.",
+            "4. For live values: lars_runtime set_station_target first, then plc_values.",
+            "Report the workspace, online port, and each step result.",
+          ].join("\n"),
+        },
+      },
+    ],
+  }),
+);
+
+server.prompt("translate-visu", "Round-trip VISUDesigner text lists through CSV for translation.", {}, () => ({
+  messages: [
+    {
+      role: "user" as const,
+      content: {
+        type: "text" as const,
+        text: [
+          "Translate the VISUDesigner project text lists:",
+          "1. visu_project apply_changes with csv_export_text_lists to a scratch CSV (optionally restrict languages).",
+          "2. Edit the CSV (utf-8) to fill in the target language columns; keep IDs unchanged.",
+          "3. visu_project apply_changes with csv_import_text_lists pointing at the edited CSV.",
+          "4. visu_project apply_changes with publish (or download) to push, and report how many texts changed.",
+        ].join("\n"),
+      },
+    },
+  ],
+}));
 
 // ─── Resources ───────────────────────────────────────────────────────────────
 

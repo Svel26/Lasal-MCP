@@ -30,7 +30,7 @@ when the server is registered 32-bit.
 ## 2. Object model (from the type library)
 
 ### IApplication
-`Open(PrjFileName)` · `New(PrjFileName)` · `ActiveProject` ·
+`Open(PrjFileName)` · `New(PrjFileName)` (verified: creates a fresh project) · `ActiveProject` ·
 `ExportTo(PrjFileName, Overwrite)` · `ShowWindow(lKind)` · `EnableLSE(bEnableLSE)` ·
 `LogFileName` · `LogLevel` · `TestFunc_V1_5`
 
@@ -66,6 +66,13 @@ Collections: `Screens` · `Windows` · `Servers` · `Images` · `TextLists` · `
 ### Collections / items
 - `IScreenCollection.Item(ScreenIdentifier, IDIsIndex)` · `.Count`; `IScreen`: `Name`, `Delete`, `Export`, `TextList`, `UpdateButton(ButtonName, PropertyIndex, variant_in, Invers)`
 - `IServerCollection.Item(ServerIdentifier, StationNumber)` · `.Count`; `IServer`: `Name`, `Delete`, `Export`, `Property(PropertyIndex)` (get/set), `SetTextProperty(PropertyIndex, TextMngrName, TextIndex)`, `SetTextPropertyParam(PropertyIndex, ParameterIndex, ParameterValue)`
+
+  *Server access note (verified on 01.01.197):* the station-number parameter of `Item` is
+  mandatory — a name lookup without it fails with "Missing parameter (station number)", and
+  passing the wrong station fails with "Requested server not found". The practical headless
+  approach (used by the MCP `server_get_property`/`server_set_property` operations) is to
+  **enumerate** with `Item(index)` and match `Name`, then get/set via `Property(id)` with the
+  `LSServerProperty` constants above.
 - `ITextListCollection.Item(TextListIdentifier)` · `.Count` · `Insert(TextListName, Text)`; `ITextListItem`: `Name`, `Export`, `Item(TextItemIdentifier)` · `.Count` · `ItemGUID(strGUID)` · `Insert(Text)`; `ITextItem`: `Text(LanguageID)` (get/set), `GUID(LanguageID)`
 - `IWindowCollection` / `ILSEWindow`: as screens
 - `IImageCollection.Item(ImageIdentifier)` · `.Count` · `Insert(ImageFile, TransparentRGB)`; `ILSEImage`: `Name`, `Delete`
@@ -104,6 +111,13 @@ deselect languages/text lists — the automation equivalent of that selection is
 not exposed in the published type library. `AddContainerInfo`/`UseSortedArray`
 exist for the scripting XML export (per change history DEVSW-514) but do not
 satisfy the language gate.
+
+Re-verified after the full LASAL suite update (CLASS 2 02.04.001, VISUDesigner
+01.04.004, MachineManager 01.00.057, LARS 01.03.216 — LASAL SCREEN unchanged at
+1.1.197): a project created fresh through `IApplication.New` shows the same gate,
+so it is intrinsic to the 01.01.197 automation interface rather than project
+state. `npm run test:lab` carries a watchdog that flags it if a future LSE build
+fixes the gate.
 
 Practical alternatives:
 - export once from the LSE editor and let agents work on the XML file, importing via `ImportFromXML` (import path is not gated), or

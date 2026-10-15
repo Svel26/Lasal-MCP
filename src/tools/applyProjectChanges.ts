@@ -191,6 +191,78 @@ const SetCompilerVersionOp = z.object({
   version: z.string().describe("Compiler version string accepted by batch.SetCompilerVersion (e.g. 'C75')."),
 });
 
+const CopyClassOp = z.object({
+  type: z.literal("copy_class"),
+  sourceProject: z.string().describe("Path to the SOURCE .lcp that contains the class."),
+  className: z.string().describe("Class name to copy."),
+  overwrite: z.boolean().optional().default(true).describe("Overwrite an existing class with the same name."),
+});
+
+const CopyNetworkOp = z.object({
+  type: z.literal("copy_network"),
+  sourceProject: z.string().describe("Path to the SOURCE .lcp that contains the network."),
+  network: z.string().describe("Network name to copy."),
+  overwrite: z.boolean().optional().default(true).describe("Overwrite an existing network with the same name."),
+});
+
+const ReplaceObjectOp = z.object({
+  type: z.literal("replace_object"),
+  sourceProject: z.string().describe("Path to the SOURCE .lcp that contains the replacement object's network."),
+  network: z.string().describe("Target network in this project."),
+  objectName: z.string().describe("Object in the target network to replace."),
+  sourceNetwork: z.string().describe("Network in the source project that contains the replacement object."),
+  sourceObject: z.string().describe("Replacement object name in the source project."),
+  useSourceConnections: z.boolean().optional().default(false).describe("Adopt the source object's connections."),
+  checkObjectName: z.boolean().optional().default(true).describe("Verify the object name matches."),
+});
+
+const AddLibraryOp = z.object({
+  type: z.literal("add_library"),
+  library: z.string().describe("Library to add: path to a library .lcp or a registered library name."),
+});
+
+const ImportLczOp = z.object({
+  type: z.literal("import_lcz"),
+  file: z.string().describe("Path to a .lcz class/network import bundle."),
+  overwrite: z.boolean().optional().default(true),
+  keepExistingLinked: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Keep existing classes linked instead of replacing."),
+});
+
+const UpdateReferencedOp = z.object({
+  type: z.literal("update_referenced"),
+  scope: z
+    .enum(["classes", "networks"])
+    .optional()
+    .default("classes")
+    .describe("Refresh linked library classes or networks."),
+});
+
+const CalculateResourcesOp = z.object({
+  type: z.literal("calculate_resources"),
+  outputPath: z.string().optional().describe("Optional path for the resource export file."),
+});
+
+const MmChangeConnectionOp = z.object({
+  type: z.literal("mm_change_connection"),
+  station: z.string().describe("MultiMaster station name."),
+  newConnection: z.string().describe("New connection configuration name (address book)."),
+});
+
+const MmUpdateServerListOp = z.object({
+  type: z.literal("mm_update_server_list"),
+  station: z.string().describe("MultiMaster station name."),
+  file: z.string().optional().describe("Optional path of a server list file to use."),
+});
+
+const SetProjectRevisionOp = z.object({
+  type: z.literal("set_project_revision"),
+  revision: z.string().describe('Project revision string (e.g. "1.2").'),
+});
+
 // ─── File-level operations (no CLASS 2 batch API) ────────────────────────────
 
 const ClassServerSpec = z.object({
@@ -219,8 +291,14 @@ const CreateClassOp = z.object({
   cyclicTask: z.boolean().optional().default(false),
   realtimeTask: z.boolean().optional().default(false),
   backgroundTask: z.boolean().optional().default(false),
-  defCyclicTime: z.string().optional().default("cCyTb"),
-  defBackgroundTime: z.string().optional().default("cBgTb"),
+  defCyclicTime: z
+    .string()
+    .optional()
+    .default("1 ms")
+    .describe(
+      'Cyclic task time, e.g. "1 ms" (legacy project constants like cCyTb are not available on current compiler versions).',
+    ),
+  defBackgroundTime: z.string().optional().default("100 ms").describe('Background task time, e.g. "100 ms".'),
   servers: z
     .array(ClassServerSpec)
     .optional()
@@ -280,6 +358,16 @@ const OperationSchema = z.discriminatedUnion("type", [
   MoveNetworkToFolderOp,
   SetParameterValueOp,
   SetCompilerVersionOp,
+  CopyClassOp,
+  CopyNetworkOp,
+  ReplaceObjectOp,
+  AddLibraryOp,
+  ImportLczOp,
+  UpdateReferencedOp,
+  CalculateResourcesOp,
+  MmChangeConnectionOp,
+  MmUpdateServerListOp,
+  SetProjectRevisionOp,
   CreateClassOp,
   AddProjectFileOp,
   CleanProjectOp,
@@ -306,7 +394,9 @@ export const applyProjectChangesSchema = {
         "create_connection, delete_connection, set_init_value, delete_class, compile, download, " +
         "set_task_order, set_task_time, set_task_cpu_core, set_multi_cpu_core, set_visualized_flag, " +
         "set_comment_network, set_comment_object, set_network_options, reset_network_options, " +
-        "move_network_to_folder, set_parameter_value, set_compiler_version. " +
+        "move_network_to_folder, set_parameter_value, set_compiler_version, " +
+        "copy_class, copy_network, replace_object, add_library, import_lcz, update_referenced, " +
+        "calculate_resources, mm_change_connection, mm_update_server_list, set_project_revision. " +
         "File-level types (applied before the batch engine, no CLASS 2 API): create_class, " +
         "add_project_file, clean_project.",
     ),
@@ -468,6 +558,40 @@ function toBatchOp(op: BatchOperation): BatchOp {
       };
     case "set_compiler_version":
       return { type: "set_compiler_version", version: op.version };
+    case "copy_class":
+      return { type: "copy_class", sourceProject: op.sourceProject, className: op.className, overwrite: op.overwrite };
+    case "copy_network":
+      return { type: "copy_network", sourceProject: op.sourceProject, network: op.network, overwrite: op.overwrite };
+    case "replace_object":
+      return {
+        type: "replace_object",
+        sourceProject: op.sourceProject,
+        network: op.network,
+        objectName: op.objectName,
+        sourceNetwork: op.sourceNetwork,
+        sourceObject: op.sourceObject,
+        useSourceConnections: op.useSourceConnections,
+        checkObjectName: op.checkObjectName,
+      };
+    case "add_library":
+      return { type: "add_library", library: op.library };
+    case "import_lcz":
+      return {
+        type: "import_lcz",
+        file: op.file,
+        overwrite: op.overwrite,
+        keepExistingLinked: op.keepExistingLinked,
+      };
+    case "update_referenced":
+      return { type: "update_referenced", scope: op.scope };
+    case "calculate_resources":
+      return { type: "calculate_resources", outputPath: op.outputPath };
+    case "mm_change_connection":
+      return { type: "mm_change_connection", station: op.station, newConnection: op.newConnection };
+    case "mm_update_server_list":
+      return { type: "mm_update_server_list", station: op.station, file: op.file };
+    case "set_project_revision":
+      return { type: "set_project_revision", revision: op.revision };
   }
 }
 

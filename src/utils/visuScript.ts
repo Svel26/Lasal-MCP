@@ -58,6 +58,12 @@ export interface MediaItemDef {
   name?: string;
 }
 
+export interface LvdAlarmDef {
+  name: string;
+  server_or_group?: string;
+  revision?: string;
+}
+
 export type VisuOp =
   | { type: "update_all_stations" }
   | { type: "update_station"; station_nr: number }
@@ -89,6 +95,24 @@ export type VisuOp =
   | { type: "add_code_modules"; paths: string[] }
   | { type: "remove_code_modules"; names: string[] }
   | { type: "update_property_values" }
+  | { type: "update_runtime" }
+  | { type: "delete_station"; station_nr: number }
+  | { type: "station_details"; station_nr: number; output_path: string }
+  | {
+      type: "import_project";
+      source_path: string;
+      overwrite?: boolean;
+      deep_merge?: boolean;
+      user_folder?: boolean;
+    }
+  | { type: "add_languages"; languages: string[] }
+  | { type: "remove_languages"; languages: string[] }
+  | { type: "set_language_properties"; properties: PropertySetDef[] }
+  | { type: "add_alarms"; alarms: LvdAlarmDef[] }
+  | { type: "remove_alarms"; names: string[] }
+  | { type: "set_alarm_properties"; properties: PropertySetDef[] }
+  | { type: "set_alarm_servers_or_groups"; alarms: Array<{ name: string; server_or_group: string }> }
+  | { type: "set_alarm_revisions"; alarms: Array<{ name: string; revision: string }> }
   | { type: "download"; connection: string; flags?: number; add_runtime?: boolean };
 
 function emitStr(s: string): string {
@@ -178,6 +202,12 @@ function emitSchemeForInput(def: SchemeDef): string {
 
 function emitMediaItem(def: MediaItemDef): string {
   return `lvd.MediaItem(${emitStr(def.media_type)}, ${emitStr(def.path ?? def.name ?? "")})`;
+}
+
+function emitAlarm(def: LvdAlarmDef): string {
+  const server = def.server_or_group !== undefined ? emitStr(def.server_or_group) : "None";
+  const revision = def.revision !== undefined ? emitStr(def.revision) : "None";
+  return `lvd.Alarm(${emitStr(def.name)}, ${server}, ${revision})`;
 }
 
 export function buildVisuScript(
@@ -306,6 +336,61 @@ export function buildVisuScript(
         break;
       case "update_property_values":
         opLines.push("lvd.UpdatePropertyValues(prj)");
+        break;
+      case "update_runtime":
+        opLines.push("lvd.UpdateRuntime(prj)");
+        break;
+      case "delete_station":
+        opLines.push(`lvd.DeleteStation(prj, ${op.station_nr})`);
+        break;
+      case "station_details":
+        opLines.push(
+          "import json",
+          `_details = lvd.GetUpdateStationDetails(prj, ${op.station_nr})`,
+          `_f = open(${emitStr(op.output_path)}, "w", encoding="utf-8")`,
+          `_f.write(json.dumps(_details, default=lambda o: getattr(o, "__dict__", str(o)), indent=2))`,
+          "_f.close()",
+        );
+        break;
+      case "import_project":
+        opLines.push(
+          `_src = lvd.LoadProject(${emitStr(op.source_path)})`,
+          `if _src is None: raise RuntimeError('Failed to load source project for import')`,
+          `lvd.ImportProject(_src, prj, ${op.overwrite !== false ? "True" : "False"}, ${op.deep_merge !== false ? "True" : "False"}, ${op.user_folder !== false ? "True" : "False"})`,
+          "lvd.CloseProject(_src)",
+        );
+        break;
+      case "add_languages":
+        opLines.push(`lvd.AddLanguages(prj, ${emitStrList(op.languages)})`);
+        break;
+      case "remove_languages":
+        opLines.push(`lvd.RemoveLanguages(prj, ${emitStrList(op.languages)})`);
+        break;
+      case "set_language_properties":
+        opLines.push(`lvd.SetLanguageProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`);
+        break;
+      case "add_alarms":
+        opLines.push(`lvd.AddAlarms(prj, [${op.alarms.map(emitAlarm).join(", ")}])`);
+        break;
+      case "remove_alarms":
+        opLines.push(`lvd.RemoveAlarms(prj, ${emitStrList(op.names)})`);
+        break;
+      case "set_alarm_properties":
+        opLines.push(`lvd.SetAlarmProperties(prj, [${op.properties.map(emitPropertySet).join(", ")}])`);
+        break;
+      case "set_alarm_servers_or_groups":
+        opLines.push(
+          `lvd.SetAlarmServersOrGroups(prj, [${op.alarms
+            .map((a) => `lvd.Alarm(${emitStr(a.name)}, ${emitStr(a.server_or_group)}, None)`)
+            .join(", ")}])`,
+        );
+        break;
+      case "set_alarm_revisions":
+        opLines.push(
+          `lvd.SetAlarmRevisions(prj, [${op.alarms
+            .map((a) => `lvd.Alarm(${emitStr(a.name)}, None, ${emitStr(a.revision)})`)
+            .join(", ")}])`,
+        );
         break;
       case "download": {
         const flags = op.flags ?? 0;

@@ -234,6 +234,81 @@ const RemoveCodeModulesOp = z.object({
   names: z.array(z.string()).describe("File names (with extension) of code modules to remove"),
 });
 const UpdatePropertyValuesOp = z.object({ type: z.literal("update_property_values") });
+
+// ── New in VISUDesigner 01.04 ────────────────────────────────────────────────
+
+const UpdateRuntimeOp = z.object({
+  type: z.literal("update_runtime"),
+});
+
+const DeleteStationOp = z.object({
+  type: z.literal("delete_station"),
+  station_nr: z.number().int().describe("Station number to delete from the project."),
+});
+
+const StationDetailsOp = z.object({
+  type: z.literal("station_details"),
+  station_nr: z.number().int().describe("Station number to diff against the project state."),
+  output_path: z.string().describe("Destination JSON file for the update-station details."),
+});
+
+const ImportProjectOp = z.object({
+  type: z.literal("import_project"),
+  source_path: z.string().describe("Source .lvp project to import from."),
+  overwrite: z.boolean().optional().default(true),
+  deep_merge: z.boolean().optional().default(true),
+  user_folder: z.boolean().optional().default(true).describe("Import the user-defined folder structure."),
+});
+
+const AddLanguagesOp = z.object({
+  type: z.literal("add_languages"),
+  languages: z.array(z.string()).describe("Language names/codes to add (e.g. ['De','En'])."),
+});
+
+const RemoveLanguagesOp = z.object({
+  type: z.literal("remove_languages"),
+  languages: z.array(z.string()),
+});
+
+const SetLanguagePropertiesOp = z.object({
+  type: z.literal("set_language_properties"),
+  properties: z
+    .array(propertySetDefSchema)
+    .describe(
+      "Property sets where 'element' is the language name. Use the properties supported by lvd.Language (e.g. the constants behind Language.NameSet / Language.RevisionSet).",
+    ),
+});
+
+const alarmDefSchema = z.object({
+  name: z.string().describe("Alarm name"),
+  server_or_group: z.string().optional().describe("Alarm server or group"),
+  revision: z.string().optional().describe("Alarm revision string"),
+});
+
+const AddAlarmsOp = z.object({
+  type: z.literal("add_alarms"),
+  alarms: z.array(alarmDefSchema).describe("Alarms to add (name, optional server/group and revision)."),
+});
+
+const RemoveAlarmsOp = z.object({
+  type: z.literal("remove_alarms"),
+  names: z.array(z.string()).describe("Alarm names to remove"),
+});
+
+const SetAlarmPropertiesOp = z.object({
+  type: z.literal("set_alarm_properties"),
+  properties: z.array(propertySetDefSchema).describe("Property sets where 'element' is the alarm name."),
+});
+
+const SetAlarmServersOrGroupsOp = z.object({
+  type: z.literal("set_alarm_servers_or_groups"),
+  alarms: z.array(z.object({ name: z.string(), server_or_group: z.string() })),
+});
+
+const SetAlarmRevisionsOp = z.object({
+  type: z.literal("set_alarm_revisions"),
+  alarms: z.array(z.object({ name: z.string(), revision: z.string() })),
+});
 const DownloadOp = z.object({
   type: z.literal("download"),
   connection: z
@@ -281,6 +356,18 @@ const OperationSchema = z.discriminatedUnion("type", [
   AddCodeModulesOp,
   RemoveCodeModulesOp,
   UpdatePropertyValuesOp,
+  UpdateRuntimeOp,
+  DeleteStationOp,
+  StationDetailsOp,
+  ImportProjectOp,
+  AddLanguagesOp,
+  RemoveLanguagesOp,
+  SetLanguagePropertiesOp,
+  AddAlarmsOp,
+  RemoveAlarmsOp,
+  SetAlarmPropertiesOp,
+  SetAlarmServersOrGroupsOp,
+  SetAlarmRevisionsOp,
   DownloadOp,
 ]);
 
@@ -380,6 +467,36 @@ function toVisuOp(op: any): VisuOp {
       return { type: "remove_code_modules", names: op.names };
     case "update_property_values":
       return { type: "update_property_values" };
+    case "update_runtime":
+      return { type: "update_runtime" };
+    case "delete_station":
+      return { type: "delete_station", station_nr: op.station_nr };
+    case "station_details":
+      return { type: "station_details", station_nr: op.station_nr, output_path: op.output_path };
+    case "import_project":
+      return {
+        type: "import_project",
+        source_path: op.source_path,
+        overwrite: op.overwrite,
+        deep_merge: op.deep_merge,
+        user_folder: op.user_folder,
+      };
+    case "add_languages":
+      return { type: "add_languages", languages: op.languages };
+    case "remove_languages":
+      return { type: "remove_languages", languages: op.languages };
+    case "set_language_properties":
+      return { type: "set_language_properties", properties: op.properties };
+    case "add_alarms":
+      return { type: "add_alarms", alarms: op.alarms };
+    case "remove_alarms":
+      return { type: "remove_alarms", names: op.names };
+    case "set_alarm_properties":
+      return { type: "set_alarm_properties", properties: op.properties };
+    case "set_alarm_servers_or_groups":
+      return { type: "set_alarm_servers_or_groups", alarms: op.alarms };
+    case "set_alarm_revisions":
+      return { type: "set_alarm_revisions", alarms: op.alarms };
     case "download":
       return { type: "download", connection: op.connection, flags: op.flags, add_runtime: op.add_runtime };
     default:
@@ -414,7 +531,10 @@ export const visuProjectSchema = {
         "set_datapoint_properties | set_datatype_properties | add_schemes | remove_schemes | " +
         "add_scheme_entries | remove_scheme_entries | move_scheme_entries | set_scheme_inputs | " +
         "set_scheme_properties | set_scheme_entry_properties | add_media_items | remove_media_items | " +
-        "add_code_modules | remove_code_modules | update_property_values | download",
+        "add_code_modules | remove_code_modules | update_property_values | update_runtime | " +
+        "delete_station | station_details | import_project | add_languages | remove_languages | " +
+        "set_language_properties | add_alarms | remove_alarms | set_alarm_properties | " +
+        "set_alarm_servers_or_groups | set_alarm_revisions | download",
     ),
   connection: z.string().optional().describe("HMI connection string, e.g. 'TCPIP:192.168.1.100' (download only)."),
   flags: z

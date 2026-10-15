@@ -16,6 +16,7 @@ import {
   gcLarsWorkspaces,
   findLarsInstancesForStation,
   captureLarsWindow,
+  switchProjectTargetToPC,
   type LarsWorkspace,
 } from "../utils/lars.js";
 import {
@@ -27,9 +28,11 @@ import {
   type LarsInstanceInfo,
   type LasalState,
 } from "../state.js";
-import { HMI_DIR, LARS_GC_MIN_AGE_H, LARS_GC_STATIONS_DIRS } from "../utils/config.js";
+import { HMI_DIR, LARS_GC_MIN_AGE_H, LARS_GC_STATIONS_DIRS, TIMEOUTS } from "../utils/config.js";
 import { findLsmPath, parseSolution, readVisuStationIds } from "../utils/projectScanner.js";
 import { respond, fail } from "../utils/respond.js";
+import { runBatchOps } from "../utils/batchScript.js";
+import { batchToStepResult } from "../core/response.js";
 import { SCRATCH } from "../utils/engine.js";
 import { ensureScratch } from "../core/scratch.js";
 import { readFileSync } from "fs";
@@ -47,6 +50,7 @@ export const larsRuntimeSchema = {
       "target_pc",
       "gc",
       "screenshot",
+      "simulate",
     ])
     .describe(
       "'list' shows all configured LARS workspaces and their state (auto-cleans stale ones, but never the selected project's). " +
@@ -55,7 +59,7 @@ export const larsRuntimeSchema = {
         "'gc' runs lazy garbage collection: deletes auto-created workspaces that are not running and no longer referenced by any station .lss or published DataService stations.json, while always keeping workspaces of the selected project. " +
         "'set_station_target' points a station's .lss at its LARS instance (127.0.0.1:<port>); 'restore' reverts to the saved real target. " +
         "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore'). " +
-        "'screenshot' captures the LARS window of a running workspace (returns the PNG) — use it to visually verify LASAL SCREEN projects running locally.",
+        "'simulate' runs the full no-hardware loop in one call: ensure workspace (auto-creates), switch ARM targets to PC, compile, download to the local LARS instance and start it. 'screenshot' captures the LARS window of a running workspace (returns the PNG) — use it to visually verify LASAL SCREEN projects running locally.",
     ),
   name: z
     .string()
@@ -79,8 +83,23 @@ export const larsRuntimeSchema = {
     .string()
     .optional()
     .describe(
-      "Solution directory to auto-detect stations from and to scope station resolution (setup/list/start/stop/set_station_target/restore/target_pc. Defaults to the selected project.",
+      "Solution directory to auto-detect stations from and to scope station resolution (setup/list/start/stop/set_station_target/restore/target_pc/simulate. Defaults to the selected project.",
     ),
+  skip_compile: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("With action 'simulate': skip the CLASS 2 compile step (reuse the existing build). Default false."),
+  skip_download: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("With action 'simulate': skip the download step (only compile + start). Default false."),
+  compile_mode: z
+    .enum(["RebuildAll", "BuildChanges"])
+    .optional()
+    .default("RebuildAll")
+    .describe("With action 'simulate': CLASS 2 compile mode. Default RebuildAll (safest)."),
   dry_run: z
     .boolean()
     .optional()
@@ -96,7 +115,17 @@ export const larsRuntimeSchema = {
 };
 
 type LarsAction =
-  "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc" | "gc" | "screenshot";
+  | "list"
+  | "setup"
+  | "start"
+  | "stop"
+  | "remove"
+  | "set_station_target"
+  | "restore"
+  | "target_pc"
+  | "gc"
+  | "screenshot"
+  | "simulate";
 
 function detectRole(lcpPath: string): "plc" | "hmi" | "unknown" {
   try {
@@ -348,6 +377,9 @@ export async function larsRuntimeHandler(args: {
   project_dir?: string;
   dry_run?: boolean;
   min_age_h?: number;
+  skip_compile?: boolean;
+  skip_download?: boolean;
+  compile_mode?: "RebuildAll" | "BuildChanges";
 }) {
   const state = readState();
   const action = args.action;
@@ -525,6 +557,108 @@ export async function larsRuntimeHandler(args: {
       hint: dryRun
         ? "Dry run — nothing deleted. Remove dry_run:false to actually clean up."
         : "Unreferenced auto-created workspaces were removed. 'start' will auto-recreate one on demand if a station needs it again.",
+    });
+  }
+
+  if (action === "simulate") {
+    const req = ensureWorkspaceForStart(args, state);
+    if (req.error) return fail(req.error, []);
+    const workspace = req.workspace!;
+    const inst = req.instance ?? getLarsInstance(state, workspace.name);
+
+    const lcpPath = inst?.lcpPath ?? args.lcp_path;
+    if (!lcpPath || !existsSync(lcpPath)) {
+      return fail(`No CLASS 2 project linked to workspace '${workspace.name}'.`, [
+        "Run lars_runtime setup for the station first, or pass lcp_path.",
+      ]);
+    }
+
+    const steps: Record<string, unknown> = {};
+    const hints: string[] = [];
+
+    // LARS is an x86 runtime — ARM images are rejected.
+    const raw = readFileSync(lcpPath, "latin1");
+    const targetTag = raw.match(/<Target\s[^>]*?>/);
+    if (targetTag && /\bProcessor\s*=\s*"ARM"/.test(targetTag[0])) {
+      const switched = switchProjectTargetToPC(lcpPath);
+      if ("error" in switched) return fail(switched.error, []);
+      if (inst && inst.originalTargetTag === undefined) {
+        inst.originalTargetTag = switched.previousTag;
+        setLarsInstance(state, inst);
+        writeState(state);
+      }
+      steps.target_pc = { ok: true, targetBefore: switched.previousTag, targetNow: switched.newTag };
+      hints.push("Compile target switched ARM → PC for LARS. Use lars_runtime restore to revert it.");
+    }
+
+    if (!args.skip_compile) {
+      const br = await runBatchOps(
+        lcpPath,
+        [{ type: "compile", optionName: args.compile_mode ?? "RebuildAll" }],
+        TIMEOUTS.compile,
+      );
+      steps.compile = batchToStepResult(br);
+      if (!br.ok) {
+        return respond({
+          ok: false,
+          workspace: workspace.name,
+          steps,
+          error: "Compile failed.",
+          hints: [...hints, ...(br.hints ?? [])],
+        });
+      }
+    }
+
+    if (!args.skip_download) {
+      const connection = `TCPIP:127.0.0.1:${workspace.onlinePort}`;
+      const br = await runBatchOps(
+        lcpPath,
+        [{ type: "download", connection, addLoaderAnyway: true }],
+        TIMEOUTS.download,
+      );
+      steps.download = batchToStepResult(br);
+      if (!br.ok) {
+        return respond({
+          ok: false,
+          workspace: workspace.name,
+          steps,
+          error: "Download to the LARS instance failed.",
+          hints: [...hints, ...(br.hints ?? [])],
+        });
+      }
+    }
+
+    const result = await startLars(workspace);
+    if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
+
+    let healthy = result.healthy;
+    if (!healthy && result.running) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 8000) {
+        await new Promise((r) => setTimeout(r, 500));
+        healthy = await isLarsHealthy(workspace.onlinePort);
+        if (healthy) break;
+      }
+    }
+
+    if (inst) {
+      inst.pid = result.pid ?? inst.pid;
+      inst.onlinePort = workspace.onlinePort;
+      setLarsInstance(state, inst);
+      writeState(state);
+    }
+    steps.start = { ok: result.running, pid: result.pid, healthy, onlinePort: workspace.onlinePort };
+
+    hints.push(
+      "Verify visuals with lars_runtime screenshot. Run lars_runtime set_station_target once so control_plc/plc_values also target this instance.",
+    );
+    return respond({
+      ok: healthy,
+      workspace: workspace.name,
+      onlinePort: workspace.onlinePort,
+      ...(workspace.screenProjectPath ? { screenProjectPath: workspace.screenProjectPath } : {}),
+      steps,
+      hints,
     });
   }
 
