@@ -14,6 +14,7 @@ import {
   mapStationsToLars,
   findLarsInstancesForStation,
   instanceBelongsToProject,
+  resolveEffectiveOnlinePort,
   type LarsInstanceInfo,
 } from "../src/utils/lars.js";
 import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
@@ -517,5 +518,241 @@ describe("mapStationsToLars", () => {
     expect(changed).toHaveLength(1);
     expect(changed[0]!.to).toBe("127.0.0.1:1964");
     expect((stations[0] as any).port).toBe(1964);
+  });
+});
+
+describe("LARS config written by LARSConfigTool (Desc attributes)", () => {
+  let configPath: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-lars-desc-"));
+    configPath = join(tempDir, "lasalos2.xml");
+    process.env.LASAL_LARS_CONFIG = configPath;
+    const sample = `<?xml version="1.0" encoding="UTF-8"?>
+<LARSCONFIGURATIONS ConfigVersion="2">
+\t<WORKSPACE Name="Vobra_PLC">
+\t\t<MEMORY>
+\t\t\t<DATALEN Unit="MiB">40</DATALEN>
+\t\t\t<CODELEN Unit="MiB">8</CODELEN>
+\t\t</MEMORY>
+\t\t<PATH>
+\t\t\t<ACTIVEDAT>C:\\</ACTIVEDAT>
+\t\t\t<AUTOEXEC>C:\\Autoexec.lsl</AUTOEXEC>
+\t\t\t<LSLWORK>C:\\LSLWORK</LSLWORK>
+\t\t\t<SRAMDAT>C:\\</SRAMDAT>
+\t\t</PATH>
+\t\t<COMTCP>
+\t\t\t<ONLINE Desc="Port for the online comunication.">1974</ONLINE>
+\t\t\t<COMLINK_SRVR Desc="Comlink command server port.">1975</COMLINK_SRVR>
+\t\t\t<COMLINK Desc="Base port number used for clients.">1020</COMLINK>
+\t\t\t<ALARM Desc="Alarm-Server port of the LSE-Kernel.">1977</ALARM>
+\t\t\t<DATASERVICETCPPORT Desc="Datalink-Server port of the LSE-Kernel.">2402</DATASERVICETCPPORT>
+\t\t</COMTCP>
+\t\t<RESOLUTION></RESOLUTION>
+\t\t<DRIVEMAP>
+\t\t\t<DRIVEMAP_ELEMENT>
+\t\t\t\t<DRIVE>C:</DRIVE>
+\t\t\t\t<PATH>C:\\</PATH>
+\t\t\t</DRIVEMAP_ELEMENT>
+\t\t</DRIVEMAP>
+\t\t<IP_MAP>
+\t\t</IP_MAP>
+\t</WORKSPACE>
+</LARSCONFIGURATIONS>
+`;
+    writeFileSync(configPath, sample, "utf-8");
+  });
+
+  afterEach(() => {
+    delete process.env.LASAL_LARS_CONFIG;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("parses port values from elements that carry Desc attributes", () => {
+    const workspaces = readLarsWorkspaces();
+    expect(workspaces).toHaveLength(1);
+    const ws = workspaces[0]!;
+    // Regression: a raw String() of the {#text, @_Desc} object fell back to 1954 silently.
+    expect(ws.onlinePort).toBe(1974);
+    expect(ws.comlinkServerPort).toBe(1975);
+    expect(ws.comlinkBasePort).toBe(1020);
+    expect(ws.alarmPort).toBe(1977);
+    expect(ws.dataServiceTcpPort).toBe(2402);
+  });
+
+  it("rewrites the config in the canonical LARSConfigTool shape", () => {
+    writeLarsWorkspaces(readLarsWorkspaces());
+    const raw = readFileSync(configPath, "utf-8");
+    expect(raw).toContain('<ONLINE Desc="Port for the online comunication.">1974</ONLINE>');
+    expect(raw).toContain(
+      '<DATASERVICETCPPORT Desc="Datalink-Server port of the LSE-Kernel.">2402</DATASERVICETCPPORT>',
+    );
+    const again = readLarsWorkspaces();
+    expect(again[0]!.onlinePort).toBe(1974);
+    expect(again[0]!.dataServiceTcpPort).toBe(2402);
+  });
+});
+
+describe("resolveEffectiveOnlinePort", () => {
+  it("prefers the first answering candidate (workspace port before the default)", async () => {
+    const answering = new Set([1974, 1954]);
+    const port = await resolveEffectiveOnlinePort([1974, 1954], [], async (p) => answering.has(p), 0, 100);
+    expect(port).toBe(1974);
+  });
+
+  it("falls back to the default port when the configured port never answers", async () => {
+    const port = await resolveEffectiveOnlinePort([1974, 1954], [], async (p) => p === 1954, 0, 100);
+    expect(port).toBe(1954);
+  });
+
+  it("never picks a port another running instance owns", async () => {
+    const port = await resolveEffectiveOnlinePort([1974, 1954], [1974], async () => true, 0, 100);
+    expect(port).toBe(1954);
+  });
+
+  it("returns null when nothing answers", async () => {
+    const port = await resolveEffectiveOnlinePort([1974, 1954], [], async () => false, 50, 10);
+    expect(port).toBeNull();
+  });
+
+  it("returns null when every candidate is owned", async () => {
+    const port = await resolveEffectiveOnlinePort([1974, 1954], [1974, 1954], async () => true, 0, 100);
+    expect(port).toBeNull();
+  });
+});
+
+describe("lossless LARS config writes", () => {
+  let configPath: string;
+  let tempDir: string;
+
+  const fixture = () => `<?xml version="1.0" encoding="UTF-8"?>
+<LARSCONFIGURATIONS ConfigVersion="2">
+\t<GLOBAL_NOTE>keep me</GLOBAL_NOTE>
+\t<WORKSPACE Name="DEFAULT" Remark="keep-remark">
+\t\t<MEMORY>
+\t\t\t<DATALEN Unit="MiB">40</DATALEN>
+\t\t\t<CODELEN Unit="MiB">8</CODELEN>
+\t\t</MEMORY>
+\t\t<PATH>
+\t\t\t<ACTIVEDAT>C:\\</ACTIVEDAT>
+\t\t\t<AUTOEXEC>C:\\Autoexec.lsl</AUTOEXEC>
+\t\t\t<LSLWORK>C:\\LSLWORK</LSLWORK>
+\t\t\t<SRAMDAT>C:\\</SRAMDAT>
+\t\t</PATH>
+\t\t<COMTCP>
+\t\t\t<ONLINE Desc="Port for the online comunication.">1954</ONLINE>
+\t\t\t<COMLINK_SRVR>1955</COMLINK_SRVR>
+\t\t\t<COMLINK>1000</COMLINK>
+\t\t\t<ALARM>1957</ALARM>
+\t\t</COMTCP>
+\t\t<RESOLUTION></RESOLUTION>
+\t\t<DRIVEMAP>
+\t\t\t<DRIVEMAP_ELEMENT>
+\t\t\t\t<DRIVE>C:</DRIVE>
+\t\t\t\t<PATH>C:\\</PATH>
+\t\t\t</DRIVEMAP_ELEMENT>
+\t\t</DRIVEMAP>
+\t\t<IP_MAP>
+\t\t</IP_MAP>
+\t</WORKSPACE>
+\t<WORKSPACE Name="Custom_PLC">
+\t\t<MEMORY>
+\t\t\t<DATALEN Unit="MiB">40</DATALEN>
+\t\t\t<CODELEN Unit="MiB">8</CODELEN>
+\t\t</MEMORY>
+\t\t<PATH>
+\t\t\t<ACTIVEDAT>C:\\</ACTIVEDAT>
+\t\t\t<AUTOEXEC>C:\\Autoexec.lsl</AUTOEXEC>
+\t\t\t<LSLWORK>C:\\LSLWORK</LSLWORK>
+\t\t\t<SRAMDAT>C:\\</SRAMDAT>
+\t\t</PATH>
+\t\t<COMTCP>
+\t\t\t<ONLINE Desc="Port for the online comunication.">1974</ONLINE>
+\t\t\t<COMLINK_SRVR Desc="Comlink command server port.">1975</COMLINK_SRVR>
+\t\t\t<COMLINK Desc="Base port number used for clients.">1020</COMLINK>
+\t\t\t<ALARM>1977</ALARM>
+\t\t\t<DATASERVICETCPPORT Desc="Datalink-Server port of the LSE-Kernel.">2402</DATASERVICETCPPORT>
+\t\t</COMTCP>
+\t\t<WINDOW_SETTINGS>
+\t\t\t<TITLE>My LARS</TITLE>
+\t\t</WINDOW_SETTINGS>
+\t\t<RESOLUTION></RESOLUTION>
+\t\t<DRIVEMAP>
+\t\t\t<DRIVEMAP_ELEMENT>
+\t\t\t\t<DRIVE>C:</DRIVE>
+\t\t\t\t<PATH>C:\\</PATH>
+\t\t\t</DRIVEMAP_ELEMENT>
+\t\t\t<DRIVEMAP_ELEMENT>
+\t\t\t\t<DRIVE>D:</DRIVE>
+\t\t\t\t<PATH>D:\\Data</PATH>
+\t\t\t</DRIVEMAP_ELEMENT>
+\t\t</DRIVEMAP>
+\t\t<IP_MAP>
+\t\t</IP_MAP>
+\t</WORKSPACE>
+\t<!-- keep this comment -->
+</LARSCONFIGURATIONS>
+`;
+
+  const blockOf = (raw: string, name: string) =>
+    raw.match(new RegExp(`<WORKSPACE Name="${name}"[\\s\\S]*?</WORKSPACE>`))?.[0];
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-lars-merge-"));
+    configPath = join(tempDir, "lasalos2.xml");
+    process.env.LASAL_LARS_CONFIG = configPath;
+    writeFileSync(configPath, fixture(), "utf-8");
+  });
+
+  afterEach(() => {
+    delete process.env.LASAL_LARS_CONFIG;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("updates only the fields the MCP owns and preserves everything else", () => {
+    const before = readFileSync(configPath, "utf-8");
+    const defaultBlockBefore = blockOf(before, "DEFAULT")!;
+    upsertLarsWorkspace("Custom_PLC", { onlinePort: 1994, classProjectPath: "C:\\proj\\PLC.lcp" });
+    const after = readFileSync(configPath, "utf-8");
+
+    // Modeled fields were updated; attributes on those elements survive.
+    expect(after).toContain('<ONLINE Desc="Port for the online comunication.">1994</ONLINE>');
+    expect(after).toContain("<CLASS_PRJ_PATH>C:\\proj\\PLC.lcp</CLASS_PRJ_PATH>");
+    // Foreign content survives.
+    expect(after).toContain("<GLOBAL_NOTE>keep me</GLOBAL_NOTE>");
+    expect(after).toContain("<!-- keep this comment -->");
+    expect(after).toContain('Remark="keep-remark"');
+    expect(after).toContain("<WINDOW_SETTINGS>\n\t\t\t<TITLE>My LARS</TITLE>\n\t\t</WINDOW_SETTINGS>");
+    // The second (D:) drive mapping survives untouched.
+    expect(after).toContain("<DRIVE>D:</DRIVE>\n\t\t\t\t<PATH>D:\\Data</PATH>");
+    // Other workspaces are byte-identical.
+    expect(blockOf(after, "DEFAULT")).toBe(defaultBlockBefore);
+    // Re-read sees the new values.
+    const ws = readLarsWorkspaces().find((w) => w.name === "Custom_PLC")!;
+    expect(ws.onlinePort).toBe(1994);
+    expect(ws.classProjectPath).toBe("C:\\proj\\PLC.lcp");
+  });
+
+  it("appends new workspaces without touching existing bytes", () => {
+    const before = readFileSync(configPath, "utf-8");
+    upsertLarsWorkspace("Proj_New", { onlinePort: 1984 });
+    const after = readFileSync(configPath, "utf-8");
+    expect(after.startsWith(before.slice(0, before.lastIndexOf("</LARSCONFIGURATIONS>")))).toBe(true);
+    expect(
+      readLarsWorkspaces()
+        .map((w) => w.name)
+        .sort(),
+    ).toEqual(["Custom_PLC", "DEFAULT", "Proj_New"]);
+  });
+
+  it("removals delete only the workspace block", () => {
+    const before = readFileSync(configPath, "utf-8");
+    const defaultBlockBefore = blockOf(before, "DEFAULT")!;
+    removeLarsWorkspace("Custom_PLC");
+    const after = readFileSync(configPath, "utf-8");
+    expect(after).not.toContain("Custom_PLC");
+    expect(after).toContain("<GLOBAL_NOTE>keep me</GLOBAL_NOTE>");
+    expect(blockOf(after, "DEFAULT")).toBe(defaultBlockBefore);
   });
 });

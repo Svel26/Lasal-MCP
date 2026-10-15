@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import {
   LARS_EXE,
+  DEFAULT_ONLINE_PORT,
   larsConfigPath,
   readLarsWorkspaces,
   upsertLarsWorkspace,
@@ -17,6 +18,8 @@ import {
   findLarsInstancesForStation,
   captureLarsWindow,
   switchProjectTargetToPC,
+  runningInstancePorts,
+  resolveEffectiveOnlinePort,
   type LarsWorkspace,
 } from "../utils/lars.js";
 import {
@@ -55,11 +58,11 @@ export const larsRuntimeSchema = {
     .describe(
       "'list' shows all configured LARS workspaces and their state (auto-cleans stale ones, but never the selected project's). " +
         "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp), wiring both the CLASS 2 project and the LASAL SCREEN (.lpr) project so LARS renders the screen locally. " +
-        "'start' launches a LARS instance (auto-creates the workspace first if the station is known but unconfigured), 'stop' terminates it, 'remove' deletes its workspace config. " +
+        "'start' launches a LARS instance (auto-creates the workspace first if the station is known but unconfigured); reports the effective online port it probed (LARS builds differ in which port they serve). 'stop' terminates it, 'remove' deletes its workspace config. " +
         "'gc' runs lazy garbage collection: deletes auto-created workspaces that are not running and no longer referenced by any station .lss or published DataService stations.json, while always keeping workspaces of the selected project. " +
-        "'set_station_target' points a station's .lss at its LARS instance (127.0.0.1:<port>); 'restore' reverts to the saved real target. " +
+        "'set_station_target' points a station's .lss at the online port its LARS instance actually services (probed; never a port another running instance owns); 'restore' reverts to the saved real target. " +
         "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore'). " +
-        "'simulate' runs the full no-hardware loop in one call: ensure workspace (auto-creates), switch ARM targets to PC, compile, download to the local LARS instance and start it. 'screenshot' captures the LARS window of a running workspace (returns the PNG) — use it to visually verify LASAL SCREEN projects running locally.",
+        "'simulate' runs the full no-hardware loop in one call: ensure workspace (auto-creates), switch ARM targets to PC, compile, start the local LARS instance (probing its effective online port), then download to it. 'screenshot' captures the LARS window of a running workspace (returns the PNG) — use it to visually verify LASAL SCREEN projects running locally.",
     ),
   name: z
     .string()
@@ -197,9 +200,20 @@ async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, Lar
   const inst = instances?.[ws.name];
   const pids = getLarsPids(ws.name);
   const running = pids.length > 0;
+  const effectivePort = inst?.effectiveOnlinePort;
+  let healthy = false;
+  if (running) {
+    const port = effectivePort ?? ws.onlinePort;
+    healthy = await isLarsHealthy(port);
+    // Instances started before effective-port probing existed may serve the default port.
+    if (!healthy && effectivePort === undefined && port !== DEFAULT_ONLINE_PORT) {
+      healthy = await isLarsHealthy(DEFAULT_ONLINE_PORT);
+    }
+  }
   return {
     name: ws.name,
     onlinePort: ws.onlinePort,
+    effectiveOnlinePort: effectivePort ?? null,
     comlinkServerPort: ws.comlinkServerPort,
     comlinkBasePort: ws.comlinkBasePort,
     alarmPort: ws.alarmPort,
@@ -207,7 +221,7 @@ async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, Lar
     screenProjectPath: ws.screenProjectPath ?? null,
     running,
     pid: pids[0] ?? inst?.pid ?? null,
-    healthy: running ? await isLarsHealthy(ws.onlinePort) : false,
+    healthy,
     stationName: inst?.stationName ?? null,
     lcpPath: inst?.lcpPath ?? null,
     lssPath: inst?.stationLssPath ?? null,
@@ -609,8 +623,48 @@ export async function larsRuntimeHandler(args: {
       }
     }
 
+    // LARS must be up (and answering) before the download — the CLASS 2 online
+    // connection needs a live listener, so start + probe come before it.
+    const result = await startLars(workspace);
+    if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
+
+    const owned = runningInstancePorts(state.larsInstances, workspace.name);
+    const effectivePort = await resolveEffectiveOnlinePort(
+      [workspace.onlinePort, DEFAULT_ONLINE_PORT],
+      owned,
+      (p) => isLarsHealthy(p),
+    );
+    const healthy = effectivePort !== null;
+
+    if (inst) {
+      inst.pid = result.pid ?? inst.pid;
+      inst.onlinePort = workspace.onlinePort;
+      inst.effectiveOnlinePort = effectivePort ?? undefined;
+      setLarsInstance(state, inst);
+      writeState(state);
+    }
+    steps.start = {
+      ok: result.running,
+      pid: result.pid,
+      healthy,
+      onlinePort: effectivePort ?? workspace.onlinePort,
+      configuredOnlinePort: workspace.onlinePort,
+    };
+
     if (!args.skip_download) {
-      const connection = `TCPIP:127.0.0.1:${workspace.onlinePort}`;
+      if (!healthy) {
+        return respond({
+          ok: false,
+          workspace: workspace.name,
+          steps,
+          error:
+            `LARS is running but no online port answered among [${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}]` +
+            (owned.length ? ` (${owned.join(", ")} already owned by another running instance)` : "") +
+            " — cannot download to it.",
+          hints,
+        });
+      }
+      const connection = `TCPIP:127.0.0.1:${effectivePort ?? workspace.onlinePort}`;
       const br = await runBatchOps(
         lcpPath,
         [{ type: "download", connection, addLoaderAnyway: true }],
@@ -628,34 +682,13 @@ export async function larsRuntimeHandler(args: {
       }
     }
 
-    const result = await startLars(workspace);
-    if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
-
-    let healthy = result.healthy;
-    if (!healthy && result.running) {
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 8000) {
-        await new Promise((r) => setTimeout(r, 500));
-        healthy = await isLarsHealthy(workspace.onlinePort);
-        if (healthy) break;
-      }
-    }
-
-    if (inst) {
-      inst.pid = result.pid ?? inst.pid;
-      inst.onlinePort = workspace.onlinePort;
-      setLarsInstance(state, inst);
-      writeState(state);
-    }
-    steps.start = { ok: result.running, pid: result.pid, healthy, onlinePort: workspace.onlinePort };
-
     hints.push(
       "Verify visuals with lars_runtime screenshot. Run lars_runtime set_station_target once so control_plc/plc_values also target this instance.",
     );
     return respond({
       ok: healthy,
       workspace: workspace.name,
-      onlinePort: workspace.onlinePort,
+      onlinePort: effectivePort ?? workspace.onlinePort,
       ...(workspace.screenProjectPath ? { screenProjectPath: workspace.screenProjectPath } : {}),
       steps,
       hints,
@@ -701,21 +734,20 @@ export async function larsRuntimeHandler(args: {
       const result = await startLars(workspace);
       if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
 
-      // Poll for online port availability (the runtime takes a moment to bind)
-      let healthy = result.healthy;
-      if (!healthy && result.running) {
-        const start = Date.now();
-        while (Date.now() - start < 8000) {
-          await new Promise((r) => setTimeout(r, 500));
-          healthy = await isLarsHealthy(workspace.onlinePort);
-          if (healthy) break;
-        }
-      }
+      // Find the port this instance actually services (LARS builds differ — see
+      // resolveEffectiveOnlinePort in utils/lars.ts). Never take a port another
+      // running instance owns: PLC and HMI must stay on distinct ports.
+      const owned = runningInstancePorts(state.larsInstances, workspace.name);
+      const effectivePort = result.running
+        ? await resolveEffectiveOnlinePort([workspace.onlinePort, DEFAULT_ONLINE_PORT], owned, (p) => isLarsHealthy(p))
+        : null;
+      const healthy = effectivePort !== null;
 
       const inst = req.instance ?? getLarsInstance(state, workspace.name);
       if (inst) {
         inst.pid = result.pid ?? inst.pid;
         inst.onlinePort = workspace.onlinePort;
+        inst.effectiveOnlinePort = effectivePort ?? undefined;
         setLarsInstance(state, inst);
         writeState(state);
       }
@@ -723,16 +755,19 @@ export async function larsRuntimeHandler(args: {
       return respond({
         ok: true,
         name: workspace.name,
-        onlinePort: workspace.onlinePort,
+        onlinePort: effectivePort ?? workspace.onlinePort,
+        configuredOnlinePort: workspace.onlinePort,
         running: true,
         healthy,
         pid: result.pid,
         ...(autoCreated ? { autoCreated: true } : {}),
-        hint: autoCreated
-          ? "Workspace was auto-created on demand (station known but unconfigured), then LARS started. Next: set_station_target to point the station's .lss at it."
-          : healthy
-            ? "LARS is up. Next: lars_runtime set_station_target <workspace> so build_project/control_plc/plc_values target it."
-            : "LARS launched but the online port is not answering yet — check the LARS window or lasal_status.",
+        hint: !healthy
+          ? `LARS launched but no online port answered among [${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}]` +
+            (owned.length ? ` (${owned.join(", ")} already owned by another running instance)` : "") +
+            ". If this is a second parallel instance, note that the field-tested LARS 01.03.216 build exposes no online port for it — check the LARS installation or run one instance at a time."
+          : autoCreated
+            ? "Workspace was auto-created on demand (station known but unconfigured), then LARS started. Next: lars_runtime set_station_target to point the station's .lss at it."
+            : "LARS is up. Next: lars_runtime set_station_target <workspace> so build_project/control_plc/plc_values target it.",
       });
     }
 
@@ -746,7 +781,31 @@ export async function larsRuntimeHandler(args: {
       if (!existsSync(inst.stationLssPath)) {
         return fail(`Station .lss not found: ${inst.stationLssPath}`, []);
       }
-      const result = pointStationAtLars(inst.stationLssPath, workspace.onlinePort);
+
+      // Point the station at the port the instance actually services — never blindly at
+      // the configured ONLINE value (that is exactly how stations ended up on dead ports).
+      let port = inst.effectiveOnlinePort;
+      if (port === undefined) {
+        const owned = runningInstancePorts(state.larsInstances, workspace.name);
+        port =
+          (await resolveEffectiveOnlinePort([workspace.onlinePort, DEFAULT_ONLINE_PORT], owned, (p) => isLarsHealthy(p), 10_000)) ??
+          undefined;
+        if (port !== undefined) inst.effectiveOnlinePort = port;
+      }
+      const running = getLarsPids(workspace.name).length > 0;
+      if (port === undefined && running) {
+        return fail(
+          `LARS workspace '${workspace.name}' is running but no online port answered among ` +
+            `[${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}] — refusing to point the station at a dead port.`,
+          [
+            "If another LARS instance already owns a port, this workspace has none (parallel-instance issue).",
+            "Check the LARS installation/window; a just-updated LARS may not expose the configured online port.",
+          ],
+        );
+      }
+      const targetPort = port ?? workspace.onlinePort;
+
+      const result = pointStationAtLars(inst.stationLssPath, targetPort);
       if ("error" in result) return fail(result.error, []);
       if (inst.originalIp === undefined) {
         inst.originalIp = result.previousIp;
@@ -759,8 +818,11 @@ export async function larsRuntimeHandler(args: {
         workspace: workspace.name,
         station: inst.stationName,
         lssPath: inst.stationLssPath,
-        nowTargeting: `127.0.0.1:${workspace.onlinePort} (LARS)`,
+        nowTargeting: `127.0.0.1:${targetPort} (LARS)`,
         previousTarget: `${result.previousIp}:${result.previousPort}`,
+        ...(port === undefined
+          ? { warning: "LARS instance is not running — targeted the configured port; start the instance first." }
+          : {}),
         hint: "Now build_project/control_plc/plc_values with no connection argument will hit LARS. Use 'restore' to revert.",
       });
     }
