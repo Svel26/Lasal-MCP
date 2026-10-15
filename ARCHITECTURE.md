@@ -44,7 +44,7 @@ src/
     crc.ts           — IEEE 802.3 CRC-32 calculation for @CT_ class tables
     editTransaction.ts — filesystem transaction & rollback for project changes
     engine.ts        — exe paths, process management, scratch dir, engine mutex
-    lars.ts          — LARS workspace config (lasalos2.xml), spawn/kill, ports, station targeting
+    lars.ts          — LARS workspace config (lasalos2.xml, lossless merge), spawn/kill, effective-port probing, station targeting
     lasalXml.ts      — .lcp/.st/.lcn XML parsing, ST editing, round-trip safe
     lcpManifest.ts   — .lcp XML manipulation & class manifest operations
     mcpProgress.ts   — MCP progress notifications and log reporting
@@ -63,7 +63,7 @@ src/
 
 LARS runs one LASAL program per instance. To simulate a whole solution
 (PLC + HMI + Local), the MCP creates one LARS **workspace per station** in
-`%APPDATA%\lasalos2.xml`, each with distinct ports:
+`%APPDATA%\lasalos2.xml`, each with a distinct port block:
 
 | Workspace | ONLINE | COMLINK_SRVR | COMLINK | ALARM |
 |---|---|---|---|---|
@@ -71,13 +71,26 @@ LARS runs one LASAL program per instance. To simulate a whole solution
 | second | 1964 | 1965 | 1010 | 1967 |
 | third | 1974 | 1975 | 1020 | 1977 |
 
-The workspace records the station's `.lcp` as `CLASS_PRJ_PATH` so LARS
-auto-loads the project. `set_station_target` surgically rewrites the station's
-`.lss` `<TCPIP>` to `127.0.0.1:<ONLINE>` (recording the original so `restore`
-can revert), which makes `build_project`/`control_plc`/`plc_values`/`deploy_all`
-operate on the LARS instance with no extra arguments.
+Which port an instance *actually serves* differs by LARS build: older builds bind the
+workspace `ONLINE` port, while the field-tested 01.03.216 build serves the default
+`1954` for a single instance and exposes no online port for a second parallel instance.
+`start`/`simulate` therefore probe `[workspace ONLINE, 1954]` and record the answering
+port as the instance's **effective online port**, refusing ports that another running
+instance owns. `set_station_target` rewrites the station's `.lss` `<TCPIP>` to
+`127.0.0.1:<effective port>` (recording the original so `restore` can revert) and fails
+loudly when a running instance answers nowhere; `build_project`/`control_plc`/
+`plc_values`/`deploy_all` then operate on the LARS instance with no extra arguments.
+
+The workspace records the station's `.lcp` as `CLASS_PRJ_PATH` (and its `.lpr` as
+`SCREEN_PRJ_PATH`) so LARS auto-loads the project. Writes to `lasalos2.xml` are
+**lossless**: only model-owned fields are updated, everything else — LARSConfigTool's
+`Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings — is preserved,
+so the file stays interchangeable with the official config tool.
 
 Key gotchas handled by the code:
+- **Online port vs table** — a LARS build's actual online port can differ from the
+  workspace table (see above); targeting always follows the probed effective port,
+  never the raw `ONLINE` value.
 - **Spawn quoting** — Node `spawn` does not escape embedded quotes; args must
   be passed without inner quotes (`/c<path>`, not `/c"<path>"`).
 - **PC loader** — LARS rejects downloads without the PC loader (`Linker_Error`).
@@ -123,3 +136,4 @@ Tools that need a PLC/HMI connection first try the explicit `connection` paramet
 | `LASAL_MCP_TIMEOUT_SCRIPT` | 120000 | Script execution timeout (ms) |
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
 | `LASAL_MCP_SCRATCH_MAX_AGE_H` | 24 | Hours before scratch files are cleaned |
+| `LASAL_MCP_STATE_FILE` | `<repo>/lasal-state.json` | MCP state file override (tests use it to stay off live state) |

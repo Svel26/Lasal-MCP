@@ -20,7 +20,7 @@ The MCP only exposes tools for operations that **require an external engine or h
 - **Background Jobs**: `build_project`, `deploy_all`, `deploy_solution` and `lse_project` accept `async: true` and return a `jobId` — poll with `check_job_status` (useful for clients with request timeouts).
 - **Headless Hardening**: modal engine dialogs (error boxes, crash reporters, WerFault) are auto-dismissed while script runs execute — their text is captured into the tool result instead of hanging the run until someone clicks OK (`LASAL_MCP_DIALOG_WATCHER=0` disables).
 - **PLC Control**: Start/stop PLC runtime, read/write live channel values, query state (`control_plc`, `plc_values`).
-- **Local Simulation (LARS)**: Run one LASAL program per LARS instance — one workspace per station (PLC + HMI) so both run simultaneously on separate ports. Point stations at the local runtime with a single call, compile/download/start/read values exactly like a real PLC, and browse the HMI via DataService. LARS also renders LASAL SCREEN projects locally, with window screenshots for visual verification. No hardware needed (`lars_runtime`).
+- **Local Simulation (LARS)**: Run one LASAL program per LARS instance — one workspace per station (PLC + HMI) so both run simultaneously on separate ports (the MCP probes the port each instance actually serves). Point stations at the local runtime with a single call, compile/download/start/read values exactly like a real PLC, and browse the HMI via DataService. LARS also renders LASAL SCREEN projects locally, with window screenshots for visual verification. No hardware needed (`lars_runtime`).
 - **CLASS 2 Batch Engine**: Create/delete networks, add/remove objects, manage connections, configure tasks — operations that require the CLASS 2 scripting engine (`apply_project_changes`, `run_class2_script`).
 - **GUID & CRC-32 Validation**: Auto-resolve duplicate GUID collisions across classes/MaeExp.txt and compute exact IEEE 802.3 CRC-32 hashes for `@CT_` tables (`validate_guids`).
 - **VISUDesigner Engine**: Sync datapoints, manage text lists/schemes/media, publish, download to HMI (`visu_project`).
@@ -128,6 +128,7 @@ When running from a local clone, point your MCP client to:
 | `LASAL_LARS_CONFIG` | `%APPDATA%\lasalos2.xml` | LARS workspace config file |
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
 | `LASAL_MCP_SCRATCH_MAX_AGE_H` | `24` | Hours before temp files are cleaned |
+| `LASAL_MCP_STATE_FILE` | `<repo>/lasal-state.json` | Override the MCP state file (unit tests use it to stay off live state) |
 
 ## Available Tools
 
@@ -149,7 +150,7 @@ When running from a local clone, point your MCP client to:
 | `create_class2_bootdisk` | Create a CLASS 2 bootdisk / update stick (plain or Update-Tool flavor with Autoexec, OS image, VISU publish folder). |
 | `control_plc` | Start, stop, or query PLC runtime state. |
 | `plc_values` | Read/write live channel values on a running PLC. |
-| `lars_runtime` | Local LARS simulation: list/setup workspaces per station (wires CLASS 2 + LASAL SCREEN projects), start/stop, **simulate** (one-call loop: ARM→PC switch, compile, download, start), screenshot of the rendered screen, point stations at LARS (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
+| `lars_runtime` | Local LARS simulation: list/setup workspaces per station (wires CLASS 2 + LASAL SCREEN projects), start/stop, **simulate** (one-call loop: ARM→PC switch, compile, start, download), screenshot of the rendered screen, point stations at the probed effective port (`set_station_target`), revert (`restore`), switch ARM projects to the PC target (`target_pc`). |
 | `apply_project_changes` | Batch engine operations (networks, objects, connections, tasks, compiler version, compile/download) **and** file-level class operations: `create_class`, `add_project_file`, `clean_project` (incl. `deep` artifact purge). |
 | `run_class2_script` | Escape hatch: run arbitrary Python 2.7 `batch` statements through Lasal2.exe for API calls not exposed as operations. |
 | `visu_project` | VISUDesigner engine operations (text lists, schemes, media, publish, download). |
@@ -203,21 +204,36 @@ npm run inspector    # MCP Inspector for interactive debugging
 LARS (LASAL Runtime System) runs LASAL programs on a normal PC. Since each LARS
 instance runs one program, the MCP creates one workspace per station:
 
-1. `lars_runtime setup` — creates workspaces for every station in the selected solution (distinct ports per instance).
-2. `lars_runtime start <station>` — launches the LARS window for that station.
-3. `lars_runtime set_station_target <station>` — points the station's `.lss` at the LARS instance.
+1. `lars_runtime setup` — creates workspaces for every station in the selected solution.
+2. `lars_runtime start <station>` — launches the LARS window for that station and reports the **effective online port** it probed.
+3. `lars_runtime set_station_target <station>` — points the station's `.lss` at that effective port (refuses to target a port that is not answering).
 4. Now `build_project`, `control_plc`, and `plc_values` work unchanged against the local runtime.
 5. `lars_runtime restore <station>` — reverts the `.lss` to the real hardware target.
 
 Shortcut: `lars_runtime simulate` does the whole loop in one call — creates the workspace
-if needed (CLASS 2 + LASAL SCREEN), switches ARM targets to PC, compiles, downloads to the
-LARS instance and starts it.
+if needed (CLASS 2 + LASAL SCREEN), switches ARM targets to PC, compiles, starts the LARS
+instance (probing its effective online port) and downloads to it.
+
+### How the online port is resolved
+
+Workspaces get distinct port blocks in `lasalos2.xml` (`1954`, `1964`, `1974`, …), but
+LARS builds differ in which port they actually serve: older builds bind the workspace's
+`ONLINE` port, while the field-tested 01.03.216 build serves the default port `1954` for a
+single instance (and a second parallel instance on that build exposes no online port at
+all). The MCP therefore *probes* what actually answers (workspace `ONLINE` port first, then
+`1954`) and never assigns a port another running instance already owns — PLC and HMI end up
+on distinct ports whenever the LARS build provides them, and a workspace that answers
+nowhere fails loudly instead of pointing a station at a dead port. `lars_runtime list` and
+`lasal_status` report the resolved port as `effectiveOnlinePort`.
 
 Notes:
 - Projects compiled for `Processor="ARM"` (most machine PLCs) need
   `lars_runtime target_pc` first — LARS is an x86 runtime and rejects ARM images.
 - HMI panel / Local stations are already PC-targeted and work directly.
 - Downloads to LARS automatically include the PC loader (`addLoaderAnyway`).
+- `%APPDATA%\lasalos2.xml` is edited **losslessly** — the MCP updates only the fields it
+  owns and preserves everything else, so the file stays interchangeable with Sigmatek's
+  LARSConfigTool (`Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings).
 - `hmi_runtime` remaps published stations.json entries to running LARS instances,
   so the web HMI talks to the local simulation.
 - Stations with a LASAL SCREEN project get their `.lpr` wired into the LARS

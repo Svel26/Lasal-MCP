@@ -5,6 +5,12 @@
 > `NVeniaFil1057A01`. Scope is strictly the **software lifecycle mechanism**
 > (file layout, build, config, deploy, verify) — no application logic.
 
+> **Status: historical design specification.** Sections 2–4 document the underlying
+> engine and file contracts and remain the reference for those mechanics. §5.2's tool
+> catalogue uses the original design vocabulary (`get_toolchain_info`, `list_solution`,
+> `compile_class2_project`, …) and predates the shipped tool set — for the current tool
+> names, arguments and workflows see [README.md](../README.md).
+
 ---
 
 ## 0. Executive Summary
