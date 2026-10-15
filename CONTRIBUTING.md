@@ -55,7 +55,7 @@ test/                 # Vitest test suites (script generators, XML parsers, LARS
 ### Prerequisites
 
 - **Windows OS**: Sigmatek LASAL CLASS 2, VISUDesigner, and LARS run exclusively on Windows.
-- **Node.js**: v18.0.0 or higher (v20+ recommended).
+- **Node.js**: v20.0.0 or higher (v22 LTS recommended; CI runs the test matrix on 20.x and 22.x).
 - **Sigmatek LASAL Software Suite** (optional for unit tests, required for end-to-end testing):
   - LASAL CLASS 2
   - VISUDesigner
@@ -92,6 +92,7 @@ We use a standard two-tier branching strategy:
 - **`main`**: Production and release branch. Contains stable, published code. Releases (`v*.*.*`) are tagged from here. Direct pushes and deletions are blocked by branch protection rules.
 - **`dev`**: Active development and integration branch. All feature work lands here first.
 - **Feature/Fix branches (`feat/*`, `fix/*`, `refactor/*`)**: Branch off `dev`. When your changes are ready and tests pass, submit a Pull Request targeting `dev`.
+- **PR gates**: every PR must pass CI (ESLint, Prettier check, TypeScript build, and the Vitest suite on Node 20.x + 22.x), and the branch must be up to date with its base (strict required status checks). Release PRs (`dev` → `main`) run the same checks.
 - **Releases**: Merged from `dev` into `main` via PR when ready for release.
 
 ### Watch Mode
