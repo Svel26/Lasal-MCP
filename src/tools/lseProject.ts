@@ -10,6 +10,7 @@ import { respond, fail, type ToolResponse } from "../utils/respond.js";
 import { readState } from "../state.js";
 import { TIMEOUTS } from "../utils/config.js";
 import { startJob } from "../core/jobs.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 import { existsSync } from "fs";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -317,16 +318,20 @@ export const lseProjectSchema = {
     ),
 };
 
-export async function lseProjectHandler(args: {
-  action: "info" | "compile" | "download" | "apply_changes" | "create";
-  lpr_path?: string;
-  operations?: unknown[];
-  connection?: string;
-  run?: boolean;
-  save?: boolean;
-  timeout_s?: number;
-  async?: boolean;
-}): Promise<ToolResponse> {
+export async function lseProjectHandler(
+  args: {
+    action: "info" | "compile" | "download" | "apply_changes" | "create";
+    lpr_path?: string;
+    operations?: unknown[];
+    connection?: string;
+    run?: boolean;
+    save?: boolean;
+    timeout_s?: number;
+    async?: boolean;
+  },
+  extra?: McpExtra,
+): Promise<ToolResponse> {
+  const reporter = createProgressReporter(extra, "lasal.lse_project");
   const run = () =>
     withEngineLock(async () => {
       const registration = getLseRegistration();
@@ -502,12 +507,24 @@ export async function lseProjectHandler(args: {
     });
 
   if (args.async) {
-    const job = startJob("lse_project", run);
+    const job = startJob("lse_project", run, (rec) => {
+      void reporter.log("info", {
+        jobId: rec.id,
+        job: rec.name,
+        status: rec.status,
+        durationMs: rec.durationMs,
+        ...(rec.error ? { error: rec.error } : {}),
+        hint: "Background job finished — call check_job_status with this jobId for the result.",
+      });
+    });
     return respond({
       ok: true,
       status: "pending",
       jobId: job.id,
-      hints: ["Poll check_job_status with this jobId until status is completed/failed."],
+      hints: [
+        "This call only STARTED the job in the background — it returned before doing any work.",
+        "You MUST call check_job_status with this jobId repeatedly until it reports status 'completed' or 'failed'; the actual result is delivered there.",
+      ],
     });
   }
   return run();

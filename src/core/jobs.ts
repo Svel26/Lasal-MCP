@@ -23,7 +23,7 @@ export interface JobRecord {
 const jobs = new Map<string, JobRecord>();
 const MAX_JOBS = 40;
 
-export function startJob(name: string, fn: () => Promise<unknown>): JobRecord {
+export function startJob(name: string, fn: () => Promise<unknown>, onFinish?: (job: JobRecord) => void): JobRecord {
   if (jobs.size >= MAX_JOBS) {
     const finished = [...jobs.values()].filter((j) => j.status !== "running").sort((a, b) => a.startedAt - b.startedAt);
     for (const j of finished.slice(0, finished.length - 20)) jobs.delete(j.id);
@@ -32,18 +32,26 @@ export function startJob(name: string, fn: () => Promise<unknown>): JobRecord {
   const job: JobRecord = { id: randomUUID(), name, status: "running", startedAt: Date.now() };
   jobs.set(job.id, job);
 
+  const settle = (): void => {
+    job.finishedAt = Date.now();
+    job.durationMs = job.finishedAt - job.startedAt;
+    try {
+      onFinish?.(job);
+    } catch {
+      /* completion hook is best-effort */
+    }
+  };
+
   void fn()
     .then((result) => {
       job.status = "completed";
       job.result = result;
-      job.finishedAt = Date.now();
-      job.durationMs = job.finishedAt - job.startedAt;
+      settle();
     })
     .catch((e: unknown) => {
       job.status = "failed";
       job.error = e instanceof Error ? e.message : String(e);
-      job.finishedAt = Date.now();
-      job.durationMs = job.finishedAt - job.startedAt;
+      settle();
     });
 
   return job;
