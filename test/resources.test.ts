@@ -4,19 +4,25 @@ import { registerResources } from "../src/resources/registerResources.js";
 import { writeState } from "../src/state.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 describe("Dynamic Resources & Resource Templates", () => {
   let server: McpServer;
+  let stateDir: string;
 
   beforeEach(() => {
     server = new McpServer({ name: "test-server", version: "1.0.0" });
+    stateDir = mkdtempSync(join(tmpdir(), "lasal-mcp-state-"));
+    process.env.LASAL_MCP_STATE_FILE = join(stateDir, "lasal-state.json");
     writeState({ currentProject: FIXTURES });
   });
 
   afterEach(() => {
-    writeState({ currentProject: null });
+    delete process.env.LASAL_MCP_STATE_FILE;
+    rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("registers static and dynamic resources on the McpServer", () => {

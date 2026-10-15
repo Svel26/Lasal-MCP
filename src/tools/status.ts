@@ -11,7 +11,7 @@ import {
   getLseRegistration,
 } from "../utils/engine.js";
 import { pingHost } from "../utils/preflight.js";
-import { LARS_EXE, readLarsWorkspaces, getLarsPids, isLarsHealthy, larsConfigPath } from "../utils/lars.js";
+import { LARS_EXE, DEFAULT_ONLINE_PORT, readLarsWorkspaces, getLarsPids, isLarsHealthy, larsConfigPath } from "../utils/lars.js";
 import { respond } from "../utils/respond.js";
 import { checkHttpHealth } from "../core/http.js";
 
@@ -128,12 +128,22 @@ export async function lasalStatusHandler() {
         const inst = larsInstances[w.name];
         const pids = getLarsPids(w.name);
         const running = pids.length > 0;
+        const effectivePort = inst?.effectiveOnlinePort;
+        let healthy = false;
+        if (running) {
+          healthy = await isLarsHealthy(effectivePort ?? w.onlinePort);
+          // Instances started before effective-port probing existed may serve the default port.
+          if (!healthy && effectivePort === undefined && w.onlinePort !== DEFAULT_ONLINE_PORT) {
+            healthy = await isLarsHealthy(DEFAULT_ONLINE_PORT);
+          }
+        }
         return {
           name: w.name,
           onlinePort: w.onlinePort,
+          effectiveOnlinePort: effectivePort ?? null,
           running,
           pid: pids[0] ?? inst?.pid ?? null,
-          healthy: running ? await isLarsHealthy(w.onlinePort) : false,
+          healthy,
           stationName: inst?.stationName ?? null,
           lcpPath: inst?.lcpPath ?? null,
           targetedAtLars: inst?.originalIp ? true : false,
