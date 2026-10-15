@@ -27,6 +27,7 @@ export interface LarsWorkspace {
   comlinkServerPort: number;
   comlinkBasePort: number;
   alarmPort: number;
+  dataServiceTcpPort?: number;
   activeData: string;
   autoexec: string;
   lslWork: string;
@@ -41,13 +42,32 @@ export const DEFAULT_ONLINE_PORT = 1954;
 export const DEFAULT_COMLINK_BASE = 1000;
 const PORT_STEP = 10;
 
+/**
+ * fast-xml-parser returns `{ "#text": value, "@_Attr": ... }` for elements that carry
+ * attributes — LARSConfigTool writes `Desc` attributes on every COMTCP entry, so a raw
+ * `String(v)` would stringify the object and silently fall back to defaults. Unwrap the
+ * text node before interpreting a scalar element.
+ */
+function scalar(v: unknown): unknown {
+  if (v && typeof v === "object" && "#text" in (v as Record<string, unknown>)) {
+    return (v as Record<string, unknown>)["#text"];
+  }
+  return v;
+}
+
 function num(v: unknown, fallback: number): number {
-  const n = parseInt(String(v ?? ""), 10);
+  const n = parseInt(String(scalar(v) ?? ""), 10);
   return isNaN(n) ? fallback : n;
 }
 
 function str(v: unknown, fallback: string): string {
-  return typeof v === "string" && v.length > 0 ? v : fallback;
+  const s = scalar(v);
+  return typeof s === "string" && s.length > 0 ? s : fallback;
+}
+
+function strOpt(v: unknown): string | undefined {
+  const s = scalar(v);
+  return typeof s === "string" && s.length > 0 ? s : undefined;
 }
 
 function asArray<T>(v: T | T[] | undefined): T[] {
@@ -86,12 +106,13 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
         comlinkServerPort: num(com.COMLINK_SRVR, DEFAULT_ONLINE_PORT + 1),
         comlinkBasePort: num(com.COMLINK, DEFAULT_COMLINK_BASE),
         alarmPort: num(com.ALARM, DEFAULT_ONLINE_PORT + 3),
+        dataServiceTcpPort: num(com.DATASERVICETCPPORT, 2402),
         activeData: str(pathElem.ACTIVEDAT, "C:\\"),
         autoexec: str(pathElem.AUTOEXEC, "C:\\Autoexec.lsl"),
         lslWork: str(pathElem.LSLWORK, "C:\\LSLWORK"),
         sramData: str(pathElem.SRAMDAT, "C:\\"),
-        classProjectPath: typeof pathElem.CLASS_PRJ_PATH === "string" ? pathElem.CLASS_PRJ_PATH : undefined,
-        screenProjectPath: typeof pathElem.SCREEN_PRJ_PATH === "string" ? pathElem.SCREEN_PRJ_PATH : undefined,
+        classProjectPath: strOpt(pathElem.CLASS_PRJ_PATH),
+        screenProjectPath: strOpt(pathElem.SCREEN_PRJ_PATH),
         dataLenMb: num(memory.DATALEN, 40),
         codeLenMb: num(memory.CODELEN, 8),
       });
@@ -102,58 +123,174 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
   }
 }
 
+// ─── Writing (lossless merge) ─────────────────────────────────────────────────
+//
+// LARSConfigTool and this server both edit %APPDATA%\lasalos2.xml. Regenerating
+// the whole file would drop fields the tool writes but this server does not model
+// (Desc attributes, DATASERVICETCPPORT values, future additions). Writes therefore
+// merge surgically: existing workspace blocks are copied verbatim except for the
+// fields we own, everything else (unknown elements, attributes, comments, extra
+// drive mappings) is preserved, and only genuinely new workspaces get a canonical
+// block appended. A full canonical file is generated only when no parseable config
+// exists yet.
+
+function unescapeXml(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+}
+
+/** Replace the text of an element, preserving its attributes. No-op when the element is absent. */
+function replaceElementText(block: string, tag: string, value: string): string {
+  const re = new RegExp(`(<${tag}\\b[^>]*>)([\\s\\S]*?)(</${tag}>)`);
+  if (!re.test(block)) return block;
+  return block.replace(re, (_m, open: string, _old: string, close: string) => `${open}${escapeXml(value)}${close}`);
+}
+
+function hasElement(block: string, tag: string): boolean {
+  return new RegExp(`<${tag}\\b`).test(block);
+}
+
+/** Insert a child element before the container's closing tag, using the container's indentation. */
+function insertChildElement(block: string, container: string, tag: string, value: string): string {
+  const re = new RegExp(`^([ \\t]*)</${container}>`, "m");
+  const m = re.exec(block);
+  if (!m) return block;
+  const indent = m[1] ?? "\t\t";
+  const child = `${indent}\t<${tag}>${escapeXml(value)}</${tag}>\n${indent}</${container}>`;
+  return block.replace(re, () => child);
+}
+
+/** Replace the element if present, otherwise insert it into the container. */
+function ensureElementText(block: string, container: string, tag: string, value: string): string {
+  const replaced = replaceElementText(block, tag, value);
+  if (replaced !== block || hasElement(block, tag)) return replaced;
+  return insertChildElement(block, container, tag, value);
+}
+
+/** Update only the model-owned fields of an existing workspace block. */
+function updateWorkspaceBlock(block: string, ws: LarsWorkspace): string {
+  let out = block;
+  out = replaceElementText(out, "DATALEN", String(ws.dataLenMb));
+  out = replaceElementText(out, "CODELEN", String(ws.codeLenMb));
+  out = replaceElementText(out, "ACTIVEDAT", ws.activeData);
+  out = replaceElementText(out, "AUTOEXEC", ws.autoexec);
+  out = replaceElementText(out, "LSLWORK", ws.lslWork);
+  out = replaceElementText(out, "SRAMDAT", ws.sramData);
+  if (ws.classProjectPath) out = ensureElementText(out, "PATH", "CLASS_PRJ_PATH", ws.classProjectPath);
+  if (ws.screenProjectPath) out = ensureElementText(out, "PATH", "SCREEN_PRJ_PATH", ws.screenProjectPath);
+  out = replaceElementText(out, "ONLINE", String(ws.onlinePort));
+  out = replaceElementText(out, "COMLINK_SRVR", String(ws.comlinkServerPort));
+  out = replaceElementText(out, "COMLINK", String(ws.comlinkBasePort));
+  out = replaceElementText(out, "ALARM", String(ws.alarmPort));
+  // Replace-only (never insert): an absent DATASERVICETCPPORT means the LARS default, so
+  // the lossless merge leaves the file's shape untouched.
+  out = replaceElementText(out, "DATASERVICETCPPORT", String(ws.dataServiceTcpPort ?? 2402));
+  // Retarget only the C: drive mapping; additional mappings are preserved.
+  return out.replace(
+    /(<DRIVEMAP_ELEMENT>\s*<DRIVE>C:<\/DRIVE>\s*<PATH>)([\s\S]*?)(<\/PATH>)/i,
+    (_m, open: string, _old: string, close: string) => `${open}${escapeXml(ws.activeData)}${close}`,
+  );
+}
+
+/** Canonical workspace block — used for brand-new workspaces and first-time files. */
+function buildWorkspaceBlock(ws: LarsWorkspace): string {
+  const mem =
+    ws.dataLenMb || ws.codeLenMb
+      ? `\t\t<MEMORY>\n\t\t\t<DATALEN Unit="MiB">${ws.dataLenMb}</DATALEN>\n\t\t\t<CODELEN Unit="MiB">${ws.codeLenMb}</CODELEN>\n\t\t</MEMORY>`
+      : '\t\t<MEMORY>\n\t\t\t<DATALEN Unit="MiB">40</DATALEN>\n\t\t\t<CODELEN Unit="MiB">8</CODELEN>\n\t\t</MEMORY>';
+  const paths = [
+    `\t\t\t<ACTIVEDAT>${escapeXml(ws.activeData)}</ACTIVEDAT>`,
+    `\t\t\t<AUTOEXEC>${escapeXml(ws.autoexec)}</AUTOEXEC>`,
+    `\t\t\t<LSLWORK>${escapeXml(ws.lslWork)}</LSLWORK>`,
+    `\t\t\t<SRAMDAT>${escapeXml(ws.sramData)}</SRAMDAT>`,
+    ws.classProjectPath ? `\t\t\t<CLASS_PRJ_PATH>${escapeXml(ws.classProjectPath)}</CLASS_PRJ_PATH>` : "",
+    ws.screenProjectPath ? `\t\t\t<SCREEN_PRJ_PATH>${escapeXml(ws.screenProjectPath)}</SCREEN_PRJ_PATH>` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  // Emit the same canonical shape as LARSConfigTool (Desc attributes + DATASERVICETCPPORT).
+  const com = [
+    `\t\t\t<ONLINE Desc="Port for the online comunication.">${ws.onlinePort}</ONLINE>`,
+    `\t\t\t<COMLINK_SRVR Desc="Comlink command server port.">${ws.comlinkServerPort}</COMLINK_SRVR>`,
+    `\t\t\t<COMLINK Desc="Base port number used for clients.">${ws.comlinkBasePort}</COMLINK>`,
+    `\t\t\t<ALARM Desc="Alarm-Server port of the LSE-Kernel.">${ws.alarmPort}</ALARM>`,
+    `\t\t\t<DATASERVICETCPPORT Desc="Datalink-Server port of the LSE-Kernel.">${ws.dataServiceTcpPort ?? 2402}</DATASERVICETCPPORT>`,
+  ].join("\n");
+  return [
+    `\t<WORKSPACE Name="${escapeXml(ws.name)}">`,
+    mem,
+    `\t\t<PATH>`,
+    paths,
+    `\t\t</PATH>`,
+    `\t\t<COMTCP>`,
+    com,
+    `\t\t</COMTCP>`,
+    `\t\t<RESOLUTION></RESOLUTION>`,
+    `\t\t<DRIVEMAP>`,
+    `\t\t\t<DRIVEMAP_ELEMENT>`,
+    `\t\t\t\t<DRIVE>C:</DRIVE>`,
+    `\t\t\t\t<PATH>${escapeXml(ws.activeData)}</PATH>`,
+    `\t\t\t</DRIVEMAP_ELEMENT>`,
+    `\t\t</DRIVEMAP>`,
+    `\t\t<IP_MAP>`,
+    `\t\t</IP_MAP>`,
+    `\t</WORKSPACE>`,
+  ].join("\n");
+}
+
+function buildFullConfig(workspaces: LarsWorkspace[]): string {
+  const blocks = workspaces.map((ws) => buildWorkspaceBlock(ws));
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<LARSCONFIGURATIONS ConfigVersion="2">\n` +
+    blocks.join("\n") +
+    `\n</LARSCONFIGURATIONS>\n`
+  );
+}
+
+/** Merge the desired workspace list into the raw config, preserving foreign content. Returns null when the raw file cannot be merged. */
+function mergeWorkspaceConfig(raw: string, workspaces: LarsWorkspace[]): string | null {
+  const rootClose = raw.lastIndexOf("</LARSCONFIGURATIONS>");
+  if (rootClose < 0) return null;
+
+  const wanted = new Map(workspaces.map((w) => [w.name, w]));
+  const seen = new Set<string>();
+  const re = /<WORKSPACE\b[^>]*>[\s\S]*?<\/WORKSPACE>/g;
+
+  let out = "";
+  let cursor = 0;
+  let matched = false;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    matched = true;
+    out += raw.slice(cursor, m.index);
+    cursor = m.index + m[0].length;
+
+    const nameAttr = m[0].match(/<WORKSPACE\b[^>]*\bName\s*=\s*"([^"]*)"/i)?.[1];
+    if (nameAttr === undefined) {
+      out += m[0]; // unidentified block — keep verbatim rather than risk losing data
+      continue;
+    }
+    const ws = wanted.get(unescapeXml(nameAttr));
+    if (!ws) continue; // removed workspace: drop the block
+    seen.add(ws.name);
+    out += updateWorkspaceBlock(m[0], ws);
+  }
+  if (!matched && workspaces.length > 0) return null;
+  out += raw.slice(cursor);
+
+  const additions = workspaces.filter((w) => !seen.has(w.name));
+  if (additions.length > 0) {
+    const idx = out.lastIndexOf("</LARSCONFIGURATIONS>");
+    const blocks = additions.map((ws) => buildWorkspaceBlock(ws)).join("\n");
+    out = out.slice(0, idx) + blocks + "\n" + out.slice(idx);
+  }
+  return out;
+}
+
 export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
   const path = larsConfigPath();
   const dir = dirname(path);
   if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-  const blocks = workspaces.map((ws) => {
-    const mem =
-      ws.dataLenMb || ws.codeLenMb
-        ? `\t\t<MEMORY>\n\t\t\t<DATALEN Unit="MiB">${ws.dataLenMb}</DATALEN>\n\t\t\t<CODELEN Unit="MiB">${ws.codeLenMb}</CODELEN>\n\t\t</MEMORY>`
-        : '\t\t<MEMORY>\n\t\t\t<DATALEN Unit="MiB">40</DATALEN>\n\t\t\t<CODELEN Unit="MiB">8</CODELEN>\n\t\t</MEMORY>';
-    const paths = [
-      `\t\t\t<ACTIVEDAT>${escapeXml(ws.activeData)}</ACTIVEDAT>`,
-      `\t\t\t<AUTOEXEC>${escapeXml(ws.autoexec)}</AUTOEXEC>`,
-      `\t\t\t<LSLWORK>${escapeXml(ws.lslWork)}</LSLWORK>`,
-      `\t\t\t<SRAMDAT>${escapeXml(ws.sramData)}</SRAMDAT>`,
-      ws.classProjectPath ? `\t\t\t<CLASS_PRJ_PATH>${escapeXml(ws.classProjectPath)}</CLASS_PRJ_PATH>` : "",
-      ws.screenProjectPath ? `\t\t\t<SCREEN_PRJ_PATH>${escapeXml(ws.screenProjectPath)}</SCREEN_PRJ_PATH>` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    const com = [
-      `\t\t\t<ONLINE>${ws.onlinePort}</ONLINE>`,
-      `\t\t\t<COMLINK_SRVR>${ws.comlinkServerPort}</COMLINK_SRVR>`,
-      `\t\t\t<COMLINK>${ws.comlinkBasePort}</COMLINK>`,
-      `\t\t\t<ALARM>${ws.alarmPort}</ALARM>`,
-    ].join("\n");
-    return [
-      `\t<WORKSPACE Name="${escapeXml(ws.name)}">`,
-      mem,
-      `\t\t<PATH>`,
-      paths,
-      `\t\t</PATH>`,
-      `\t\t<COMTCP>`,
-      com,
-      `\t\t</COMTCP>`,
-      `\t\t<RESOLUTION />`,
-      `\t\t<DRIVEMAP>`,
-      `\t\t\t<DRIVEMAP_ELEMENT>`,
-      `\t\t\t\t<DRIVE>C:</DRIVE>`,
-      `\t\t\t\t<PATH>${escapeXml(ws.activeData)}</PATH>`,
-      `\t\t\t</DRIVEMAP_ELEMENT>`,
-      `\t\t</DRIVEMAP>`,
-      `\t\t<IP_MAP />`,
-      `\t</WORKSPACE>`,
-    ].join("\n");
-  });
-
-  const content =
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<LARSCONFIGURATIONS ConfigVersion="2">\n` +
-    blocks.join("\n") +
-    `\n</LARSCONFIGURATIONS>\n`;
 
   if (existsSync(path)) {
     const bak = `${path}.bak`;
@@ -163,7 +300,9 @@ export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
       } catch {}
     }
   }
-  writeFileSync(path, content, "utf-8");
+
+  const merged = existsSync(path) ? mergeWorkspaceConfig(readFileSync(path, "utf-8"), workspaces) : null;
+  writeFileSync(path, merged ?? buildFullConfig(workspaces), "utf-8");
 }
 
 /** Allocate a unique set of ports for a new workspace (each LARS instance needs distinct ports). */
@@ -210,6 +349,7 @@ export function upsertLarsWorkspace(
       comlinkServerPort: ports.comlinkServerPort,
       comlinkBasePort: ports.comlinkBasePort,
       alarmPort: ports.alarmPort,
+      dataServiceTcpPort: 2402,
       activeData: "C:\\",
       autoexec: "C:\\Autoexec.lsl",
       lslWork: "C:\\LSLWORK",
@@ -498,6 +638,59 @@ export function isLarsHealthy(onlinePort: number, timeoutMs = 1000): Promise<boo
   return pingHost("127.0.0.1", onlinePort, timeoutMs);
 }
 
+/**
+ * Online ports owned by currently running LARS instances. Never hand one of these to
+ * another workspace — PLC and HMI must stay on distinct ports.
+ */
+export function runningInstancePorts(
+  instances: Record<string, LarsInstanceInfo> | undefined,
+  excludeName?: string,
+): number[] {
+  const out: number[] = [];
+  for (const [name, inst] of Object.entries(instances ?? {})) {
+    if (name === excludeName) continue;
+    if (getLarsPids(name).length === 0) continue;
+    const port = inst.effectiveOnlinePort ?? inst.onlinePort;
+    if (typeof port === "number" && port > 0) out.push(port);
+  }
+  return out;
+}
+
+/**
+ * Resolve which port a LARS instance actually services.
+ *
+ * LARS builds differ in how they pick the online port:
+ *  - config-table behavior: the instance binds the workspace's configured ONLINE port
+ *    (verified against the pre-2026-10-15 build: PLC workspaces served 1974, HMI 1964);
+ *  - the 01.03.216 build field-tested on 2026-10-15: a single instance binds the
+ *    DEFAULT port 1954 regardless of the table, and a second concurrent instance
+ *    exposes no online port at all.
+ *
+ * Probing the candidates — while refusing ports another running instance already owns —
+ * yields the right answer for both behaviors without hardcoding either.
+ */
+export async function resolveEffectiveOnlinePort(
+  candidates: number[],
+  ownedPorts: Iterable<number>,
+  probe: (port: number) => Promise<boolean>,
+  timeoutMs = 30_000,
+  intervalMs = 1_000,
+): Promise<number | null> {
+  const owned = new Set(ownedPorts);
+  const wanted = [...new Set(candidates)].filter((p) => Number.isInteger(p) && p > 0 && !owned.has(p));
+  if (wanted.length === 0) return null;
+
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  for (;;) {
+    for (const port of wanted) {
+      if (owned.has(port)) continue;
+      if (await probe(port)) return port;
+    }
+    if (Date.now() >= deadline) return null;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(100, intervalMs)));
+  }
+}
+
 // ─── LARS window screenshot (LASAL Screen local simulation) ───────────────────
 //
 // LARS renders LASAL SCREEN projects (SCREEN_PRJ_PATH workspaces) into its
@@ -641,7 +834,8 @@ export function mapStationsToLars(
     const inst = (name && runningByName.get(name)) ?? (!isNaN(num) && runningById.get(num));
     if (!inst) continue;
 
-    const to = `127.0.0.1:${inst.onlinePort}`;
+    const targetPort = inst.effectiveOnlinePort ?? inst.onlinePort;
+    const to = `127.0.0.1:${targetPort}`;
 
     // Published runtime layout: { station, ip, conType }
     const ip = typeof st.ip === "string" ? st.ip : undefined;
@@ -649,7 +843,7 @@ export function mapStationsToLars(
       const isHardwareIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !ip.startsWith("127.");
       if (!isHardwareIp) continue;
       st.ip = "127.0.0.1";
-      st.port = inst.onlinePort;
+      st.port = targetPort;
       changed.push({ station: name ?? String(num), from: ip, to });
       continue;
     }

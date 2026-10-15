@@ -2,7 +2,15 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
-const STATE_FILE = join(dirname(fileURLToPath(import.meta.url)), "..", "lasal-state.json");
+const DEFAULT_STATE_FILE = join(dirname(fileURLToPath(import.meta.url)), "..", "lasal-state.json");
+
+/**
+ * Effective state file path. `LASAL_MCP_STATE_FILE` lets tests (and multi-instance setups)
+ * use an isolated file — without it, test runs overwrote the live MCP state.
+ */
+function stateFilePath(): string {
+  return process.env.LASAL_MCP_STATE_FILE || DEFAULT_STATE_FILE;
+}
 
 export interface HmiRuntimeInfo {
   pid: number;
@@ -14,6 +22,8 @@ export interface HmiRuntimeInfo {
 export interface LarsInstanceInfo {
   name: string;
   onlinePort: number;
+  /** Port the running instance actually services (probed at start; may differ from the configured onlinePort). */
+  effectiveOnlinePort?: number;
   stationName?: string;
   stationId?: number;
   stationLssPath?: string;
@@ -39,16 +49,17 @@ const DEFAULT_STATE: LasalState = {
 };
 
 export function readState(): LasalState {
-  if (!existsSync(STATE_FILE)) return { ...DEFAULT_STATE };
+  const stateFile = stateFilePath();
+  if (!existsSync(stateFile)) return { ...DEFAULT_STATE };
   try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf-8"));
+    return JSON.parse(readFileSync(stateFile, "utf-8"));
   } catch {
     return { ...DEFAULT_STATE };
   }
 }
 
 export function writeState(state: LasalState): void {
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+  writeFileSync(stateFilePath(), JSON.stringify(state, null, 2), "utf-8");
 }
 
 export function getHmiForProject(state: LasalState, projectDir?: string): HmiRuntimeInfo | undefined {
