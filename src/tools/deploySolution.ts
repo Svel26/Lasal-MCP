@@ -18,6 +18,7 @@ import { TIMEOUTS } from "../utils/config.js";
 import { respond, fail, type ToolResponse } from "../utils/respond.js";
 import { writeFileSync } from "fs";
 import { startJob } from "../core/jobs.js";
+import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
 
 // ─── deploy_solution ──────────────────────────────────────────────────────────
 //
@@ -235,15 +236,19 @@ function buildFromStations(
   return { targets, instructions, problems };
 }
 
-export async function deploySolutionHandler(args: {
-  lsm_path?: string;
-  stations: StationDeploy[];
-  utc_path?: string;
-  machine_nr?: string;
-  dry_run?: boolean;
-  timeout_s?: number;
-  async?: boolean;
-}): Promise<ToolResponse> {
+export async function deploySolutionHandler(
+  args: {
+    lsm_path?: string;
+    stations: StationDeploy[];
+    utc_path?: string;
+    machine_nr?: string;
+    dry_run?: boolean;
+    timeout_s?: number;
+    async?: boolean;
+  },
+  extra?: McpExtra,
+): Promise<ToolResponse> {
+  const reporter = createProgressReporter(extra, "lasal.deploy_solution");
   const run = () =>
     withEngineLock(async () => {
       const state = readState();
@@ -337,12 +342,24 @@ export async function deploySolutionHandler(args: {
     });
 
   if (args.async) {
-    const job = startJob("deploy_solution", run);
+    const job = startJob("deploy_solution", run, (rec) => {
+      void reporter.log("info", {
+        jobId: rec.id,
+        job: rec.name,
+        status: rec.status,
+        durationMs: rec.durationMs,
+        ...(rec.error ? { error: rec.error } : {}),
+        hint: "Background job finished — call check_job_status with this jobId for the result.",
+      });
+    });
     return respond({
       ok: true,
       status: "pending",
       jobId: job.id,
-      hints: ["Poll check_job_status with this jobId until status is completed/failed."],
+      hints: [
+        "This call only STARTED the job in the background — it returned before doing any work.",
+        "You MUST call check_job_status with this jobId repeatedly until it reports status 'completed' or 'failed'; the actual result is delivered there.",
+      ],
     });
   }
   return run();
