@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "fs";
 import { join, basename } from "path";
 import { readState } from "../state.js";
-import { findLcpFiles, findLvpFiles } from "./projectScanner.js";
+import { findLcpFiles, findLvpFiles, findLprFiles } from "./projectScanner.js";
 
 export function resolveLcpPath(lcpPath?: string): { path: string } | { error: string } {
   if (lcpPath) {
@@ -51,5 +51,21 @@ export function resolveLvpPath(lvpPath?: string): { path: string } | { error: st
   if (found.length === 1) return { path: found[0]! };
   return {
     error: `Multiple .lvp stations found — specify lvp_path:\n` + found.map((f) => `  ${f}`).join("\n"),
+  };
+}
+
+export function resolveLprPath(lprPath?: string): { path: string } | { error: string } {
+  if (lprPath) {
+    if (!existsSync(lprPath)) return { error: `File not found: ${lprPath}` };
+    return { path: lprPath };
+  }
+  const state = readState();
+  if (!state.currentProject) return { error: "No project selected. Call select_project first." };
+
+  const found = findLprFiles(state.currentProject);
+  if (found.length === 0) return { error: `No .lpr (LASAL Screen) projects found in ${state.currentProject}` };
+  if (found.length === 1) return { path: found[0]! };
+  return {
+    error: `Multiple .lpr screen projects found — specify lpr_path:\n` + found.map((f) => `  ${f}`).join("\n"),
   };
 }

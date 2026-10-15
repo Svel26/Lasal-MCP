@@ -7,6 +7,8 @@ const ConfigSchema = z.object({
   LASAL_MCP_TIMEOUT_DOWNLOAD: envInt.default(600_000),
   LASAL_MCP_TIMEOUT_VISU: envInt.default(300_000),
   LASAL_MCP_TIMEOUT_SCRIPT: envInt.default(120_000),
+  LASAL_MCP_TIMEOUT_LSE: envInt.default(300_000),
+  LASAL_MCP_TIMEOUT_MM: envInt.default(900_000),
   LASAL_MCP_HMI_DIR: z.string().default("C:\\lslvisu"),
   LASAL_MCP_SCRATCH_MAX_AGE_H: envInt.default(24),
   LASAL_MCP_LARS_GC_MIN_AGE_H: envInt.default(0),
@@ -29,6 +31,8 @@ export const TIMEOUTS = {
   download: cfg.LASAL_MCP_TIMEOUT_DOWNLOAD,
   visu: cfg.LASAL_MCP_TIMEOUT_VISU,
   script: cfg.LASAL_MCP_TIMEOUT_SCRIPT,
+  lse: cfg.LASAL_MCP_TIMEOUT_LSE,
+  mm: cfg.LASAL_MCP_TIMEOUT_MM,
 };
 
 export const HMI_DIR = cfg.LASAL_MCP_HMI_DIR;

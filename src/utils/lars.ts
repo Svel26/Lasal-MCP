@@ -1,10 +1,11 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { spawn, execSync } from "child_process";
 import { join, basename, dirname } from "path";
 import { homedir } from "os";
 import { XMLParser } from "fast-xml-parser";
 import { pingHost } from "./preflight.js";
 import { updateLssConnection, readLssConnection } from "./projectScanner.js";
+import { SCRATCH } from "./engine.js";
 import type { LarsInstanceInfo } from "../state.js";
 
 // ─── Executable paths ─────────────────────────────────────────────────────────
@@ -495,6 +496,65 @@ export async function startLars(workspace: LarsWorkspace): Promise<LarsStartResu
 
 export function isLarsHealthy(onlinePort: number, timeoutMs = 1000): Promise<boolean> {
   return pingHost("127.0.0.1", onlinePort, timeoutMs);
+}
+
+// ─── LARS window screenshot (LASAL Screen local simulation) ───────────────────
+//
+// LARS renders LASAL SCREEN projects (SCREEN_PRJ_PATH workspaces) into its
+// workspace window via GDI4LSE. Capturing that window lets agents visually
+// verify screens without hardware.
+
+export function captureLarsWindow(name: string, outPath: string): { ok: boolean; error?: string } {
+  const pid = getLarsPids(name)[0];
+  if (!pid) {
+    return { ok: false, error: `No running LARS instance found for workspace '${name}'.` };
+  }
+
+  const psPath = join(SCRATCH, `lars_shot_${Date.now()}.ps1`);
+  const escapedOut = outPath.replace(/'/g, "''");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.Drawing",
+    "$sig = 'using System; using System.Runtime.InteropServices;",
+    "public class WinCap {",
+    '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
+    '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);',
+    '  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);',
+    "  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }",
+    "}'",
+    "Add-Type -TypeDefinition $sig",
+    `$p = Get-Process -Id ${pid} -ErrorAction Stop`,
+    "$h = $p.MainWindowHandle",
+    "if ($h -eq [IntPtr]::Zero) { throw 'LARS window handle not found (window minimized to tray?)' }",
+    "[void][WinCap]::ShowWindow($h, 9)",
+    "[void][WinCap]::SetForegroundWindow($h)",
+    "Start-Sleep -Milliseconds 400",
+    "$r = New-Object -TypeName 'WinCap+RECT'",
+    "[void][WinCap]::GetWindowRect($h, [ref]$r)",
+    "$w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top",
+    "if ($w -le 0 -or $ht -le 0) { throw 'LARS window has no drawable size' }",
+    "$bmp = New-Object System.Drawing.Bitmap($w, $ht)",
+    "$g = [System.Drawing.Graphics]::FromImage($bmp)",
+    "$g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)",
+    `$bmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Png)`,
+    "$g.Dispose(); $bmp.Dispose()",
+    "exit 0",
+  ].join("\n");
+
+  writeFileSync(psPath, `\uFEFF${script}`, "utf-8");
+  try {
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psPath}"`, { stdio: "pipe", timeout: 30000 });
+    return { ok: true };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: `Screenshot failed: ${msg}` };
+  } finally {
+    try {
+      unlinkSync(psPath);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 // ─── Station targeting ────────────────────────────────────────────────────────

@@ -2,8 +2,15 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { z } from "zod";
 import { readState } from "../state.js";
-import { findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
-import { CLASS2_EXE, VISUDESIGNER_EXE, killClass2, killVisuDesigner } from "../utils/engine.js";
+import { findLcpFiles, findLvpFiles, findLprFiles } from "../utils/projectScanner.js";
+import {
+  CLASS2_EXE,
+  VISUDESIGNER_EXE,
+  LASAL_SCREEN_EXE,
+  killClass2,
+  killVisuDesigner,
+  killLasalScreen,
+} from "../utils/engine.js";
 
 function requireProject(): { path: string } | { error: string } {
   const state = readState();
@@ -130,4 +137,64 @@ export async function manageClass2Handler(args: { action: "open" | "close"; lcp_
 
   launchDetached(CLASS2_EXE, [lcpPath]);
   return { content: [{ type: "text" as const, text: `CLASS 2 opened with: ${lcpPath}` }] };
+}
+
+// --- manage_lasalscreen ---
+
+export const manageLasalScreenSchema = {
+  action: z
+    .enum(["open", "close"])
+    .describe("'open' launches the LASAL SCREEN (LSE) editor; 'close' kills it (releases .lpr file locks)."),
+  lpr_path: z
+    .string()
+    .optional()
+    .describe(
+      "Full path to the .lpr screen project to open (open only). Omit to auto-detect from the selected project.",
+    ),
+};
+
+export async function manageLasalScreenHandler(args: { action: "open" | "close"; lpr_path?: string }) {
+  if (args.action === "close") {
+    killLasalScreen();
+    return { content: [{ type: "text" as const, text: "LASAL SCREEN closed." }] };
+  }
+
+  const proj = requireProject();
+  if ("error" in proj) {
+    return { content: [{ type: "text" as const, text: proj.error }], isError: true };
+  }
+
+  const lprPath = args.lpr_path;
+
+  if (!lprPath) {
+    const found = findLprFiles(proj.path);
+    if (found.length === 0) {
+      return {
+        content: [{ type: "text" as const, text: `No .lpr screen projects found in ${proj.path}` }],
+        isError: true,
+      };
+    }
+    if (found.length === 1 && found[0]) {
+      launchDetached(LASAL_SCREEN_EXE, [found[0]]);
+      return { content: [{ type: "text" as const, text: `LASAL SCREEN opened with: ${found[0]}` }] };
+    }
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: [
+            "Multiple .lpr screen projects found. Specify lpr_path with one of:",
+            ...found.map((f) => `  ${f}`),
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+
+  if (!existsSync(lprPath)) {
+    return { content: [{ type: "text" as const, text: `File not found: ${lprPath}` }], isError: true };
+  }
+
+  launchDetached(LASAL_SCREEN_EXE, [lprPath]);
+  return { content: [{ type: "text" as const, text: `LASAL SCREEN opened with: ${lprPath}` }] };
 }
