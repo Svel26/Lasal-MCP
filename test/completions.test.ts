@@ -3,16 +3,23 @@ import { completeClassNames, completeStationNames } from "../src/utils/completio
 import { writeState } from "../src/state.js";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 describe("Argument Completions", () => {
+  let stateDir: string;
+
   beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "lasal-mcp-state-"));
+    process.env.LASAL_MCP_STATE_FILE = join(stateDir, "lasal-state.json");
     writeState({ currentProject: FIXTURES });
   });
 
   afterEach(() => {
-    writeState({ currentProject: null });
+    delete process.env.LASAL_MCP_STATE_FILE;
+    rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("returns all class names when prefix is empty", async () => {
