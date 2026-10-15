@@ -1,5 +1,6 @@
 import type { BatchResult } from "../utils/batchScript.js";
 import type { VisuResult } from "../utils/visuScript.js";
+import type { LseResult } from "../utils/lseScript.js";
 import { respond } from "../utils/respond.js";
 
 export interface StepResult {
@@ -36,6 +37,20 @@ export function visuToStepResult(vr: VisuResult): StepResult {
     logPath: vr.logPath,
     hints: vr.hints,
     timedOut: vr.timedOut,
+  };
+}
+
+export function lseToStepResult(lr: LseResult): StepResult {
+  return {
+    ok: lr.ok,
+    durationMs: lr.durationMs,
+    ...(lr.errors.length ? { errors: lr.errors } : {}),
+    ...(lr.warnings.length ? { warnings: lr.warnings } : {}),
+    ...(lr.logTail.length ? { logTail: lr.logTail } : {}),
+    logPath: lr.logPath,
+    hints: lr.hints,
+    timedOut: lr.timedOut,
+    ...(lr.data ? { data: lr.data } : {}),
   };
 }
 

@@ -11,8 +11,12 @@ import {
   manageVisuDesignerHandler,
   manageClass2Schema,
   manageClass2Handler,
+  manageLasalScreenSchema,
+  manageLasalScreenHandler,
 } from "./tools/lasalApps.js";
 import { deployAllSchema, deployAllHandler } from "./tools/deployAll.js";
+import { deploySolutionSchema, deploySolutionHandler } from "./tools/deploySolution.js";
+import { lseProjectSchema, lseProjectHandler } from "./tools/lseProject.js";
 import { applyProjectChangesSchema, applyProjectChangesHandler } from "./tools/applyProjectChanges.js";
 import { runClass2ScriptSchema, runClass2ScriptHandler } from "./tools/runClass2Script.js";
 import {
@@ -104,6 +108,14 @@ server.tool(
   manageVisuDesignerHandler,
 );
 
+server.tool(
+  "manage_lasalscreen",
+  "Open or close the LASAL SCREEN (LSE) editor for .lpr screen projects. Close before running lse_project automation (releases .lpr file locks).",
+  manageLasalScreenSchema,
+  { destructiveHint: true },
+  manageLasalScreenHandler,
+);
+
 // ─── Build, deploy, PLC control ──────────────────────────────────────────────
 
 server.tool(
@@ -179,14 +191,38 @@ server.tool(
   visuProjectHandler,
 );
 
+// ─── LASAL SCREEN (LSE) engine operations ────────────────────────────────────
+
+server.tool(
+  "lse_project",
+  "Run LASAL SCREEN (LSE) engine operations on a .lpr screen project via the LASALScreen COM automation: " +
+    "info (screens/windows/servers/text lists/languages/settings inventory), compile (Runtime output folder), " +
+    "download to a panel (Download & Run), and apply_changes with granular operations: " +
+    "merge/fuse projects, export_xml/import_xml text round-trips, import_variables (CLASS 2 references), " +
+    "textlist_* translations, bulk update_buttons/update_softkeys theming, settings_set (resolution/compiler/online), image_insert. " +
+    "The .lpr itself is binary — never edit it directly; use this tool or the editor.",
+  lseProjectSchema,
+  { destructiveHint: true, openWorldHint: true },
+  lseProjectHandler,
+);
+
 // ─── Deploy pipeline ─────────────────────────────────────────────────────────
 
 server.tool(
   "deploy_all",
-  "Full deploy pipeline: compile → download PLC → start PLC → verify state → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags.",
+  "Full deploy pipeline: compile → download PLC → start PLC → verify state → compile LASAL SCREEN (.lpr, when present) → optional SCREEN download → update Visu stations → download Visu → start HMI runtime. Each step is optional via flags.",
   deployAllSchema,
   { openWorldHint: true },
   deployAllHandler,
+);
+
+server.tool(
+  "deploy_solution",
+  "Multi-station deploy via MachineManager: generates a .lutc update file from the solution (class2/screen/visu downloads, OS updates, file transfers, run/boot, channel writes, CLI commands) and executes it with MachineManager.exe /update. " +
+    "This is the official flow for pushing LASAL SCREEN projects together with CLASS 2 to the same panel. Use dry_run to review the generated .lutc first.",
+  deploySolutionSchema,
+  { destructiveHint: true, openWorldHint: true },
+  deploySolutionHandler,
 );
 
 // ─── HMI runtime ────────────────────────────────────────────────────────────
@@ -223,9 +259,11 @@ XML file at the project root. Lists all stations in the project.
 XML file per station. Contains connection settings and project file references.
 
 Key elements:
-- \`<TCPIP IP="10.195.0.50" PORT="1954" SSLTLS="0"/>\` — target IP for downloads
-- \`<ClassProject Path="PLC.lcp"/>\` — link to the CLASS 2 project
-- \`<VisualProject Path="HMI.lvp"/>\` — link to the VISUDesigner project
+- \`<OnlineConnectionInfo><TCPIP IP="10.195.0.50" PORT="1954" SSLTLS="0"/></OnlineConnectionInfo>\` — target IP for downloads
+- \`<SlnProjects>\` with one or more of:
+  - \`<SlnClassProject File="..\\..\\PLC.lcp"/>\` — CLASS 2 project
+  - \`<SlnVISUDesignerProject File="..\\..\\HMI.lvp"/>\` — VISUDesigner (web HMI) project
+  - \`<SlnScreenProject File="..\\..\\visu.lpr"/>\` — LASAL SCREEN (LSE) panel project
 
 To change the target IP, surgically edit the \`IP\` attribute in the \`<TCPIP>\` element.
 Do NOT rewrite the entire .lss — it contains other settings that must be preserved.
@@ -369,6 +407,38 @@ Dashboard files can be edited directly — they are standard JSON. Each element 
 - \`name\`: unique element name within the dashboard
 - Properties bound to datapoints, constants, schemes, or text references
 
+### LASAL SCREEN project (.lpr, .lsn, .lwn, .lse)
+The LASAL SCREEN editor (LSE) is the classic panel HMI engine — separate from the
+web-based VISUDesigner. The \`.lpr\` project file, its screens (\`.lsn\`), windows
+(\`.lwn\`) and data pools (\`.lse\`) are **binary** — never edit them with file
+tools. Drive them with the \`lse_project\` tool (LASALScreen COM automation):
+
+- \`info\` — screens, windows, servers, text lists, alarms, languages, images,
+  resolutions, compiler version (read-only)
+- \`compile\` — rebuilds the deployable runtime into \`<project dir>\\Runtime\`
+- \`download\` — pushes to the panel (Download & Run) via the project's online settings
+- \`apply_changes\` — merge/fuse projects, XML text export/import, CLASS 2 variable
+  import, text-list translation edits, bulk button/softkey theming, settings, images
+- \`deploy_solution\` — MachineManager \`.lutc\` flow (instruction \`DwnLdLSE\`) for
+  multi-station updates
+- \`manage_lasalscreen\` — open/close the editor (close before automation)
+
+Safe-to-edit sidecars:
+- \`LSEOnlineConfig.xml\` — online/download target in the project folder, same
+  \`<TCPIP .../>\` schema as the station .lss; \`set_target_ip\` updates it
+  automatically for stations with a \`<SlnScreenProject>\` entry
+
+LARS renders LASAL SCREEN projects locally: \`lars_runtime setup\` wires
+\`SCREEN_PRJ_PATH\` for stations with a \`.lpr\`, \`start\` opens the screen in the
+LARS window, and \`lars_runtime screenshot\` returns a PNG of that window — use it
+to verify screens without hardware.
+
+XML round-trip note: \`export_xml\`/\`import_xml\` map to LSE's Text > XML Texts
+feature. In LSE 01.01.197 the file-based XML export additionally requires an
+export language/text-list selection that the automation interface does not expose;
+if it fails with "No language selected", export once from the editor or use the
+granular \`textlist_*\` operations instead.
+
 ## Recommended Workflow
 
 1. **Orient**: Call \`lasal_status\` to check project state and connectivity.
@@ -377,7 +447,7 @@ Dashboard files can be edited directly — they are standard JSON. Each element 
 4. **Edit code**: Use \`read_class_source\` to read/write class .st sources (latin1). Use file tools for other text files.
 5. **Structural changes**: Use \`apply_project_changes\` for network/object/connection operations (batch engine) and for \`create_class\`, \`add_project_file\`, \`clean_project\` (file-level).
 6. **Build & Deploy**: Call \`build_project\` to compile, then \`deploy_all\` to push everything.
-7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then use Playwright MCP or any browser to open the returned URL and interact.
+7. **Verify HMI**: Call \`hmi_runtime\` to start simulation, then use Playwright MCP or any browser to open the returned URL and interact. For LASAL SCREEN (.lpr) projects run them locally with \`lars_runtime\` (setup → start) and capture the rendered panel via \`lars_runtime screenshot\`.
 8. **Live debug**: Use \`plc_values\` to read/write PLC channels in real time.
 
 ## HMI Runtime JavaScript API
