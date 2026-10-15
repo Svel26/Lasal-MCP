@@ -4,13 +4,15 @@ import { randomUUID } from "crypto";
 import { existsSync, readFileSync } from "fs";
 import { runBatchOps, runScript, emitPy27String, emitPath, buildRawScript } from "../utils/batchScript.js";
 import { runVisuOps } from "../utils/visuScript.js";
-import { resolveLcpPath, resolveLvpPath } from "../utils/resolvePaths.js";
+import { runLseOps } from "../utils/lseScript.js";
+import { resolveLcpPath, resolveLvpPath, resolveLprPath } from "../utils/resolvePaths.js";
+import { resolveStationForLpr } from "./lseProject.js";
 import { withEngineLock, SCRATCH } from "../utils/engine.js";
 import { startHmiRuntime } from "./hmiRuntime.js";
 import { TIMEOUTS } from "../utils/config.js";
-import { preflightPlc, preflightHmi, resolveConnection, shouldAddLoader } from "../utils/preflight.js";
+import { preflightPlc, preflightHmi, resolveConnection, shouldAddLoader, pingHost } from "../utils/preflight.js";
 import { respond, fail } from "../utils/respond.js";
-import { batchToStepResult, visuToStepResult, type StepResult } from "../core/response.js";
+import { batchToStepResult, visuToStepResult, lseToStepResult, type StepResult } from "../core/response.js";
 import { isTransientError } from "../core/errors.js";
 import { ensureScratch } from "../core/scratch.js";
 import { createProgressReporter, type McpExtra } from "../utils/mcpProgress.js";
@@ -74,6 +76,35 @@ export const deployAllSchema = {
     .optional()
     .default(false)
     .describe("Force runtime download to HMI even if the version already matches."),
+  lse_path: z
+    .string()
+    .optional()
+    .describe("Absolute path to the .lpr (LASAL SCREEN) project. Omit to auto-detect from the selected project."),
+  compile_lse: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      "Compile the LASAL SCREEN project (writes the Runtime output folder). Skipped when there is no .lpr. Default true.",
+    ),
+  download_lse: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      "Download the LASAL SCREEN project to its station (requires lse_connection or a station target in the solution). Default false.",
+    ),
+  lse_connection: z
+    .string()
+    .optional()
+    .describe(
+      "SCREEN download target, e.g. 'TCPIP:192.168.1.50'. Omit to resolve from the station that owns the .lpr.",
+    ),
+  lse_run: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("Start the screen runtime on the target after download (Download & Run). Default true."),
   start_plc: z
     .boolean()
     .optional()
@@ -103,6 +134,11 @@ export async function deployAllHandler(
     visu_download_flags?: number;
     add_plc_loader?: boolean;
     add_visu_runtime?: boolean;
+    lse_path?: string;
+    compile_lse?: boolean;
+    download_lse?: boolean;
+    lse_connection?: string;
+    lse_run?: boolean;
     start_plc?: boolean;
     start_hmi_runtime?: boolean;
     timeout_s?: number;
@@ -142,6 +178,24 @@ export async function deployAllHandler(
     if (doDownloadVisu && !args.visu_connection) {
       return fail("visu_connection is required when download_visu is true.", ["Provide visu_connection."]);
     }
+
+    // Resolve the LASAL SCREEN (.lpr) project — optional; projects without one skip the LSE steps.
+    let lprPath: string | undefined;
+    const compileLseWanted = args.compile_lse ?? true;
+    if (compileLseWanted || args.download_lse || args.lse_path) {
+      const resolvedLse = resolveLprPath(args.lse_path);
+      if ("error" in resolvedLse) {
+        if (args.download_lse || args.lse_path) {
+          return fail(resolvedLse.error, [
+            "Pass lse_path or ensure the solution has a station with a SlnScreenProject entry.",
+          ]);
+        }
+      } else {
+        lprPath = resolvedLse.path;
+      }
+    }
+    const doCompileLse = !!lprPath && compileLseWanted;
+    const doDownloadLse = !!lprPath && (args.download_lse ?? false);
 
     // Resolve connections and preflight upfront
     const plcConnectionInfo = lcpPath
@@ -191,6 +245,7 @@ export async function deployAllHandler(
         connections: {
           plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
           ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {}),
+          ...(lprPath ? { lse: { lprPath, ...(doDownloadLse ? { connection: args.lse_connection ?? "" } : {}) } } : {}),
         },
         hints,
       };
@@ -343,6 +398,48 @@ export async function deployAllHandler(
       if (!br.ok) return failResponse("PLC start step failed.", br.hints ?? []);
     }
 
+    // Step 2c: compile LASAL SCREEN project (LSE)
+    if (doCompileLse) {
+      await reporter.report(78, 100, "Compiling LASAL SCREEN project...");
+      const lseTimeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.lse;
+      const lr = await runLseOps(lprPath!, [{ type: "compile" }], { saveAtEnd: true, timeoutMs: lseTimeoutMs });
+      steps.compile_lse = lseToStepResult(lr);
+      if (!lr.ok) return failResponse("LASAL SCREEN compile step failed.", lr.hints);
+    }
+
+    // Step 2d: download LASAL SCREEN project (LSE)
+    if (doDownloadLse) {
+      let lseConn = args.lse_connection;
+      if (!lseConn) {
+        const owner = resolveStationForLpr(lprPath!);
+        if (owner?.ip) {
+          lseConn = `TCPIP:${owner.ip}${owner.port && owner.port !== "1954" ? `:${owner.port}` : ""}`;
+        }
+      }
+      if (!lseConn) {
+        return failResponse(
+          "Could not resolve a SCREEN download target. Pass lse_connection or register the .lpr in a station .lss.",
+          ["Example: lse_connection: 'TCPIP:192.168.1.50'."],
+        );
+      }
+      const lseIp = lseConn.replace(/^TCPIP:/i, "").split(":")[0] ?? "";
+      const lsePort = parseInt(lseConn.split(":").pop() ?? "1954", 10) || 1954;
+      await reporter.report(80, 100, `Downloading LASAL SCREEN project (${lseConn})...`);
+      const lseReachable = await pingHost(lseIp, lsePort, 2000);
+      if (!lseReachable) {
+        return failResponse(`LASAL SCREEN target ${lseIp}:${lsePort} is unreachable.`, [
+          "Check the station power/network, or simulate locally with lars_runtime (LARS renders LASAL SCREEN projects).",
+        ]);
+      }
+      const lseTimeoutMs = args.timeout_s ? args.timeout_s * 1000 : TIMEOUTS.lse;
+      const lr = await runLseOps(lprPath!, [{ type: "download", run: args.lse_run ?? true, connection: lseConn }], {
+        saveAtEnd: false,
+        timeoutMs: lseTimeoutMs,
+      });
+      steps.download_lse = lseToStepResult(lr);
+      if (!lr.ok) return failResponse("LASAL SCREEN download step failed.", lr.hints);
+    }
+
     // Step 3: update visu stations + optional download
     if (doUpdateVisuStations || doDownloadVisu) {
       await reporter.report(85, 100, "Updating VISU stations...");
@@ -383,6 +480,7 @@ export async function deployAllHandler(
       connections: {
         plc: { ip: plcIp, source: plcConnectionInfo.source, connection: plcConnectionUsed },
         ...(doDownloadVisu ? { visu: { ip: visuIp, connection: args.visu_connection ?? "" } } : {}),
+        ...(lprPath ? { lse: { lprPath, ...(doDownloadLse ? { connection: args.lse_connection ?? "" } : {}) } } : {}),
       },
     });
   });

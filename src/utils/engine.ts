@@ -12,6 +12,19 @@ export const VISUDESIGNER_EXE =
 export const CLASS2_EXE =
   process.env.LASAL_CLASS2_EXE || "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Class2\\Bin\\Lasal2.exe";
 
+/** LASAL Screen (LSE) editor — also the out-of-process COM automation server for `.lpr` projects. */
+export const LASAL_SCREEN_EXE =
+  process.env.LASAL_SCREEN_EXE || "C:\\Program Files (x86)\\Sigmatek\\Lasal\\Screen\\LSE_modeless.exe";
+
+/** MachineManager — multi-station deploy orchestrator executing `.lutc` update files. */
+export const MACHINEMANAGER_EXE =
+  process.env.LASAL_MACHINEMANAGER_EXE ||
+  "C:\\Program Files (x86)\\Sigmatek\\Lasal\\MachineManager\\Bin\\MachineManager.exe";
+
+/** LASAL Screen automation contract (registered by the LSE registration dialog). */
+export const LSE_PROGID = "LASALScreen.Application";
+export const LSE_CLSID = "{82A49236-710D-4A68-8D66-1FC2312CABAB}";
+
 function extractVersion(name: string): number[] {
   const m = name.match(/V(\d+(?:_\d+)*)/);
   if (!m?.[1]) return [0];
@@ -149,6 +162,71 @@ export function killDataService(pid?: number): void {
       // Not running
     }
   }
+}
+
+export function killLasalScreen(): void {
+  try {
+    execSync(`taskkill /IM "LSE_modeless.exe" /F /T`, { stdio: "pipe" });
+  } catch {
+    // Not running
+  }
+}
+
+export function killMachineManager(): void {
+  try {
+    execSync(`taskkill /IM "MachineManager.exe" /F /T`, { stdio: "pipe" });
+  } catch {
+    // Not running
+  }
+}
+
+// ─── LASAL Screen COM registration ────────────────────────────────────────────
+//
+// LSE registers `LASALScreen.Application` (LocalServer32 → LSE_modeless.exe) as a
+// 32-bit out-of-process automation server. Clients must be launched with the
+// matching bitness for the CLSID lookup to succeed — hence the explicit view
+// probe + per-bitness PowerShell host selection.
+
+export interface LseRegistration {
+  registered: boolean;
+  view: "32" | "64" | null;
+  serverExe?: string;
+}
+
+let lseRegistrationCache: LseRegistration | undefined;
+
+export function getLseRegistration(): LseRegistration {
+  if (lseRegistrationCache) return lseRegistrationCache;
+  const views: Array<{ view: "32" | "64"; flag: string }> = [
+    { view: "32", flag: "/reg:32" },
+    { view: "64", flag: "/reg:64" },
+  ];
+  for (const { view, flag } of views) {
+    try {
+      const out = execSync(`reg query "HKLM\\SOFTWARE\\Classes\\CLSID\\${LSE_CLSID}\\LocalServer32" ${flag}`, {
+        stdio: "pipe",
+        encoding: "utf-8",
+      });
+      const m = out.match(/REG_SZ\s+(.+)/);
+      const serverExe = m?.[1]?.trim().replace(/^"|"$/g, "");
+      if (serverExe) {
+        lseRegistrationCache = { registered: true, view, serverExe };
+        return lseRegistrationCache;
+      }
+    } catch {
+      // Try the next view
+    }
+  }
+  lseRegistrationCache = { registered: false, view: null };
+  return lseRegistrationCache;
+}
+
+/** Path of the Windows PowerShell host matching the LSE registration bitness. */
+export function lsePowerShellPath(): string {
+  const root = process.env.SystemRoot || "C:\\Windows";
+  const rel = "\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const view = getLseRegistration().view ?? "32";
+  return view === "32" ? `${root}\\SysWOW64${rel}` : `${root}\\System32${rel}`;
 }
 
 // ─── Global Engine Mutex ─────────────────────────────────────────────────────

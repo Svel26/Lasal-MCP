@@ -2,6 +2,7 @@ import { existsSync } from "fs";
 import { z } from "zod";
 import { readState } from "../state.js";
 import { findLsmPath, parseSolution, updateLssConnection } from "../utils/projectScanner.js";
+import { findLseOnlineConfig, updateLseOnlineConfig } from "../utils/lseProject.js";
 
 export const setTargetIpSchema = {
   station: z
@@ -100,6 +101,26 @@ export async function setTargetIpHandler(args: { station?: string; ip?: string; 
     };
   }
 
+  // LASAL Screen projects of this station keep their own online target sidecar —
+  // keep it in sync with the station's IDE/download target.
+  const lseConfigsUpdated: string[] = [];
+  const lseConfigWarnings: string[] = [];
+  for (const lprPath of targetStation.lprPaths) {
+    const cfg = findLseOnlineConfig(lprPath);
+    if (!cfg) continue;
+    try {
+      updateLseOnlineConfig(cfg, {
+        ip: args.ip,
+        port: args.port,
+        ssltls: args.ssltls !== undefined ? (args.ssltls ? "1" : "0") : undefined,
+      });
+      lseConfigsUpdated.push(cfg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      lseConfigWarnings.push(`Failed to update ${cfg}: ${msg}`);
+    }
+  }
+
   const updates: string[] = [];
   if (args.ip) updates.push(`IP → ${args.ip}`);
   if (args.port) updates.push(`PORT → ${args.port}`);
@@ -115,6 +136,8 @@ export async function setTargetIpHandler(args: { station?: string; ip?: string; 
             station: targetStation!.name,
             lssPath: targetStation!.lssPath,
             updated: updates,
+            ...(lseConfigsUpdated.length ? { lseOnlineConfigUpdated: lseConfigsUpdated } : {}),
+            ...(lseConfigWarnings.length ? { warnings: lseConfigWarnings } : {}),
           },
           null,
           2,

@@ -6,7 +6,8 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   parseAttributeValue: false,
-  isArray: (name) => name === "File" || name === "SlnClassProject" || name === "SlnVISUDesignerProject",
+  isArray: (name) =>
+    name === "File" || name === "SlnClassProject" || name === "SlnVISUDesignerProject" || name === "SlnScreenProject",
 });
 
 function readLatin1(path: string): string {
@@ -21,6 +22,7 @@ export interface StationInfo {
   ssltls?: string;
   lcpPaths: string[];
   lvpPaths: string[];
+  lprPaths: string[];
 }
 
 export interface SolutionInfo {
@@ -57,6 +59,7 @@ export function parseLss(lssPath: string): StationInfo {
 
   const lcpPaths: string[] = [];
   const lvpPaths: string[] = [];
+  const lprPaths: string[] = [];
 
   const projects = stn.SlnProjects ?? {};
   const classProjects = (projects.SlnClassProject ?? []) as Array<Record<string, unknown>>;
@@ -73,6 +76,13 @@ export function parseLss(lssPath: string): StationInfo {
       if (existsSync(abs)) lvpPaths.push(abs);
     }
   }
+  const screenProjects = (projects.SlnScreenProject ?? []) as Array<Record<string, unknown>>;
+  for (const sp of screenProjects) {
+    if (typeof sp["@_File"] === "string") {
+      const abs = resolve(lssDir, sp["@_File"].replace(/\\/g, "/"));
+      if (existsSync(abs)) lprPaths.push(abs);
+    }
+  }
 
   return {
     name: stn["@_Name"] ?? basename(lssPath, ".lss"),
@@ -82,6 +92,7 @@ export function parseLss(lssPath: string): StationInfo {
     ssltls: tcpip["@_SSLTLS"],
     lcpPaths,
     lvpPaths,
+    lprPaths,
   };
 }
 
@@ -122,6 +133,17 @@ export function findLvpFiles(solutionDir: string): string[] {
     if (paths.length > 0) return paths;
   }
   return findFilesDeep(join(solutionDir, "Stations"), ".lvp");
+}
+
+/** Resolve all .lpr files (LASAL Screen projects) in a solution directory, or fall back to filesystem scan. */
+export function findLprFiles(solutionDir: string): string[] {
+  const lsmPath = findLsmPath(solutionDir);
+  if (lsmPath) {
+    const solution = parseSolution(lsmPath);
+    const paths = solution.stations.flatMap((s) => s.lprPaths);
+    if (paths.length > 0) return paths;
+  }
+  return findFilesDeep(join(solutionDir, "Stations"), ".lpr");
 }
 
 function findFilesDeep(dir: string, ext: string): string[] {

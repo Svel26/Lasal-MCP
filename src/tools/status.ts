@@ -1,12 +1,14 @@
 import { existsSync } from "fs";
 import { readState, getHmiForProject } from "../state.js";
-import { findLsmPath, parseSolution, findLcpFiles, findLvpFiles } from "../utils/projectScanner.js";
+import { findLsmPath, parseSolution, findLcpFiles, findLvpFiles, findLprFiles } from "../utils/projectScanner.js";
 import {
   CLASS2_EXE,
   VISUDESIGNER_EXE,
+  LASAL_SCREEN_EXE,
   resolveDataServiceExe,
   isProcessRunning,
   getProcessPid,
+  getLseRegistration,
 } from "../utils/engine.js";
 import { pingHost } from "../utils/preflight.js";
 import { LARS_EXE, readLarsWorkspaces, getLarsPids, isLarsHealthy, larsConfigPath } from "../utils/lars.js";
@@ -23,6 +25,7 @@ export async function lasalStatusHandler() {
     selected: projDir,
     lcpPaths: projDir ? findLcpFiles(projDir) : [],
     lvpPaths: projDir ? findLvpFiles(projDir) : [],
+    lprPaths: projDir ? findLprFiles(projDir) : [],
   };
 
   const stations: Array<Record<string, unknown>> = [];
@@ -44,6 +47,7 @@ export async function lasalStatusHandler() {
             reachable,
             lcp: stn.lcpPaths[0] ?? null,
             lvp: stn.lvpPaths[0] ?? null,
+            lpr: stn.lprPaths[0] ?? null,
           });
         }
       } catch {}
@@ -55,6 +59,13 @@ export async function lasalStatusHandler() {
   const engines = {
     class2: { path: CLASS2_EXE, exists: existsSync(CLASS2_EXE) },
     visuDesigner: { path: VISUDESIGNER_EXE, exists: existsSync(VISUDESIGNER_EXE) },
+    lasalScreen: {
+      path: LASAL_SCREEN_EXE,
+      exists: existsSync(LASAL_SCREEN_EXE),
+      automationRegistered: getLseRegistration().registered,
+      automationView: getLseRegistration().view,
+      automationServer: getLseRegistration().serverExe ?? null,
+    },
     dataService: {
       path: dsResult.path,
       exists: dsResult.path ? existsSync(dsResult.path) : false,
@@ -71,6 +82,7 @@ export async function lasalStatusHandler() {
   const processes = {
     class2Running: isProcessRunning("Lasal2.exe"),
     visuDesignerRunning: isProcessRunning("VISUDesigner.exe"),
+    lasalScreenRunning: isProcessRunning("LSE_modeless.exe"),
     dataServicePid: getProcessPid("LasalVISUDataService.exe"),
   };
 
@@ -151,6 +163,16 @@ export async function lasalStatusHandler() {
     if (processes.class2Running) {
       hints.push(
         "CLASS 2 IDE is open. Close it manually or call manage_class2 close before running batch operations (compile/download).",
+      );
+    }
+    if (processes.lasalScreenRunning) {
+      hints.push(
+        "LASAL SCREEN (LSE) is open. Call manage_lasalscreen close or lse_project automation will terminate it to release .lpr file locks.",
+      );
+    }
+    if (projectInfo.lprPaths.length > 0 && !engines.lasalScreen.automationRegistered) {
+      hints.push(
+        "LASAL Screen automation (LASALScreen.Application) is not registered — lse_project cannot run. Open LASAL SCREEN once and use its registration dialog to register the automation components.",
       );
     }
   }

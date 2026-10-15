@@ -15,6 +15,7 @@ import {
   safeWorkspaceName,
   gcLarsWorkspaces,
   findLarsInstancesForStation,
+  captureLarsWindow,
   type LarsWorkspace,
 } from "../utils/lars.js";
 import {
@@ -29,17 +30,32 @@ import {
 import { HMI_DIR, LARS_GC_MIN_AGE_H, LARS_GC_STATIONS_DIRS } from "../utils/config.js";
 import { findLsmPath, parseSolution, readVisuStationIds } from "../utils/projectScanner.js";
 import { respond, fail } from "../utils/respond.js";
+import { SCRATCH } from "../utils/engine.js";
+import { ensureScratch } from "../core/scratch.js";
+import { readFileSync } from "fs";
 
 export const larsRuntimeSchema = {
   action: z
-    .enum(["list", "setup", "start", "stop", "remove", "set_station_target", "restore", "target_pc", "gc"])
+    .enum([
+      "list",
+      "setup",
+      "start",
+      "stop",
+      "remove",
+      "set_station_target",
+      "restore",
+      "target_pc",
+      "gc",
+      "screenshot",
+    ])
     .describe(
       "'list' shows all configured LARS workspaces and their state (auto-cleans stale ones, but never the selected project's). " +
-        "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp. " +
+        "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp), wiring both the CLASS 2 project and the LASAL SCREEN (.lpr) project so LARS renders the screen locally. " +
         "'start' launches a LARS instance (auto-creates the workspace first if the station is known but unconfigured), 'stop' terminates it, 'remove' deletes its workspace config. " +
         "'gc' runs lazy garbage collection: deletes auto-created workspaces that are not running and no longer referenced by any station .lss or published DataService stations.json, while always keeping workspaces of the selected project. " +
         "'set_station_target' points a station's .lss at its LARS instance (127.0.0.1:<port>); 'restore' reverts to the saved real target. " +
-        "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore').",
+        "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore'). " +
+        "'screenshot' captures the LARS window of a running workspace (returns the PNG) — use it to visually verify LASAL SCREEN projects running locally.",
     ),
   name: z
     .string()
@@ -80,7 +96,7 @@ export const larsRuntimeSchema = {
 };
 
 type LarsAction =
-  "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc" | "gc";
+  "list" | "setup" | "start" | "stop" | "remove" | "set_station_target" | "restore" | "target_pc" | "gc" | "screenshot";
 
 function detectRole(lcpPath: string): "plc" | "hmi" | "unknown" {
   try {
@@ -109,6 +125,7 @@ interface DetectedStation {
   lssPath: string;
   lcpPath: string;
   lvpPath?: string;
+  lprPath?: string;
   role: "plc" | "hmi" | "unknown";
 }
 
@@ -137,6 +154,7 @@ function detectStations(projectDir: string): DetectedStation[] {
         lssPath: stn.lssPath,
         lcpPath: lcp,
         lvpPath: stn.lvpPaths[0],
+        lprPath: stn.lprPaths[0],
         role: detectStationRole(stn),
       });
     }
@@ -418,6 +436,7 @@ export async function larsRuntimeHandler(args: {
       const name = safeWorkspaceName(projectName, station.stationName);
       const { workspace } = upsertLarsWorkspace(name, {
         classProjectPath: station.lcpPath,
+        ...(station.lprPath ? { screenProjectPath: station.lprPath } : {}),
       });
       setLarsInstance(state, {
         name: workspace.name,
@@ -435,6 +454,7 @@ export async function larsRuntimeHandler(args: {
         onlinePort: workspace.onlinePort,
         stationName: station.stationName,
         lcpPath: station.lcpPath,
+        screenProjectPath: workspace.screenProjectPath ?? null,
         role: station.role,
       });
     } else {
@@ -442,6 +462,7 @@ export async function larsRuntimeHandler(args: {
         const name = safeWorkspaceName(projectName, station.stationName);
         const { workspace } = upsertLarsWorkspace(name, {
           classProjectPath: station.lcpPath,
+          ...(station.lprPath ? { screenProjectPath: station.lprPath } : {}),
         });
         setLarsInstance(state, {
           name: workspace.name,
@@ -458,6 +479,7 @@ export async function larsRuntimeHandler(args: {
           onlinePort: workspace.onlinePort,
           stationName: station.stationName,
           lcpPath: station.lcpPath,
+          screenProjectPath: workspace.screenProjectPath ?? null,
           role: station.role,
         });
       }
@@ -659,6 +681,55 @@ export async function larsRuntimeHandler(args: {
         hint: "Now run build_project compile, then build_project download (the .lss already points at LARS) to get the PC image running.",
       });
     }
+  }
+
+  if (action === "screenshot") {
+    const req = requireWorkspace(args, state);
+    if (req.error) return fail(req.error, []);
+    const workspace = req.workspace!;
+
+    const pids = getLarsPids(workspace.name);
+    if (pids.length === 0) {
+      return fail(`LARS workspace '${workspace.name}' is not running.`, ["Call lars_runtime start first."]);
+    }
+
+    ensureScratch();
+    const safeName = workspace.name.replace(/[^A-Za-z0-9_.-]/g, "_");
+    const outPath = join(SCRATCH, `lars_${safeName}_${Date.now()}.png`);
+    const cap = captureLarsWindow(workspace.name, outPath);
+    if (!cap.ok) {
+      return fail(cap.error ?? "Screenshot failed.", [
+        "Ensure the LARS window is visible (not minimized to tray) and the session is interactive.",
+      ]);
+    }
+
+    let data = "";
+    try {
+      data = readFileSync(outPath).toString("base64");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return fail(`Screenshot was written but could not be read back: ${msg}`, []);
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify(
+            {
+              ok: true,
+              workspace: workspace.name,
+              screenshotPath: outPath,
+              screenProjectPath: workspace.screenProjectPath ?? null,
+              hint: "LARS renders LASAL SCREEN projects locally (SCREEN_PRJ_PATH workspaces). Capture again after UI state changes to verify visuals.",
+            },
+            null,
+            2,
+          ),
+        },
+        { type: "image" as const, data, mimeType: "image/png" },
+      ],
+    };
   }
 
   return fail(`Unknown action: ${action}`, []);
