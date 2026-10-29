@@ -2,6 +2,7 @@ import { writeFileSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { CLASS2_EXE, SCRATCH, killClass2 } from "./engine.js";
+import { getCurrentProject } from "../state.js";
 import { runEngineScript, type StepOutcome } from "./scriptRunner.js";
 import { ensureScratch } from "../core/scratch.js";
 
@@ -420,7 +421,7 @@ export async function runScript(
       argsFor: (p) => [`/script:${p}`],
       timeoutMs,
       logEncoding: "latin1",
-      killOnFailure: killClass2,
+      killOnFailure: () => killClass2({ projectDir: getCurrentProject() ?? undefined, onConflict: "skip" }),
       expectedSteps,
       stepsPath,
     },
@@ -454,7 +455,8 @@ export async function runBatchOps(lcpPath: string, ops: BatchOp[], timeoutMs = 1
 
   const command = `"${CLASS2_EXE}" /script:"${scriptPath}"`;
 
-  killClass2();
+  // Only close the IDE for *this* project; another agent's CLASS 2 session stays alive.
+  killClass2({ lcpPath });
 
   const result = await runEngineScript(
     scriptPath,
@@ -463,7 +465,7 @@ export async function runBatchOps(lcpPath: string, ops: BatchOp[], timeoutMs = 1
       argsFor: (p) => [`/script:${p}`],
       timeoutMs,
       logEncoding: "latin1",
-      killOnFailure: killClass2,
+      killOnFailure: () => killClass2({ lcpPath, onConflict: "skip" }),
       expectedSteps,
       stepsPath,
     },

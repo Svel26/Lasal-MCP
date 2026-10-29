@@ -1,23 +1,67 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { z } from "zod";
-import { readState } from "../state.js";
 import { findLcpFiles, findLvpFiles, findLprFiles } from "../utils/projectScanner.js";
+import { getCurrentProject } from "../state.js";
 import {
   CLASS2_EXE,
   VISUDESIGNER_EXE,
   LASAL_SCREEN_EXE,
+  Class2ConflictError,
   killClass2,
   killVisuDesigner,
   killLasalScreen,
+  type KillClass2Result,
 } from "../utils/engine.js";
 
 function requireProject(): { path: string } | { error: string } {
-  const state = readState();
-  if (!state.currentProject) {
+  const project = getCurrentProject();
+  if (!project) {
     return { error: "No project selected. Call select_project first." };
   }
-  return { path: state.currentProject };
+  return { path: project };
+}
+
+function closeResult(kind: string, result: KillClass2Result) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          {
+            ok: true,
+            closed: result.killed,
+            leftRunning: result.conflicts,
+            ...(result.conflicts.length
+              ? {
+                  hint:
+                    `${kind} instances belonging to another project were left running. ` +
+                    "Pass force: true to terminate them anyway.",
+                }
+              : {}),
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+}
+
+function conflictResult(e: Class2ConflictError) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          { ok: false, error: e.message, conflicts: e.conflicts, hint: "Use force: true to terminate them." },
+          null,
+          2,
+        ),
+      },
+    ],
+    isError: true,
+  };
 }
 
 function launchDetached(exe: string, args: string[]): void {
@@ -37,12 +81,25 @@ export const manageVisuDesignerSchema = {
     .string()
     .optional()
     .describe("Full path to the .lvp station file to open (open only). Omit to auto-detect from the selected project."),
+  force: z
+    .boolean()
+    .optional()
+    .describe("Close every VISUDesigner instance, including ones opened for another project. Default false."),
 };
 
-export async function manageVisuDesignerHandler(args: { action: "open" | "close"; lvp_path?: string }) {
+export async function manageVisuDesignerHandler(args: {
+  action: "open" | "close";
+  lvp_path?: string;
+  force?: boolean;
+}) {
   if (args.action === "close") {
-    killVisuDesigner();
-    return { content: [{ type: "text" as const, text: "VISUDesigner closed." }] };
+    try {
+      const result = killVisuDesigner({ projectDir: getCurrentProject() ?? undefined, force: args.force });
+      return closeResult("VISUDesigner", result);
+    } catch (e) {
+      if (e instanceof Class2ConflictError) return conflictResult(e);
+      throw e;
+    }
   }
 
   const proj = requireProject();
@@ -92,12 +149,21 @@ export const manageClass2Schema = {
     .string()
     .optional()
     .describe("Full path to the .lcp station file to open (open only). Omit to auto-detect from the selected project."),
+  force: z
+    .boolean()
+    .optional()
+    .describe("Close every CLASS 2 instance, including ones opened for another project. Default false."),
 };
 
-export async function manageClass2Handler(args: { action: "open" | "close"; lcp_path?: string }) {
+export async function manageClass2Handler(args: { action: "open" | "close"; lcp_path?: string; force?: boolean }) {
   if (args.action === "close") {
-    killClass2();
-    return { content: [{ type: "text" as const, text: "CLASS 2 closed." }] };
+    try {
+      const result = killClass2({ projectDir: getCurrentProject() ?? undefined, force: args.force });
+      return closeResult("CLASS 2", result);
+    } catch (e) {
+      if (e instanceof Class2ConflictError) return conflictResult(e);
+      throw e;
+    }
   }
 
   const proj = requireProject();

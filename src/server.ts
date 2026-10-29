@@ -46,7 +46,8 @@ const server = new McpServer({
 
 server.tool(
   "select_project",
-  "Set the active LASAL project by directory path. Call first — all other tools default to this project.",
+  "Set the active LASAL project for THIS agent session by directory path. Call first — all other tools default to this project. " +
+    "Selections are per MCP server process, so parallel agents do not redirect each other.",
   selectProjectSchema,
   { idempotentHint: true, openWorldHint: false },
   selectProjectHandler,
@@ -54,7 +55,7 @@ server.tool(
 
 server.tool(
   "lasal_status",
-  "Check project selection, station discovery, PLC/HMI reachability, engine paths, running processes, and HMI runtime health. Call to orient or diagnose connection issues.",
+  "Check project selection, station discovery, PLC/HMI reachability, engine paths, running processes, HMI runtime health, live agent sessions and CLASS 2 ownership. Call to orient or diagnose connection issues.",
   lasalStatusSchema,
   { readOnlyHint: true, idempotentHint: true },
   lasalStatusHandler,
@@ -104,7 +105,8 @@ server.tool(
 
 server.tool(
   "manage_class2",
-  "Open or close the LASAL CLASS 2 IDE GUI. Close before running batch operations.",
+  "Open or close the LASAL CLASS 2 IDE GUI. Close before running batch operations. " +
+    "close only terminates instances opened for this agent's project unless force: true is passed.",
   manageClass2Schema,
   { destructiveHint: true },
   manageClass2Handler,
@@ -112,7 +114,8 @@ server.tool(
 
 server.tool(
   "manage_visudesigner",
-  "Open or close the VISUDesigner GUI. Close before running automated visu operations.",
+  "Open or close the VISUDesigner GUI. Close before running automated visu operations. " +
+    "close only terminates instances opened for this agent's project unless force: true is passed.",
   manageVisuDesignerSchema,
   { destructiveHint: true },
   manageVisuDesignerHandler,
@@ -130,7 +133,8 @@ server.tool(
 
 server.tool(
   "build_project",
-  "Compile the CLASS 2 project or download it to the PLC. Compilation kills CLASS 2 IDE. Download pings the PLC first. Supports async: true — the call then returns immediately with a jobId and you MUST poll check_job_status until it reports status completed/failed (the result is delivered there).",
+  "Compile the CLASS 2 project or download it to the PLC. Compilation closes this project's CLASS 2 IDE; an IDE opened for another project is reported, not killed. " +
+    "Download pings the PLC first. Supports async: true — the call then returns immediately with a jobId and you MUST poll check_job_status until it reports status completed/failed (the result is delivered there).",
   buildProjectSchema,
   { openWorldHint: true },
   buildProjectHandler,

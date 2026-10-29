@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync, renameSync } from "fs";
 import { spawn, execSync } from "child_process";
 import { join, basename, dirname } from "path";
 import { homedir } from "os";
@@ -6,6 +6,7 @@ import { XMLParser } from "fast-xml-parser";
 import { pingHost } from "./preflight.js";
 import { pointStationAtProfile, updateLssConnection, readLssConnection } from "./projectScanner.js";
 import { SCRATCH } from "./engine.js";
+import { withFileLockSync } from "./fileLock.js";
 import type { LarsInstanceInfo } from "../state.js";
 
 // ─── Executable paths ─────────────────────────────────────────────────────────
@@ -177,6 +178,12 @@ function hasElement(block: string, tag: string): boolean {
   return new RegExp(`<${tag}\\b`).test(block);
 }
 
+/** Drop an element (and its indentation/newline) from a workspace block. */
+function removeElement(block: string, tag: string): string {
+  const re = new RegExp(`^[ \\t]*<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>[ \\t]*\\r?\\n?`, "m");
+  return block.replace(re, "");
+}
+
 /** Insert a child element before the container's closing tag, using the container's indentation. */
 function insertChildElement(block: string, container: string, tag: string, value: string): string {
   const re = new RegExp(`^([ \\t]*)</${container}>`, "m");
@@ -203,7 +210,11 @@ function updateWorkspaceBlock(block: string, ws: LarsWorkspace): string {
   out = replaceElementText(out, "AUTOEXEC", ws.autoexec);
   out = replaceElementText(out, "LSLWORK", ws.lslWork);
   out = replaceElementText(out, "SRAMDAT", ws.sramData);
-  if (ws.classProjectPath) out = ensureElementText(out, "PATH", "CLASS_PRJ_PATH", ws.classProjectPath);
+  // CLASS_PRJ_PATH is not a runtime input: LARS tries to open it as a saved
+  // runtime project and shows "ERROR: UNKNOWN PROJECT-FILE" for a .lcp. The
+  // CLASS 2 association lives in the MCP state instead (larsInstances.lcpPath).
+  // Strip it from older configs this tool wrote.
+  out = removeElement(out, "CLASS_PRJ_PATH");
   if (ws.screenProjectPath) out = ensureElementText(out, "PATH", "SCREEN_PRJ_PATH", ws.screenProjectPath);
   out = replaceElementText(out, "ONLINE", String(ws.onlinePort));
   out = replaceElementText(out, "COMLINK_SRVR", String(ws.comlinkServerPort));
@@ -232,7 +243,8 @@ function buildWorkspaceBlock(ws: LarsWorkspace): string {
     `\t\t\t<AUTOEXEC>${escapeXml(ws.autoexec)}</AUTOEXEC>`,
     `\t\t\t<LSLWORK>${escapeXml(ws.lslWork)}</LSLWORK>`,
     `\t\t\t<SRAMDAT>${escapeXml(ws.sramData)}</SRAMDAT>`,
-    ws.classProjectPath ? `\t\t\t<CLASS_PRJ_PATH>${escapeXml(ws.classProjectPath)}</CLASS_PRJ_PATH>` : "",
+    // No CLASS_PRJ_PATH here — see updateWorkspaceBlock. Only the LASAL SCREEN
+    // project path is meaningful to the runtime (it renders .lpr projects).
     ws.screenProjectPath ? `\t\t\t<SCREEN_PRJ_PATH>${escapeXml(ws.screenProjectPath)}</SCREEN_PRJ_PATH>` : "",
   ]
     .filter(Boolean)
@@ -317,7 +329,15 @@ function mergeWorkspaceConfig(raw: string, workspaces: LarsWorkspace[]): string 
   return out;
 }
 
-export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
+function larsConfigLockPath(): string {
+  return `${larsConfigPath()}.lock`;
+}
+
+/**
+ * Write the workspace list atomically. A concurrent reader (another agent listing
+ * workspaces, or LARS starting) must never see a half-written XML document.
+ */
+function writeLarsWorkspacesUnlocked(workspaces: LarsWorkspace[]): void {
   const path = larsConfigPath();
   const dir = dirname(path);
   if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -332,7 +352,14 @@ export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
   }
 
   const merged = existsSync(path) ? mergeWorkspaceConfig(readFileSync(path, "utf-8"), workspaces) : null;
-  writeFileSync(path, merged ?? buildFullConfig(workspaces), "utf-8");
+  const out = merged ?? buildFullConfig(workspaces);
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, out, "utf-8");
+  renameSync(tmp, path);
+}
+
+export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
+  withFileLockSync(larsConfigLockPath(), () => writeLarsWorkspacesUnlocked(workspaces), { label: "lars-config" });
 }
 
 /** Allocate a unique set of ports for a new workspace (each LARS instance needs distinct ports). */
@@ -344,9 +371,11 @@ export function allocateLarsPorts(
   comlinkServerPort: number;
   comlinkBasePort: number;
   alarmPort: number;
+  dataServiceTcpPort: number;
 } {
   const usedOnline = new Set(existing.map((w) => w.onlinePort));
   const usedComlink = new Set(existing.map((w) => w.comlinkBasePort));
+  const usedDataService = new Set(existing.map((w) => w.dataServiceTcpPort));
 
   let onlinePort = baseOnline;
   while (usedOnline.has(onlinePort)) onlinePort += PORT_STEP;
@@ -354,11 +383,19 @@ export function allocateLarsPorts(
   let comlinkBasePort = DEFAULT_COMLINK_BASE;
   while (usedComlink.has(comlinkBasePort)) comlinkBasePort += PORT_STEP;
 
+  // The DataService (web HMI) connects to 2402, so that port is reserved for the
+  // HMI/visu station's workspace. Every other station starts at 2412; two
+  // instances on the same host otherwise fight over 2402 and the web HMI silently
+  // reads the wrong runtime (all datapoints stay 0).
+  let dataServiceTcpPort = 2412;
+  while (usedDataService.has(dataServiceTcpPort)) dataServiceTcpPort += PORT_STEP;
+
   return {
     onlinePort,
     comlinkServerPort: onlinePort + 1,
     comlinkBasePort,
     alarmPort: onlinePort + 3,
+    dataServiceTcpPort,
   };
 }
 
@@ -366,42 +403,57 @@ export function upsertLarsWorkspace(
   name: string,
   partial: Partial<LarsWorkspace>,
 ): { workspaces: LarsWorkspace[]; workspace: LarsWorkspace } {
-  const workspaces = readLarsWorkspaces();
-  let workspace = workspaces.find((w) => w.name === name);
+  // Read + allocate + write under one cross-process lock. Without it, two agents
+  // running `setup` at the same time allocated the same ports from the same
+  // snapshot and one workspace was lost (or two instances claimed one port).
+  return withFileLockSync(
+    larsConfigLockPath(),
+    () => {
+      const workspaces = readLarsWorkspaces();
+      let workspace = workspaces.find((w) => w.name === name);
 
-  if (workspace) {
-    Object.assign(workspace, partial);
-  } else {
-    const ports = allocateLarsPorts(workspaces);
-    workspace = {
-      name,
-      onlinePort: ports.onlinePort,
-      comlinkServerPort: ports.comlinkServerPort,
-      comlinkBasePort: ports.comlinkBasePort,
-      alarmPort: ports.alarmPort,
-      dataServiceTcpPort: 2402,
-      activeData: "C:\\",
-      autoexec: "C:\\Autoexec.lsl",
-      lslWork: "C:\\LSLWORK",
-      sramData: "C:\\",
-      // Every new workspace gets its own emulated C: root, so instances never share
-      // LSLWORK/SRAM and never write into the machine's real system drive.
-      dataRoot: defaultDataRoot(name),
-      dataLenMb: 40,
-      codeLenMb: 8,
-      ...partial,
-    };
-    workspaces.push(workspace);
-  }
+      if (workspace) {
+        Object.assign(workspace, partial);
+      } else {
+        const ports = allocateLarsPorts(workspaces);
+        workspace = {
+          name,
+          onlinePort: ports.onlinePort,
+          comlinkServerPort: ports.comlinkServerPort,
+          comlinkBasePort: ports.comlinkBasePort,
+          alarmPort: ports.alarmPort,
+          dataServiceTcpPort: ports.dataServiceTcpPort,
+          activeData: "C:\\",
+          autoexec: "C:\\Autoexec.lsl",
+          lslWork: "C:\\LSLWORK",
+          sramData: "C:\\",
+          // Every new workspace gets its own emulated C: root, so instances never share
+          // LSLWORK/SRAM and never write into the machine's real system drive.
+          dataRoot: defaultDataRoot(name),
+          dataLenMb: 40,
+          codeLenMb: 8,
+          ...partial,
+        };
+        workspaces.push(workspace);
+      }
 
-  writeLarsWorkspaces(workspaces);
-  return { workspaces, workspace };
+      writeLarsWorkspacesUnlocked(workspaces);
+      return { workspaces, workspace };
+    },
+    { label: "lars-config" },
+  );
 }
 
 export function removeLarsWorkspace(name: string): LarsWorkspace[] {
-  const workspaces = readLarsWorkspaces().filter((w) => w.name !== name);
-  writeLarsWorkspaces(workspaces);
-  return workspaces;
+  return withFileLockSync(
+    larsConfigLockPath(),
+    () => {
+      const workspaces = readLarsWorkspaces().filter((w) => w.name !== name);
+      writeLarsWorkspacesUnlocked(workspaces);
+      return workspaces;
+    },
+    { label: "lars-config" },
+  );
 }
 
 // ─── Workspace data root + seed files ─────────────────────────────────────────
@@ -453,6 +505,47 @@ export interface SeedResult {
  * silently diverges from what a deployment would use. Refuses a drive root,
  * because that would write into the machine's real system drive.
  */
+/** Map an emulated `C:\...` path onto a workspace data root. */
+function mapWorkspacePath(dataRoot: string, emulated: string): string {
+  const m = emulated.match(/^[Cc]:[\\/](.*)$/);
+  if (!m?.[1]) return emulated;
+  return join(dataRoot, m[1]);
+}
+
+/**
+ * The stock Autoexec.lsl runs `LSLLOAD`, which fails with "Project NOT loaded"
+ * when C:\LSLWORK is empty — the normal state of a fresh LARS workspace whose
+ * program is delivered online afterwards. LARS prints that as a red error banner
+ * in its window, which looks like a broken project. Comment the command out until
+ * a saved project actually exists; the rest of the boot script (ONLINERUN) stays.
+ */
+function patchLarsAutoexec(workspace: LarsWorkspace): void {
+  if (!workspace.dataRoot) return;
+  const autoexec = mapWorkspacePath(workspace.dataRoot, workspace.autoexec);
+  const lslWork = mapWorkspacePath(workspace.dataRoot, workspace.lslWork);
+  if (!existsSync(autoexec)) return;
+
+  const hasSavedProject = existsSync(join(lslWork, "PROJECT.IDX"));
+  let content: string;
+  try {
+    content = readFileSync(autoexec, "latin1");
+  } catch {
+    return;
+  }
+
+  const patched = hasSavedProject
+    ? content
+    : content.replace(/^([ \t]*)LSLLOAD[ \t]*$/gim, "$1REM LSLLOAD skipped: no saved project in C:\\LSLWORK (program is downloaded online)");
+
+  if (patched !== content) {
+    try {
+      writeFileSync(autoexec, patched, "latin1");
+    } catch {
+      /* best-effort: LARS can still download with the stock autoexec */
+    }
+  }
+}
+
 export function seedDataRoot(dataRoot: string | undefined, seeds: string[]): SeedResult | undefined {
   if (!dataRoot) return undefined;
   if (isDriveRoot(dataRoot)) {
@@ -475,6 +568,13 @@ export function seedDataRoot(dataRoot: string | undefined, seeds: string[]): See
     }
   }
   return { dataRoot, seeded, missing };
+}
+
+/** Seed files first, then adapt the boot script to the (empty) workspace state. */
+export function prepareLarsDataRoot(dataRoot: string | undefined, seeds: string[], workspace: LarsWorkspace): SeedResult | undefined {
+  const result = seedDataRoot(dataRoot, seeds);
+  patchLarsAutoexec(workspace);
+  return result;
 }
 
 // ─── Garbage collection ────────────────────────────────────────────────────────

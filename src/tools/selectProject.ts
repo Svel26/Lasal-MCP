@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { z } from "zod";
-import { readState, writeState } from "../state.js";
+import { getActiveAgents, setCurrentProject, setSharedProjectHint } from "../state.js";
 import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
 
 export const selectProjectSchema = {
@@ -21,12 +21,15 @@ export async function selectProjectHandler(args: { path: string }) {
     };
   }
 
-  const state = readState();
-  state.currentProject = args.path;
-  writeState(state);
+  // Selection is per MCP server process: other agents keep their own project.
+  setCurrentProject(args.path);
+  setSharedProjectHint(args.path, { label: args.path.split(/[\\/]/).filter(Boolean).pop() });
 
   // Discover stations so the agent immediately knows available paths
-  let summary: Record<string, unknown> = { selectedPath: args.path };
+  let summary: Record<string, unknown> = {
+    selectedPath: args.path,
+    scope: "this agent session only",
+  };
   try {
     const solution = parseSolution(lsmPath);
     summary.stations = solution.stations.map((s) => ({
@@ -43,6 +46,11 @@ export async function selectProjectHandler(args: { path: string }) {
         : "Single station found. Tools will auto-resolve lcp_path / lvp_path.";
   } catch {
     summary.hint = "Could not parse solution file for station discovery.";
+  }
+
+  const others = getActiveAgents().filter((a) => !a.isSelf);
+  if (others.length > 0) {
+    summary.otherAgents = others.map((a) => ({ pid: a.pid, project: a.project, since: a.since }));
   }
 
   return {

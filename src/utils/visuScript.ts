@@ -444,7 +444,14 @@ export function buildVisuScript(
       "lvd.SetExceptionOnError(True)",
       "",
       "try:",
-      `    prj = lvd.LoadProject(${emitStr(lvpPath)})`,
+      // LoadProject refuses a project whose runtime is older than the installed
+      // VISUDesigner ("minimal supported runtime version"). Retry with the update
+      // flag instead of failing the whole operation after a designer upgrade.
+      "    try:",
+      `        prj = lvd.LoadProject(${emitStr(lvpPath)})`,
+      "    except Exception:",
+      "        print('(INFO) Project runtime is missing or incompatible - updating it before load.')",
+      `        prj = lvd.LoadProject(${emitStr(lvpPath)}, True)`,
       "    if prj is None: raise RuntimeError('Failed to load project')",
       "",
       lines.join("\n"),
@@ -477,7 +484,9 @@ export async function runVisuOps(
   const { script, expectedSteps } = buildVisuScript(lvpPath, ops, logPath, stepsPath, saveAtEnd);
   writeFileSync(scriptPath, script, "utf-8");
 
-  killVisuDesigner();
+  // The VISU engine is single-instance: a VISUDesigner opened for another project
+  // must not be reused or killed silently.
+  killVisuDesigner({ lcpPath: lvpPath });
 
   const result = await runEngineScript(
     scriptPath,
@@ -486,7 +495,7 @@ export async function runVisuOps(
       argsFor: (p) => ["--script", p],
       timeoutMs,
       logEncoding: "utf-8",
-      killOnFailure: killVisuDesigner,
+      killOnFailure: () => killVisuDesigner({ lcpPath: lvpPath, onConflict: "skip" }),
       expectedSteps,
       stepsPath,
     },

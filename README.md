@@ -129,6 +129,32 @@ When running from a local clone, point your MCP client to:
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
 | `LASAL_MCP_SCRATCH_MAX_AGE_H` | `24` | Hours before temp files are cleaned |
 | `LASAL_MCP_STATE_FILE` | `<repo>/lasal-state.json` | Override the MCP state file (unit tests use it to stay off live state) |
+| `LASAL_MCP_PROJECT` | unset | Pin this MCP server process to one project. Overrides `select_project` for the process lifetime — useful when each agent gets its own MCP entry. |
+| `LASAL_MCP_INHERIT_PROJECT` | `0` | Set to `1` to restore the old behaviour where a fresh process always adopts the shared "last used" project hint, even while another agent owns it. |
+
+### Running several agents at once
+
+Every MCP server process has its **own** project selection. `select_project` in
+one agent session no longer redirects another session's next tool call — the
+shared state file only keeps a "last used" hint, and a fresh process inherits it
+only when the process that wrote it has exited.
+
+What is still machine-wide, and therefore coordinated:
+
+- **Engine lock** — compile/download/visu/LSE operations take a cross-process
+  lock, so two agents queue instead of driving `Lasal2.exe` simultaneously.
+- **CLASS 2 / VISUDesigner ownership** — before an engine operation closes an
+  IDE, each running instance is matched to its `.lcp`/`.lvp` from the process
+  command line. Instances belonging to another project are **left running**;
+  engine operations report the conflict instead of destroying another agent's
+  unsaved work. `manage_class2` / `manage_visudesigner` accept `force: true` to
+  override.
+- **State writes** — `lasal-state.json` is written under a lock via
+  temp-file + rename, and handlers merge their changes into the current file
+  instead of overwriting a stale snapshot.
+
+`lasal_status` reports `agents` (live sessions and their projects) and `class2`
+(instances owned by this project vs. other projects).
 
 ## Available Tools
 
@@ -136,7 +162,7 @@ When running from a local clone, point your MCP client to:
 
 | Tool | Description |
 |---|---|
-| `select_project` | Set the active project root directory. |
+| `select_project` | Set this agent session's project root directory (per-process; other agents keep theirs). |
 | `lasal_status` | Check project, stations, engines, processes, HMI health. |
 | `check_job_status` | Poll background jobs started with `async: true` (or list recent jobs). |
 | `inspect_project` | Read-only class/network/object inventory (channels, tasks) from the manifest + class sources. |

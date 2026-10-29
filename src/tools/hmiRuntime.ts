@@ -11,7 +11,7 @@ import {
   unlinkSync,
 } from "fs";
 import { join, dirname } from "path";
-import { readState, writeState, getHmiForProject, setHmiForProject, clearHmiForProject } from "../state.js";
+import { readState, updateState, getHmiForProject, setHmiForProject, clearHmiForProject } from "../state.js";
 import { DATASERVICE_EXE, killDataService, withEngineLock } from "../utils/engine.js";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { runVisuOps } from "../utils/visuScript.js";
@@ -81,8 +81,7 @@ export async function startHmiRuntime(args: {
     const running = getHmiForProject(state);
     if (running) {
       killDataService(running.pid);
-      clearHmiForProject(state);
-      writeState(state);
+      updateState((s) => clearHmiForProject(s));
       return respond({ ok: true, message: `HMI runtime DataService (PID ${running.pid}) stopped.` });
     } else {
       killDataService();
@@ -110,8 +109,7 @@ export async function startHmiRuntime(args: {
       });
     } else {
       if (running) {
-        clearHmiForProject(state);
-        writeState(state);
+        updateState((s) => clearHmiForProject(s));
       }
       return respond({ ok: true, running: false });
     }
@@ -138,12 +136,25 @@ export async function startHmiRuntime(args: {
 
   // 2. Discover published folders
   const visuDir = dirname(resolved.path);
-  const webrootSrc = join(visuDir, "TempPreview", "Publish", "webroot");
-  const dataSrc = join(visuDir, "TempPreview", "Publish", "dataservice", "data");
+  // A debug publish writes TempPreview/Publish, a standard publish writes Publish.
+  // When the debug build is unsupported the tool falls back to the standard one,
+  // so pick whichever webroot was written last instead of always reading TempPreview.
+  const publishCandidates = [join(visuDir, "Publish"), join(visuDir, "TempPreview", "Publish")].filter((p) =>
+    existsSync(join(p, "webroot")),
+  );
+  const publishRoot = publishCandidates.sort(
+    (a, b) => statSync(join(b, "webroot")).mtimeMs - statSync(join(a, "webroot")).mtimeMs,
+  )[0];
 
-  if (!existsSync(webrootSrc)) {
-    return fail(`Published webroot not found at: ${webrootSrc}. Run HMI publish first.`, []);
+  if (!publishRoot) {
+    return fail(
+      `Published webroot not found under ${visuDir} (looked in Publish and TempPreview/Publish). Run HMI publish first.`,
+      [],
+    );
   }
+
+  const webrootSrc = join(publishRoot, "webroot");
+  const dataSrc = join(publishRoot, "dataservice", "data");
 
   // 3. Prepare HMI Dir (with override support)
   const { HMI_DIR } = await import("../utils/config.js");
@@ -173,6 +184,21 @@ export async function startHmiRuntime(args: {
       warnings.push(
         `Warning: VISUDesigner Runtime 'rt' directory not found at ${rtSrc}. Paths starting with 'rt/' might fail to resolve.`,
       );
+    }
+
+    // The web runtime always fetches /version.json and shows a full-screen
+    // "Runtime Error" overlay when it 404s. The publish does not emit it; the
+    // designer's runtime folder carries the matching file.
+    const runtimeVersionSrc = join(visuDesignerDir, "SIGMATEK", "Lasal", "VISUDesigner", "Runtime", "Version.json");
+    if (existsSync(runtimeVersionSrc)) {
+      try {
+        copyFileSync(runtimeVersionSrc, join(dataDir, "Version.json"));
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        warnings.push(`Warning: could not copy Version.json: ${msg}`);
+      }
+    } else {
+      warnings.push(`Warning: VISUDesigner Runtime 'Version.json' not found at ${runtimeVersionSrc}.`);
     }
 
     // Create logs dir
@@ -288,8 +314,7 @@ export async function startHmiRuntime(args: {
       url = `file:///${dataDir.replace(/\\/g, "/")}/index.html`;
     }
 
-    setHmiForProject(state, { pid, port, url, dataDir });
-    writeState(state);
+    updateState((s) => setHmiForProject(s, { pid, port, url, dataDir }));
 
     return respond({
       ok: true,

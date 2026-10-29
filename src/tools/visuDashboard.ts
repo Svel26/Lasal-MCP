@@ -3,6 +3,7 @@ import { join, dirname, basename } from "path";
 import { z } from "zod";
 import { resolveLvpPath } from "../utils/resolvePaths.js";
 import { withEngineLock, killVisuDesigner } from "../utils/engine.js";
+import { getCurrentProject } from "../state.js";
 import { EditTransaction } from "../utils/editTransaction.js";
 import { newDesignTimeId, newInstanceId, getFileEntryVersion, writeTabIndentedJson } from "../utils/visuDashboardIO.js";
 import { loadControlManifest, encodeProperty } from "../utils/visuPropertyEncoding.js";
@@ -221,8 +222,9 @@ export async function visuDashboardHandler(args: {
   };
 
   await withEngineLock(async () => {
-    // Safety: kill VISUDesigner before any direct file writes
-    killVisuDesigner();
+    // Safety: close our VISUDesigner before direct file writes. Another project's
+    // VISUDesigner cannot lock these files and is left alone.
+    killVisuDesigner({ projectDir: getCurrentProject() ?? undefined, onConflict: "skip" });
 
     for (const op of args.operations) {
       const opResult: Record<string, unknown> = { op: op.op };

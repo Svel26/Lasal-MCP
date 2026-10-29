@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { readState, getHmiForProject } from "../state.js";
+import { readState, getHmiForProject, getActiveAgents } from "../state.js";
 import { findLsmPath, parseSolution, findLcpFiles, findLvpFiles, findLprFiles } from "../utils/projectScanner.js";
 import {
   CLASS2_EXE,
@@ -9,6 +9,7 @@ import {
   isProcessRunning,
   getProcessPid,
   getLseRegistration,
+  getClass2Status,
 } from "../utils/engine.js";
 import { pingHost } from "../utils/preflight.js";
 import {
@@ -92,6 +93,19 @@ export async function lasalStatusHandler() {
     lasalScreenRunning: isProcessRunning("LSE_modeless.exe"),
     dataServicePid: getProcessPid("LasalVISUDataService.exe"),
   };
+
+  // Which CLASS 2 instances belong to this project and which belong to another
+  // agent's project. Enumerated once — PowerShell startup is not free.
+  const class2 = processes.class2Running
+    ? getClass2Status({ projectDir: projDir ?? undefined })
+    : { handles: [], conflicts: [] };
+
+  const agents = getActiveAgents().map((a) => ({
+    pid: a.pid,
+    project: a.project,
+    since: a.since,
+    isSelf: a.isSelf,
+  }));
 
   // Check HMI runtime health (per project)
   const hmiRuntimeInfo = await (async () => {
@@ -177,7 +191,12 @@ export async function lasalStatusHandler() {
         );
       }
     }
-    if (processes.class2Running) {
+    if (class2.conflicts.length > 0) {
+      hints.push(
+        `CLASS 2 is open for another project (PID ${class2.conflicts.map((c) => c.pid).join(", ")}). ` +
+          "Compile/batch operations will refuse to run until it is closed — manage_class2 close only closes your own project.",
+      );
+    } else if (processes.class2Running) {
       hints.push(
         "CLASS 2 IDE is open. Close it manually or call manage_class2 close before running batch operations (compile/download).",
       );
@@ -196,10 +215,15 @@ export async function lasalStatusHandler() {
 
   return respond({
     ok: true,
-    project: projectInfo,
+    project: {
+      ...projectInfo,
+      selectionScope: process.env.LASAL_MCP_PROJECT ? "pinned by LASAL_MCP_PROJECT" : "this agent session",
+    },
     stations,
     engines,
     processes,
+    class2,
+    agents,
     hmiRuntime: hmiRuntimeInfo,
     lars,
     hints,

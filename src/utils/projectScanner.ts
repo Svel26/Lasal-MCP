@@ -55,7 +55,13 @@ export function parseLss(lssPath: string): StationInfo {
   const content = readLatin1(lssPath);
   const doc = parser.parse(content);
   const stn = doc.SlnStation ?? {};
-  const tcpip = stn.OnlineConnectionInfo?.TCPIP ?? {};
+  const rawTcpip = stn.OnlineConnectionInfo?.TCPIP;
+  // Two <TCPIP> profiles make fast-xml-parser return an array. Read the active
+  // one (the <SlnStation OnlineConnection="..."> name), not the array itself.
+  const activeProfile = stn["@_OnlineConnection"];
+  const tcpip = Array.isArray(rawTcpip)
+    ? (rawTcpip.find((t) => t?.["@_ConfigName"] === activeProfile) ?? rawTcpip[0] ?? {})
+    : (rawTcpip ?? {});
 
   const lcpPaths: string[] = [];
   const lvpPaths: string[] = [];

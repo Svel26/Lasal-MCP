@@ -11,7 +11,7 @@ MCP server wrapping three Sigmatek LASAL headless engines:
 ```
 src/
   server.ts          — MCP tool/resource registration, entry point
-  state.ts           — per-project JSON state (selected project, HMI runtime PIDs)
+  state.ts           — shared JSON state (LARS/HMI bookkeeping) + per-agent project selection
   core/              — shared helpers (Phase 2 dedup layer)
     errors.ts        — isTransientError, typed error codes
     envelope.ts      — truncateArray, ToolEnvelope type
@@ -81,8 +81,12 @@ instance owns. `set_station_target` rewrites the station's `.lss` `<TCPIP>` to
 loudly when a running instance answers nowhere; `build_project`/`control_plc`/
 `plc_values`/`deploy_all` then operate on the LARS instance with no extra arguments.
 
-The workspace records the station's `.lcp` as `CLASS_PRJ_PATH` (and its `.lpr` as
-`SCREEN_PRJ_PATH`) so LARS auto-loads the project. Writes to `lasalos2.xml` are
+The workspace records the station's `.lpr` as `SCREEN_PRJ_PATH` so LARS renders the
+screen project. The CLASS 2 association is kept in MCP state (`larsInstances[].lcpPath`),
+**not** as `CLASS_PRJ_PATH`: LARS treats that element as a saved runtime project and shows
+`ERROR: UNKNOWN PROJECT-FILE` for a `.lcp` (the program is delivered by the online
+download instead). Stale `CLASS_PRJ_PATH` elements are stripped on the next write.
+Writes to `lasalos2.xml` are
 **lossless**: only model-owned fields are updated, everything else — LARSConfigTool's
 `Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings — is preserved,
 so the file stays interchangeable with the official config tool.
@@ -107,7 +111,33 @@ Key gotchas handled by the code:
 ## Key Patterns
 
 ### Engine Mutex
-All engine operations go through `withEngineLock()` — a promise chain that serializes access. Only one engine operation runs at a time.
+All engine operations go through `withEngineLock()`. It combines an in-process promise
+chain with a cross-process lock directory (`%TEMP%/lasal-mcp/engine.lock`), because every
+agent session runs its own MCP server process. Only one engine operation runs at a time
+per machine; nested calls from the same async context (deploy → compile → download) use
+`AsyncLocalStorage` and pass straight through.
+
+### Multi-agent State
+`state.ts` separates machine-wide data from per-agent data:
+
+- `larsInstances`, `hmiRuntimes`, `larsGc` are machine-wide and written under a file
+  lock with an atomic temp-file + rename.
+- `currentProject` is only a "last used" hint. Each MCP process has its own selection;
+  a fresh process inherits the hint only when the process that wrote it has exited.
+- `agentProjects` records live sessions for `lasal_status`.
+- `updateState(mutator)` re-reads the file under the lock, so a long-running handler
+  cannot overwrite records another agent created while it was busy.
+
+`lasalos2.xml` workspace mutations (`upsertLarsWorkspace`, `removeLarsWorkspace`) take the
+same kind of lock: two concurrent `setup` calls used to allocate identical ports from the
+same snapshot.
+
+### Editor Ownership
+Before an engine operation closes CLASS 2 or VISUDesigner, `engine.ts` enumerates the
+running processes and extracts the `.lcp`/`.lvp` each was opened with. Instances under
+another project are left running and reported as a conflict; `manage_class2` /
+`manage_visudesigner` accept `force: true` to override. Processes that cannot be
+attributed to a project are treated as foreign.
 
 ### Script Execution
 Scripts are Python 2.7 files written to a temp scratch directory, executed via `execFile` (async, non-blocking), then parsed for step markers and log errors. Each script writes `STEP <label> OK` markers to a sidecar file; the runner verifies all expected steps completed.

@@ -119,6 +119,17 @@ describe("LARS workspace config", () => {
     expect(ports.comlinkServerPort).toBe(1965);
     expect(ports.comlinkBasePort).toBe(1010);
     expect(ports.alarmPort).toBe(1967);
+    // DEFAULT (the HMI/visu owner) keeps 2402; the next instance must not collide.
+    expect(ports.dataServiceTcpPort).toBe(2412);
+  });
+
+  it("never reuses the DataService datalink port", () => {
+    const workspaces = readLarsWorkspaces();
+    const taken = [
+      ...workspaces,
+      { ...workspaces[0]!, name: "PLC", onlinePort: 1964, comlinkBasePort: 1010, dataServiceTcpPort: 2412 },
+    ];
+    expect(allocateLarsPorts(taken).dataServiceTcpPort).toBe(2422);
   });
 
   it("upserts a new workspace and round-trips it", () => {
@@ -134,7 +145,10 @@ describe("LARS workspace config", () => {
     const workspaces = readLarsWorkspaces();
     expect(workspaces).toHaveLength(2);
     const plc = workspaces.find((w) => w.name === "Proj_PLC");
-    expect(plc?.classProjectPath).toBe("C:\\proj\\PLC.lcp");
+    // The CLASS 2 association lives in MCP state: writing CLASS_PRJ_PATH makes
+    // LARS try to open the .lcp as a runtime project ("UNKNOWN PROJECT-FILE").
+    expect(plc?.classProjectPath).toBeUndefined();
+    expect(readFileSync(configPath, "utf-8")).not.toContain("CLASS_PRJ_PATH");
     expect(plc?.comlinkBasePort).toBe(1010);
     // DEFAULT preserved
     expect(workspaces.find((w) => w.name === "DEFAULT")?.onlinePort).toBe(1954);
@@ -756,7 +770,7 @@ describe("lossless LARS config writes", () => {
 
     // Modeled fields were updated; attributes on those elements survive.
     expect(after).toContain('<ONLINE Desc="Port for the online comunication.">1994</ONLINE>');
-    expect(after).toContain("<CLASS_PRJ_PATH>C:\\proj\\PLC.lcp</CLASS_PRJ_PATH>");
+    expect(after).not.toContain("CLASS_PRJ_PATH");
     // Foreign content survives.
     expect(after).toContain("<GLOBAL_NOTE>keep me</GLOBAL_NOTE>");
     expect(after).toContain("<!-- keep this comment -->");
@@ -769,7 +783,19 @@ describe("lossless LARS config writes", () => {
     // Re-read sees the new values.
     const ws = readLarsWorkspaces().find((w) => w.name === "Custom_PLC")!;
     expect(ws.onlinePort).toBe(1994);
-    expect(ws.classProjectPath).toBe("C:\\proj\\PLC.lcp");
+    expect(ws.classProjectPath).toBeUndefined();
+  });
+
+  it("strips a stale CLASS_PRJ_PATH from older configs", () => {
+    const withStale = readFileSync(configPath, "utf-8").replace(
+      "</PATH>",
+      "<CLASS_PRJ_PATH>C:\\proj\\Old.lcp</CLASS_PRJ_PATH></PATH>",
+    );
+    writeFileSync(configPath, withStale, "utf-8");
+    expect(withStale).toContain("CLASS_PRJ_PATH");
+
+    upsertLarsWorkspace("DEFAULT", {});
+    expect(readFileSync(configPath, "utf-8")).not.toContain("CLASS_PRJ_PATH");
   });
 
   it("appends new workspaces without touching existing bytes", () => {
