@@ -206,9 +206,12 @@ instance runs one program, the MCP creates one workspace per station:
 
 1. `lars_runtime setup` — creates workspaces for every station in the selected solution.
 2. `lars_runtime start <station>` — launches the LARS window for that station and reports the **effective online port** it probed.
-3. `lars_runtime set_station_target <station>` — points the station's `.lss` at that effective port (refuses to target a port that is not answering).
+3. `lars_runtime set_station_target <station>` — adds or switches a dedicated `LARS`
+   profile in the station's `.lss` and points `OnlineConnection` at it (refusing a port
+   that is not answering). The machine's own profile is left untouched.
 4. Now `build_project`, `control_plc`, and `plc_values` work unchanged against the local runtime.
-5. `lars_runtime restore <station>` — reverts the `.lss` to the real hardware target.
+5. `lars_runtime restore <station>` — switches `OnlineConnection` back to the machine
+   profile. Nothing is rewritten, so no address can be lost.
 
 Shortcut: `lars_runtime simulate` does the whole loop in one call — creates the workspace
 if needed (CLASS 2 + LASAL SCREEN), switches ARM targets to PC, compiles, starts the LARS
@@ -226,6 +229,11 @@ on distinct ports whenever the LARS build provides them, and a workspace that an
 nowhere fails loudly instead of pointing a station at a dead port. `lars_runtime list` and
 `lasal_status` report the resolved port as `effectiveOnlinePort`.
 
+LARS **01.03.216 ignores the table entirely**: every instance binds `1954` and a second
+concurrent instance exposes no online port at all, which makes multi-station simulation
+impossible. If you need more than one instance, point `LASAL_LARS_EXE` at a build that
+honours the table (01.03.213 was verified to) — no other change is needed.
+
 Notes:
 - Projects compiled for `Processor="ARM"` (most machine PLCs) need
   `lars_runtime target_pc` first — LARS is an x86 runtime and rejects ARM images.
@@ -234,6 +242,12 @@ Notes:
 - `%APPDATA%\lasalos2.xml` is edited **losslessly** — the MCP updates only the fields it
   owns and preserves everything else, so the file stays interchangeable with Sigmatek's
   LARSConfigTool (`Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings).
+- Each workspace gets its **own emulated `C:` data root** (`%LOCALAPPDATA%\lasal-mcp\lars\<workspace>`
+  by default) instead of the host `C:\`, so instances never share `LSLWORK`/SRAM and never
+  write into the real system drive. Files a program expects at a fixed `C:\` path are
+  re-seeded from the host before every start, so the host copy stays authoritative.
+- `stop` closes LARS gracefully first — the runtime writes its SRAM image on a normal
+  shutdown, and a force kill would silently drop retained variables.
 - `hmi_runtime` remaps published stations.json entries to running LARS instances,
   so the web HMI talks to the local simulation.
 - Stations with a LASAL SCREEN project get their `.lpr` wired into the LARS
