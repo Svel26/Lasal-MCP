@@ -740,6 +740,8 @@ export async function larsRuntimeHandler(args: {
       const inst = req.instance;
       if (inst) {
         inst.pid = undefined;
+        // The port belonged to that process; a later start may serve another one.
+        inst.effectiveOnlinePort = undefined;
         setLarsInstance(state, inst);
         writeState(state);
       }
@@ -822,8 +824,12 @@ export async function larsRuntimeHandler(args: {
 
       // Point the station at the port the instance actually services â€” never blindly at
       // the configured ONLINE value (that is exactly how stations ended up on dead ports).
-      let port = inst.effectiveOnlinePort;
-      if (port === undefined) {
+      const running = getLarsPids(workspace.name).length > 0;
+      // A recorded effective port is only meaningful while that instance is running:
+      // LARS may serve a different port after a restart, and does across builds.
+      // Trusting a stale value is exactly how a station ended up pointed at a dead 1954.
+      let port = running ? inst.effectiveOnlinePort : undefined;
+      if (port === undefined && running) {
         const owned = runningInstancePorts(state.larsInstances, workspace.name);
         port =
           (await resolveEffectiveOnlinePort(
@@ -834,7 +840,6 @@ export async function larsRuntimeHandler(args: {
           )) ?? undefined;
         if (port !== undefined) inst.effectiveOnlinePort = port;
       }
-      const running = getLarsPids(workspace.name).length > 0;
       if (port === undefined && running) {
         return fail(
           `LARS workspace '${workspace.name}' is running but no online port answered among ` +
