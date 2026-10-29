@@ -15,6 +15,11 @@ import {
   findLarsInstancesForStation,
   instanceBelongsToProject,
   resolveEffectiveOnlinePort,
+  seedDataRoot,
+  defaultDataRoot,
+  defaultSeedFiles,
+  switchProjectTargetToPC,
+  restoreProjectTarget,
   type LarsInstanceInfo,
 } from "../src/utils/lars.js";
 import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
@@ -754,5 +759,162 @@ describe("lossless LARS config writes", () => {
     expect(after).not.toContain("Custom_PLC");
     expect(after).toContain("<GLOBAL_NOTE>keep me</GLOBAL_NOTE>");
     expect(blockOf(after, "DEFAULT")).toBe(defaultBlockBefore);
+  });
+});
+
+describe("workspace data root", () => {
+  let configPath: string;
+  let tempDir: string;
+
+  const sample = `<?xml version="1.0" encoding="UTF-8"?>
+<LARSCONFIGURATIONS ConfigVersion="2">
+  <WORKSPACE Name="DEFAULT">
+    <PATH>
+      <ACTIVEDAT>C:\\</ACTIVEDAT>
+      <AUTOEXEC>C:\\Autoexec.lsl</AUTOEXEC>
+      <LSLWORK>C:\\LSLWORK</LSLWORK>
+      <SRAMDAT>C:\\</SRAMDAT>
+    </PATH>
+    <COMTCP>
+      <ONLINE>1954</ONLINE>
+    </COMTCP>
+    <DRIVEMAP>
+      <DRIVEMAP_ELEMENT>
+        <DRIVE>C:</DRIVE>
+        <PATH>C:\\Lars</PATH>
+      </DRIVEMAP_ELEMENT>
+    </DRIVEMAP>
+    <IP_MAP>
+    </IP_MAP>
+  </WORKSPACE>
+</LARSCONFIGURATIONS>
+`;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-root-"));
+    configPath = join(tempDir, "lasalos2.xml");
+    process.env.LASAL_LARS_CONFIG = configPath;
+    writeFileSync(configPath, sample, "utf-8");
+  });
+
+  afterEach(() => {
+    delete process.env.LASAL_LARS_CONFIG;
+    delete process.env.LOCALAPPDATA;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("reads the C: drive map as dataRoot, separate from ACTIVEDAT", () => {
+    const [ws] = readLarsWorkspaces();
+    expect(ws.dataRoot).toBe("C:\\Lars");
+    expect(ws.activeData).toBe("C:\\");
+  });
+
+  it("writes dataRoot to the drive map without touching ACTIVEDAT", () => {
+    upsertLarsWorkspace("DEFAULT", { dataRoot: "D:\\isolated" });
+    const raw = readFileSync(configPath, "utf-8");
+    expect(raw).toContain("<PATH>D:\\isolated</PATH>");
+    expect(raw).toContain("<ACTIVEDAT>C:\\</ACTIVEDAT>");
+    expect(readLarsWorkspaces()[0].dataRoot).toBe("D:\\isolated");
+  });
+
+  it("defaults a new workspace to an isolated data root under LOCALAPPDATA", () => {
+    process.env.LOCALAPPDATA = join(tempDir, "appdata");
+    const { workspace } = upsertLarsWorkspace("NewWs", {});
+    expect(workspace.dataRoot).toBe(defaultDataRoot("NewWs"));
+    expect(workspace.dataRoot).toContain(join("lasal-mcp", "lars", "NewWs"));
+    expect(readLarsWorkspaces().find((w) => w.name === "NewWs")?.dataRoot).toBe(workspace.dataRoot);
+  });
+
+  it("seeds files into the data root and refreshes them from the source", () => {
+    const srcDir = join(tempDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const src = join(srcDir, "MQTT_Client_Iq.xml");
+    writeFileSync(src, "<v1/>", "utf-8");
+    const root = join(tempDir, "root");
+
+    const first = seedDataRoot(root, [src]);
+    expect(first?.seeded).toHaveLength(1);
+    expect(readFileSync(join(root, "MQTT_Client_Iq.xml"), "utf-8")).toBe("<v1/>");
+
+    // The copy tracks its source: editing the source wins on the next start.
+    writeFileSync(src, "<v2/>", "utf-8");
+    seedDataRoot(root, [src]);
+    expect(readFileSync(join(root, "MQTT_Client_Iq.xml"), "utf-8")).toBe("<v2/>");
+  });
+
+  it("reports seed files that do not exist instead of failing", () => {
+    const result = seedDataRoot(join(tempDir, "root"), [join(tempDir, "nope.xml")]);
+    expect(result?.seeded).toHaveLength(0);
+    expect(result?.missing).toHaveLength(1);
+  });
+
+  it("refuses a drive root so the real system drive is never written", () => {
+    const result = seedDataRoot("C:\\", [join(tempDir, "anything")]);
+    expect(result?.skipped).toBeTruthy();
+    expect(result?.seeded).toHaveLength(0);
+  });
+
+  it("returns undefined when no data root is configured", () => {
+    expect(seedDataRoot(undefined, [])).toBeUndefined();
+  });
+
+  it("does not seed into a drive root even with a valid source", () => {
+    const srcDir = join(tempDir, "src2");
+    mkdirSync(srcDir, { recursive: true });
+    const src = join(srcDir, "autoexec.lsl");
+    writeFileSync(src, "x", "utf-8");
+    expect(seedDataRoot("C:/", [src])?.seeded).toHaveLength(0);
+  });
+
+  it("default seed list is overridable via env", () => {
+    process.env.LASAL_MCP_LARS_SEED_FILES = "C:\\a.xml; D:\\b.xml ";
+    expect(defaultSeedFiles()).toEqual(["C:\\a.xml", "D:\\b.xml"]);
+    delete process.env.LASAL_MCP_LARS_SEED_FILES;
+    expect(defaultSeedFiles().length).toBeGreaterThan(0);
+  });
+});
+
+describe("switchProjectTargetToPC", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-target-"));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("switches ARM to PC and restores byte-identically", () => {
+    const lcp = join(tempDir, "p.lcp");
+    const original = `<Project>\n\t<Target UseFPU="true" Processor="ARM">\n\t</Target>\n</Project>\n`;
+    writeFileSync(lcp, original, "latin1");
+
+    const r = switchProjectTargetToPC(lcp);
+    expect("error" in r).toBe(false);
+    if ("error" in r) return;
+    expect(r.alreadyPc).toBe(false);
+    expect(readFileSync(lcp, "latin1")).not.toContain('Processor="ARM"');
+
+    expect(restoreProjectTarget(lcp, r.previousTag)).toBe(true);
+    expect(readFileSync(lcp, "latin1")).toBe(original);
+  });
+
+  it("is idempotent on an already-PC project instead of erroring", () => {
+    const lcp = join(tempDir, "pc.lcp");
+    const original = `<Project>\n\t<Target UseFPU="true">\n\t</Target>\n</Project>\n`;
+    writeFileSync(lcp, original, "latin1");
+
+    const r = switchProjectTargetToPC(lcp);
+    expect("error" in r).toBe(false);
+    if ("error" in r) return;
+    expect(r.alreadyPc).toBe(true);
+    expect(readFileSync(lcp, "latin1")).toBe(original);
+  });
+
+  it("errors when the project has no Target element", () => {
+    const lcp = join(tempDir, "bad.lcp");
+    writeFileSync(lcp, "<Project></Project>", "latin1");
+    expect("error" in switchProjectTargetToPC(lcp)).toBe(true);
   });
 });

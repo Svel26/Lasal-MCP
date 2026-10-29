@@ -33,6 +33,13 @@ export interface LarsInstanceInfo {
   originalIp?: string;
   originalPort?: string;
   originalTargetTag?: string;
+  /**
+   * Set when the station .lss was pointed at LARS. Distinguishes "never overridden"
+   * from "the original target happened to be empty", which `!originalIp` cannot.
+   */
+  stationTargetOverridden?: boolean;
+  /** Host files copied into the workspace data root before each start. */
+  seedFiles?: string[];
   pid?: number;
 }
 

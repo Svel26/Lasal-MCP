@@ -20,6 +20,8 @@ import {
   switchProjectTargetToPC,
   runningInstancePorts,
   resolveEffectiveOnlinePort,
+  seedDataRoot,
+  defaultSeedFiles,
   type LarsWorkspace,
 } from "../utils/lars.js";
 import {
@@ -219,6 +221,8 @@ async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, Lar
     alarmPort: ws.alarmPort,
     classProjectPath: ws.classProjectPath ?? null,
     screenProjectPath: ws.screenProjectPath ?? null,
+    dataRoot: ws.dataRoot ?? null,
+    seedFiles: inst?.seedFiles ?? null,
     running,
     pid: pids[0] ?? inst?.pid ?? null,
     healthy,
@@ -226,7 +230,7 @@ async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, Lar
     lcpPath: inst?.lcpPath ?? null,
     lssPath: inst?.stationLssPath ?? null,
     role: inst?.role ?? null,
-    targetedAtLars: inst?.originalIp ? true : false,
+    targetedAtLars: inst?.stationTargetOverridden ?? Boolean(inst?.originalIp),
   };
 }
 
@@ -307,6 +311,14 @@ function runAutoGc(state: LasalState, projectDir?: string | null, dryRun: boolea
     writeState(state);
   }
   return result;
+}
+
+/**
+ * Prepare the workspace data root before LARS launches. LARS reads its autoexec and
+ * the program its config files at boot, so seeding after start is too late.
+ */
+function seedBeforeStart(workspace: LarsWorkspace, inst: LarsInstanceInfo | undefined) {
+  return seedDataRoot(workspace.dataRoot, inst?.seedFiles ?? defaultSeedFiles());
 }
 
 /**
@@ -538,6 +550,17 @@ export async function larsRuntimeHandler(args: {
       ]);
     }
 
+    // Seed files are MCP bookkeeping (lasalos2.xml has no field for them): the files a
+    // program expects at a fixed C:\ path, refreshed into the data root before each start.
+    for (const entry of created) {
+      const inst = getLarsInstance(state, String(entry.name));
+      if (inst && !inst.seedFiles) {
+        inst.seedFiles = defaultSeedFiles();
+        setLarsInstance(state, inst);
+      }
+    }
+    writeState(state);
+
     return respond({
       ok: true,
       created,
@@ -625,6 +648,8 @@ export async function larsRuntimeHandler(args: {
 
     // LARS must be up (and answering) before the download — the CLASS 2 online
     // connection needs a live listener, so start + probe come before it.
+    const seeded = seedBeforeStart(workspace, inst);
+    if (seeded) steps.dataRoot = seeded;
     const result = await startLars(workspace);
     if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
 
@@ -729,6 +754,7 @@ export async function larsRuntimeHandler(args: {
     }
 
     if (action === "start") {
+      const seeded = seedBeforeStart(workspace, req.instance ?? getLarsInstance(state, workspace.name));
       const result = await startLars(workspace);
       if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
 
@@ -759,6 +785,7 @@ export async function larsRuntimeHandler(args: {
         healthy,
         pid: result.pid,
         ...(autoCreated ? { autoCreated: true } : {}),
+        ...(seeded ? { dataRoot: seeded } : {}),
         hint: !healthy
           ? `LARS launched but no online port answered among [${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}]` +
             (owned.length ? ` (${owned.join(", ")} already owned by another running instance)` : "") +
@@ -809,12 +836,18 @@ export async function larsRuntimeHandler(args: {
 
       const result = pointStationAtLars(inst.stationLssPath, targetPort);
       if ("error" in result) return fail(result.error, []);
-      if (inst.originalIp === undefined) {
+      // Save the pre-override target exactly once. Older state files predate the
+      // stationTargetOverridden flag, so keep honouring a recorded originalIp.
+      if (inst.originalIp === undefined && !inst.stationTargetOverridden) {
         inst.originalIp = result.previousIp;
         inst.originalPort = result.previousPort;
       }
+      inst.stationTargetOverridden = true;
       setLarsInstance(state, inst);
       writeState(state);
+      // If the station already pointed at localhost there is no hardware target to
+      // return to — say so now, not at deploy time.
+      const alreadyLocal = /^127\./.test(result.previousIp ?? "") || result.previousIp === "localhost";
       return respond({
         ok: true,
         workspace: workspace.name,
@@ -822,6 +855,13 @@ export async function larsRuntimeHandler(args: {
         lssPath: inst.stationLssPath,
         nowTargeting: `127.0.0.1:${targetPort} (LARS)`,
         previousTarget: `${result.previousIp}:${result.previousPort}`,
+        ...(alreadyLocal
+          ? {
+              warning:
+                `The station already targeted ${result.previousIp}:${result.previousPort} before this call, so ` +
+                "'restore' cannot recover a hardware address. Put the machine's real IP back in the .lss before deploying.",
+            }
+          : {}),
         ...(port === undefined
           ? { warning: "LARS instance is not running — targeted the configured port; start the instance first." }
           : {}),
@@ -832,13 +872,16 @@ export async function larsRuntimeHandler(args: {
     if (action === "restore") {
       const inst = req.instance;
       if (!inst?.stationLssPath) return fail("No station .lss known for this workspace.", []);
-      if (!inst.originalIp) return fail("No saved original target — set_station_target was never called.", []);
+      if (!inst.stationTargetOverridden && !inst.originalIp) {
+        return fail("No saved original target — set_station_target was never called.", []);
+      }
       if (!existsSync(inst.stationLssPath)) return fail(`Station .lss not found: ${inst.stationLssPath}`, []);
       const { updateLssConnection } = await import("../utils/projectScanner.js");
       updateLssConnection(inst.stationLssPath, { ip: inst.originalIp, port: inst.originalPort });
       const restored = { ip: inst.originalIp, port: inst.originalPort };
       inst.originalIp = undefined;
       inst.originalPort = undefined;
+      inst.stationTargetOverridden = undefined;
 
       // Also restore the .lcp compile target if it was switched to PC
       let targetRestored: string | null = null;
@@ -864,6 +907,19 @@ export async function larsRuntimeHandler(args: {
       const { switchProjectTargetToPC } = await import("../utils/lars.js");
       const result = switchProjectTargetToPC(inst.lcpPath);
       if ("error" in result) return fail(result.error, []);
+      if (result.alreadyPc) {
+        // Idempotent: the project is already PC-targeted, which is what was asked for.
+        return respond({
+          ok: true,
+          workspace: workspace.name,
+          station: inst.stationName ?? null,
+          lcpPath: inst.lcpPath,
+          targetBefore: result.previousTag,
+          targetNow: result.newTag,
+          alreadyPc: true,
+          hint: "Project already targets the PC (no change). Nothing to restore for this workspace.",
+        });
+      }
       if (inst.originalTargetTag === undefined) {
         inst.originalTargetTag = result.previousTag;
       }

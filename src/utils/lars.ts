@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync } from "fs";
 import { spawn, execSync } from "child_process";
 import { join, basename, dirname } from "path";
 import { homedir } from "os";
@@ -32,6 +32,16 @@ export interface LarsWorkspace {
   autoexec: string;
   lslWork: string;
   sramData: string;
+  /**
+   * Host folder the emulated C: drive maps to (DRIVEMAP). This is the isolation
+   * boundary between instances: without it every workspace shares the real C:\
+   * root, so two PLCs overwrite each other's LSLWORK/SRAM and the program writes
+   * its data files into the machine's actual system drive.
+   *
+   * Kept separate from `activeData` on purpose: `activeData` is ACTIVEDAT, an
+   * emulated path ("C:\"), while this is a real host path.
+   */
+  dataRoot?: string;
   classProjectPath?: string;
   screenProjectPath?: string;
   dataLenMb: number;
@@ -75,6 +85,19 @@ function asArray<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
+/** Read one DRIVEMAP entry (the host path a drive letter maps to). */
+function readDriveMap(ws: Record<string, unknown>, drive: string): string | undefined {
+  const map = (ws.DRIVEMAP ?? {}) as Record<string, unknown>;
+  const elements = asArray(map.DRIVEMAP_ELEMENT as Record<string, unknown> | Record<string, unknown>[] | undefined);
+  for (const el of elements) {
+    if (!el || typeof el !== "object") continue;
+    if (String(scalar(el.DRIVE) ?? "").toUpperCase() === drive.toUpperCase()) {
+      return strOpt(el.PATH);
+    }
+  }
+  return undefined;
+}
+
 function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -111,6 +134,7 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
         autoexec: str(pathElem.AUTOEXEC, "C:\\Autoexec.lsl"),
         lslWork: str(pathElem.LSLWORK, "C:\\LSLWORK"),
         sramData: str(pathElem.SRAMDAT, "C:\\"),
+        dataRoot: readDriveMap(ws, "C:"),
         classProjectPath: strOpt(pathElem.CLASS_PRJ_PATH),
         screenProjectPath: strOpt(pathElem.SCREEN_PRJ_PATH),
         dataLenMb: num(memory.DATALEN, 40),
@@ -189,9 +213,11 @@ function updateWorkspaceBlock(block: string, ws: LarsWorkspace): string {
   // the lossless merge leaves the file's shape untouched.
   out = replaceElementText(out, "DATASERVICETCPPORT", String(ws.dataServiceTcpPort ?? 2402));
   // Retarget only the C: drive mapping; additional mappings are preserved.
+  // dataRoot is a real host path; activeData is ACTIVEDAT and must not be used here.
+  const driveTarget = ws.dataRoot ?? ws.activeData;
   return out.replace(
     /(<DRIVEMAP_ELEMENT>\s*<DRIVE>C:<\/DRIVE>\s*<PATH>)([\s\S]*?)(<\/PATH>)/i,
-    (_m, open: string, _old: string, close: string) => `${open}${escapeXml(ws.activeData)}${close}`,
+    (_m, open: string, _old: string, close: string) => `${open}${escapeXml(driveTarget)}${close}`,
   );
 }
 
@@ -232,7 +258,7 @@ function buildWorkspaceBlock(ws: LarsWorkspace): string {
     `\t\t<DRIVEMAP>`,
     `\t\t\t<DRIVEMAP_ELEMENT>`,
     `\t\t\t\t<DRIVE>C:</DRIVE>`,
-    `\t\t\t\t<PATH>${escapeXml(ws.activeData)}</PATH>`,
+    `\t\t\t\t<PATH>${escapeXml(ws.dataRoot ?? ws.activeData)}</PATH>`,
     `\t\t\t</DRIVEMAP_ELEMENT>`,
     `\t\t</DRIVEMAP>`,
     `\t\t<IP_MAP>`,
@@ -358,6 +384,9 @@ export function upsertLarsWorkspace(
       autoexec: "C:\\Autoexec.lsl",
       lslWork: "C:\\LSLWORK",
       sramData: "C:\\",
+      // Every new workspace gets its own emulated C: root, so instances never share
+      // LSLWORK/SRAM and never write into the machine's real system drive.
+      dataRoot: defaultDataRoot(name),
       dataLenMb: 40,
       codeLenMb: 8,
       ...partial,
@@ -373,6 +402,79 @@ export function removeLarsWorkspace(name: string): LarsWorkspace[] {
   const workspaces = readLarsWorkspaces().filter((w) => w.name !== name);
   writeLarsWorkspaces(workspaces);
   return workspaces;
+}
+
+// ─── Workspace data root + seed files ─────────────────────────────────────────
+//
+// A workspace whose emulated C: maps to the real C:\ root shares LSLWORK, SRAM and
+// every file the program writes with every other instance - and writes into the
+// machine's actual system drive. Each workspace therefore gets its own data root.
+//
+// Files the program expects at a fixed C:\ path (the MQTT client config, LARS'
+// autoexec) cannot be relocated from inside the program, so they are seeded into
+// the root before each start. The real file stays the single source of truth and
+// the copy cannot go stale; editing the copy is pointless by design.
+
+/** Files seeded into a data root. Override with LASAL_MCP_LARS_SEED_FILES (`;`-separated). */
+export function defaultSeedFiles(): string[] {
+  const fromEnv = process.env.LASAL_MCP_LARS_SEED_FILES;
+  if (fromEnv) {
+    return fromEnv
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return ["C:\\Autoexec.lsl", "C:\\MQTT_Client_Iq.xml", "C:\\MQTT_Client.xml"];
+}
+
+/** Per-workspace data root under %LOCALAPPDATA%, so nothing outside the user profile is touched. */
+export function defaultDataRoot(workspaceName: string): string {
+  const base = process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+  const safe = workspaceName.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(base, "lasal-mcp", "lars", safe);
+}
+
+/** True for a bare drive root ("C:\", "D:\\") - seeding there means the real system drive. */
+function isDriveRoot(p: string): boolean {
+  return /^[A-Za-z]:[\\/]?$/.test(p.trim());
+}
+
+export interface SeedResult {
+  dataRoot: string;
+  seeded: string[];
+  missing: string[];
+  skipped?: string;
+}
+
+/**
+ * Copy seed files into the workspace data root before LARS starts.
+ *
+ * Always overwrites, so the copy tracks its source: editing the copy never
+ * silently diverges from what a deployment would use. Refuses a drive root,
+ * because that would write into the machine's real system drive.
+ */
+export function seedDataRoot(dataRoot: string | undefined, seeds: string[]): SeedResult | undefined {
+  if (!dataRoot) return undefined;
+  if (isDriveRoot(dataRoot)) {
+    return { dataRoot, seeded: [], missing: [], skipped: "data root is a drive root (shared/legacy config)" };
+  }
+  mkdirSync(dataRoot, { recursive: true });
+  const seeded: string[] = [];
+  const missing: string[] = [];
+  for (const src of seeds) {
+    if (!existsSync(src)) {
+      missing.push(src);
+      continue;
+    }
+    const dest = join(dataRoot, basename(src));
+    try {
+      copyFileSync(src, dest);
+      seeded.push(dest);
+    } catch {
+      missing.push(src);
+    }
+  }
+  return { dataRoot, seeded, missing };
 }
 
 // ─── Garbage collection ────────────────────────────────────────────────────────
@@ -871,6 +973,8 @@ export function mapStationsToLars(
 export interface TargetSwitchResult {
   previousTag: string;
   newTag: string;
+  /** True when the project already targeted the PC — the postcondition holds and nothing was written. */
+  alreadyPc: boolean;
 }
 
 /**
@@ -878,6 +982,10 @@ export interface TargetSwitchResult {
  * are rejected by LARS with a checksum error. Switching the project's compile
  * target to PC (removing the Processor attribute, byte-preserving) makes
  * batch.Compile produce an x86 image LARS can run. Restore with restoreProjectTarget.
+ *
+ * Idempotent: an already-PC project is a success, not an error — that is the state
+ * the caller asked for. Erroring here made target_pc (and anything chaining it)
+ * unusable on a project a previous session had already switched.
  */
 export function switchProjectTargetToPC(lcpPath: string): TargetSwitchResult | { error: string } {
   const raw = readFileSync(lcpPath, "latin1");
@@ -885,12 +993,12 @@ export function switchProjectTargetToPC(lcpPath: string): TargetSwitchResult | {
   if (!m) return { error: `No <Target ...> element found in ${lcpPath}` };
   const tag = m[0]!;
   if (!/\bProcessor\s*=\s*"ARM"/.test(tag)) {
-    return { error: `Project is not ARM-targeted (tag: "${tag}") — nothing to switch.` };
+    return { previousTag: tag, newTag: tag, alreadyPc: true };
   }
   const newTag = tag.replace(/\s+Processor\s*=\s*"ARM"/, "");
   if (newTag === tag) return { error: `Failed to remove Processor="ARM" from ${lcpPath}` };
   writeFileSync(lcpPath, raw.replace(tag, newTag), "latin1");
-  return { previousTag: tag, newTag };
+  return { previousTag: tag, newTag, alreadyPc: false };
 }
 
 export function restoreProjectTarget(lcpPath: string, previousTag: string): boolean {
