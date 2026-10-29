@@ -736,14 +736,26 @@ export async function larsRuntimeHandler(args: {
     const autoCreated = (req as { autoCreated?: boolean }).autoCreated ?? false;
 
     if (action === "stop") {
-      killLars(workspace.name);
+      const killed = killLars(workspace.name);
       const inst = req.instance;
       if (inst) {
         inst.pid = undefined;
         setLarsInstance(state, inst);
         writeState(state);
       }
-      return respond({ ok: true, message: `LARS workspace '${workspace.name}' stopped.` });
+      return respond({
+        ok: true,
+        message: `LARS workspace '${workspace.name}' stopped.`,
+        graceful: killed.graceful.length > 0,
+        pids: killed.pids,
+        ...(killed.forced.length > 0
+          ? {
+              warning:
+                `Forced shutdown of pid ${killed.forced.join(", ")} — the runtime did not write its SRAM image, ` +
+                "so retained variables (counters, run hours) were lost.",
+            }
+          : { hint: "Closed gracefully — the SRAM image was written, so retained variables survive." }),
+      });
     }
 
     if (action === "remove") {

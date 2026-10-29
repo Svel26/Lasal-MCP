@@ -692,12 +692,73 @@ export function getLarsPids(name?: string): number[] {
   }
 }
 
-export function killLars(name?: string): void {
-  for (const pid of getLarsPids(name)) {
+/** Synchronous sleep, used while waiting for a graceful shutdown to complete. */
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface KillResult {
+  pids: number[];
+  graceful: number[];
+  forced: number[];
+}
+
+/**
+ * Terminate the LARS instance(s) of a workspace.
+ *
+ * A graceful close (WM_CLOSE, i.e. taskkill without /F) makes the runtime write its
+ * SRAM image — verified: C:\SRAM.DAT appears on shutdown and is reloaded on the next
+ * boot. That image holds the retained variables, so a force kill silently resets
+ * counters and other retentive data, which a real controller would have kept.
+ *
+ * Force is therefore only the fallback for an instance that ignores the close request
+ * or has no window to send it to.
+ */
+export function killLars(name?: string, graceMs = 8000): KillResult {
+  const pids = getLarsPids(name);
+  if (pids.length === 0) return { pids, graceful: [], forced: [] };
+
+  const asked = new Set<number>();
+  for (const pid of pids) {
+    try {
+      execSync(`taskkill /PID ${pid} /T`, { stdio: "pipe" });
+      asked.add(pid);
+    } catch {
+      // No window to close (or already gone) — fall through to force below.
+    }
+  }
+
+  // Only wait when at least one instance accepted the request; otherwise there is
+  // nothing to wait for and forcing straight away keeps stop latency low.
+  if (asked.size > 0) {
+    const deadline = Date.now() + Math.max(0, graceMs);
+    while (Date.now() < deadline && pids.some((p) => asked.has(p) && isProcessAlive(p))) {
+      sleepMs(250);
+    }
+  }
+
+  const forced: number[] = [];
+  for (const pid of pids) {
+    if (!isProcessAlive(pid)) continue;
     try {
       execSync(`taskkill /PID ${pid} /F /T`, { stdio: "pipe" });
-    } catch {}
+      forced.push(pid);
+    } catch {
+      // Already gone between the check and the kill.
+    }
   }
+
+  const graceful = pids.filter((p) => !forced.includes(p));
+  return { pids, graceful, forced };
 }
 
 export interface LarsStartResult {
