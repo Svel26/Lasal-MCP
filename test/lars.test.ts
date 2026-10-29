@@ -22,7 +22,13 @@ import {
   restoreProjectTarget,
   type LarsInstanceInfo,
 } from "../src/utils/lars.js";
-import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
+import {
+  readLssConnection,
+  updateLssConnection,
+  setLssActiveProfile,
+  readLssActiveProfile,
+  pointStationAtProfile,
+} from "../src/utils/projectScanner.js";
 
 const FIXTURES = join(dirname(import.meta.filename), "fixtures");
 
@@ -448,18 +454,45 @@ describe("pointStationAtLars", () => {
     expect(conn).toEqual({ ip: "10.195.0.50", port: "1954" });
   });
 
-  it("points the station at a LARS instance and records the original", () => {
+  it("points the station at a LARS instance by adding a profile, keeping the original", () => {
     const result = pointStationAtLars(lssPath, 1964);
-    expect(result).toEqual({ previousIp: "10.195.0.50", previousPort: "1954" });
-    const conn = readLssConnection(lssPath);
-    expect(conn).toEqual({ ip: "127.0.0.1", port: "1964" });
+    expect(result).toMatchObject({ previousConnection: "PLC50 (Project)", previousIp: "10.195.0.50" });
+
+    const raw = readFileSync(lssPath, "latin1");
+    // Both profiles survive: the machine address is never overwritten.
+    expect(raw).toContain('ConfigName="PLC50"');
+    expect(raw).toContain('IP="10.195.0.50"');
+    expect(raw).toContain('ConfigName="LARS"');
+    expect(raw).toContain('IP="127.0.0.1" PORT="1964"');
+    expect(raw).toContain('OnlineConnection="LARS"');
   });
 
-  it("restores the original target", () => {
+  it("reads the active profile, not merely the first one", () => {
     pointStationAtLars(lssPath, 1964);
-    updateLssConnection(lssPath, { ip: "10.195.0.50", port: "1954" });
-    const conn = readLssConnection(lssPath);
-    expect(conn).toEqual({ ip: "10.195.0.50", port: "1954" });
+    expect(readLssConnection(lssPath)).toEqual({ ip: "127.0.0.1", port: "1964" });
+  });
+
+  it("switches back to the original profile without writing an address", () => {
+    pointStationAtLars(lssPath, 1964);
+    expect(setLssActiveProfile(lssPath, "PLC50 (Project)")).toBe(true);
+    expect(readLssConnection(lssPath)).toEqual({ ip: "10.195.0.50", port: "1954" });
+  });
+
+  it("updates the existing LARS profile instead of adding a second one", () => {
+    pointStationAtLars(lssPath, 1964);
+    pointStationAtLars(lssPath, 1974);
+    const raw = readFileSync(lssPath, "latin1");
+    expect((raw.match(/ConfigName="LARS"/g) ?? []).length).toBe(1);
+    expect(raw).toContain('PORT="1974"');
+  });
+
+  it("adds an OnlineConnectionInfo block when the station has no TCPIP profile", () => {
+    const bare = join(tempDir, "Local.lss");
+    writeFileSync(bare, `<SlnStation Name="Local" Color="0">\n</SlnStation>\n`, "latin1");
+    const result = pointStationAtProfile(bare, 1999);
+    expect("error" in result).toBe(false);
+    expect(readLssConnection(bare)).toEqual({ ip: "127.0.0.1", port: "1999" });
+    expect(readLssActiveProfile(bare)).toBe("LARS");
   });
 });
 

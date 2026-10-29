@@ -192,28 +192,65 @@ export function readVisuStationIds(lvpPath: string): Record<string, number> {
   return result;
 }
 
-/** Read the current TCPIP connection from a .lss file (IP + port). */
+/** Name of the connection profile this server adds for local simulation. */
+export const LARS_PROFILE_NAME = "LARS";
+
+const TCPIP_TAG_RE = /<TCPIP\s[^>]*?\/>/gs;
+
+function profileNameOf(tag: string): string | undefined {
+  return tag.match(/\bConfigName\s*=\s*"([^"]*)"/)?.[1];
+}
+
+/** Profile the station currently uses (the <SlnStation OnlineConnection="..."> value). */
+export function readLssActiveProfile(lssPath: string): string | undefined {
+  if (!existsSync(lssPath)) return undefined;
+  try {
+    const content = readLatin1(lssPath);
+    return content.match(/<SlnStation\s[^>]*?\bOnlineConnection\s*=\s*"([^"]*)"/s)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The <TCPIP .../> tag of the named profile, if the file has one. */
+function findProfileTag(content: string, name: string): string | undefined {
+  for (const m of content.matchAll(TCPIP_TAG_RE)) {
+    if (profileNameOf(m[0]) === name) return m[0];
+  }
+  return undefined;
+}
+
+/** Read a TCPIP connection from a .lss file, preferring the profile the station is using. */
 export function readLssConnection(lssPath: string): { ip: string; port: string } | { error: string } {
   if (!existsSync(lssPath)) return { error: `LSS file not found: ${lssPath}` };
   try {
     const content = readLatin1(lssPath);
-    const m = content.match(/<TCPIP\s[^>]*?IP="([^"]*)"[^>]*?PORT="([^"]*)"/);
-    if (m?.[1] && m?.[2]) return { ip: m[1]!, port: m[2]! };
-    const m2 = content.match(/<TCPIP\s[^>]*?IP="([^"]*)"/);
-    if (m2?.[1]) return { ip: m2[1]!, port: "1954" };
-    return { error: `No <TCPIP .../> element found in ${lssPath}` };
+    const active = content.match(/<SlnStation\s[^>]*?\bOnlineConnection\s*=\s*"([^"]*)"/s)?.[1];
+    // A .lss can hold several profiles (hardware + LARS); the active one is the truth.
+    const tag = (active ? findProfileTag(content, active) : undefined) ?? content.match(TCPIP_TAG_RE)?.[0];
+    if (!tag) return { error: `No <TCPIP .../> element found in ${lssPath}` };
+    const ip = tag.match(/\bIP\s*=\s*"([^"]*)"/)?.[1];
+    const port = tag.match(/\bPORT\s*=\s*"([^"]*)"/)?.[1];
+    if (ip && port) return { ip, port };
+    if (ip) return { ip, port: "1954" };
+    return { error: `No IP attribute on the active <TCPIP/> in ${lssPath}` };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { error: `Failed to parse ${lssPath}: ${msg}` };
   }
 }
 
-/** Surgically update the TCPIP IP (and optionally port/ssltls) in a .lss file, byte-preserving everything else. */
+/**
+ * Surgically update the active TCPIP profile's IP (and optionally port/ssltls),
+ * byte-preserving everything else.
+ */
 export function updateLssConnection(lssPath: string, updates: { ip?: string; port?: string; ssltls?: string }): void {
   let content = readLatin1(lssPath);
-  const tcpipRe = /(<TCPIP\s[^>]*?>)/s;
-  const m = tcpipRe.exec(content);
-  if (!m) {
+  const active = content.match(/<SlnStation\s[^>]*?\bOnlineConnection\s*=\s*"([^"]*)"/s)?.[1];
+  const existing = active ? findProfileTag(content, active) : undefined;
+  const first = content.match(TCPIP_TAG_RE)?.[0];
+
+  if (!existing && !first) {
     // No <TCPIP> element yet (e.g. a Local/simulation station) — insert one
     // right after the <SlnStation ...> opening tag.
     const stationRe = /(<SlnStation\s[^>]*>)/s;
@@ -225,13 +262,86 @@ export function updateLssConnection(lssPath: string, updates: { ip?: string; por
     return;
   }
 
-  let tag = m[1]!;
+  let tag = existing ?? first!;
   if (updates.ip !== undefined) tag = setAttr(tag, "IP", updates.ip);
   if (updates.port !== undefined) tag = setAttr(tag, "PORT", updates.port);
   if (updates.ssltls !== undefined) tag = setAttr(tag, "SSLTLS", updates.ssltls);
+  writeFileSync(lssPath, content.replace(existing ?? first!, tag), "latin1");
+}
 
-  content = content.slice(0, m.index!) + tag + content.slice(m.index! + m[1]!.length);
+/** Set <SlnStation OnlineConnection="...">, adding the attribute when absent. */
+export function setLssActiveProfile(lssPath: string, profileName: string): boolean {
+  let content = readLatin1(lssPath);
+  const attrRe = /(<SlnStation\s[^>]*?\bOnlineConnection\s*=\s*")[^"]*(")/s;
+  if (attrRe.test(content)) {
+    content = content.replace(attrRe, `$1${profileName}$2`);
+  } else {
+    const stationRe = /(<SlnStation\b[^>]*?)(\s*>)/s;
+    const sm = stationRe.exec(content);
+    if (!sm) return false;
+    content = content.replace(stationRe, `$1 OnlineConnection="${profileName}"$2`);
+  }
   writeFileSync(lssPath, content, "latin1");
+  return true;
+}
+
+export interface LssProfileResult {
+  /** Profile the station now uses. */
+  connection: string;
+  /** Profile it used before the change. */
+  previousConnection: string;
+  /** True when the LARS profile had to be created. */
+  added: boolean;
+}
+
+/**
+ * Point a station at a local LARS instance by adding (or updating) a dedicated
+ * profile and switching the station to it.
+ *
+ * Overwriting the existing profile's IP was destructive: the machine address only
+ * survived in saved state and the profile got renamed, so a restore could put back
+ * a wrong address. Keeping both profiles in the .lss means switching back is a
+ * single attribute and no address is ever lost.
+ */
+export function pointStationAtProfile(
+  lssPath: string,
+  port: number | string,
+  profileName: string = LARS_PROFILE_NAME,
+): LssProfileResult | { error: string } {
+  if (!existsSync(lssPath)) return { error: `LSS file not found: ${lssPath}` };
+  let content = readLatin1(lssPath);
+
+  const previousConnection =
+    content.match(/<SlnStation\s[^>]*?\bOnlineConnection\s*=\s*"([^"]*)"/s)?.[1] ?? profileName;
+
+  const existing = findProfileTag(content, profileName);
+  let added = false;
+  if (existing) {
+    let tag = setAttr(existing, "IP", "127.0.0.1");
+    tag = setAttr(tag, "PORT", String(port));
+    content = content.replace(existing, tag);
+  } else {
+    const tag = `<TCPIP ConfigName="${profileName}" BUS="3" Password="" IP="127.0.0.1" PORT="${port}" SomeFlags="0" PLCID="" Repeater="0" SSLTLS="0" Favorite="0"/>`;
+    const tags = [...content.matchAll(TCPIP_TAG_RE)];
+    if (tags.length > 0) {
+      const last = tags[tags.length - 1]!;
+      const at = last.index! + last[0].length;
+      content = `${content.slice(0, at)}\n\t\t${tag}${content.slice(at)}`;
+    } else {
+      const stationRe = /(<SlnStation\s[^>]*>)/s;
+      const sm = stationRe.exec(content);
+      if (!sm) return { error: `No <SlnStation ...> element found in ${lssPath}` };
+      const at = sm.index! + sm[1]!.length;
+      content = `${content.slice(0, at)}\n\t<OnlineConnectionInfo>\n\t\t${tag}\n\t</OnlineConnectionInfo>${content.slice(at)}`;
+    }
+    added = true;
+  }
+
+  writeFileSync(lssPath, content, "latin1");
+  if (!setLssActiveProfile(lssPath, profileName)) {
+    return { error: `Could not set OnlineConnection on ${lssPath}` };
+  }
+  return { connection: profileName, previousConnection, added };
 }
 
 function setAttr(tag: string, name: string, value: string): string {

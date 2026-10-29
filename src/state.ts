@@ -32,6 +32,11 @@ export interface LarsInstanceInfo {
   role?: "plc" | "hmi" | "unknown";
   originalIp?: string;
   originalPort?: string;
+  /**
+   * Connection profile the station used before being pointed at LARS. Switching back
+   * to it is the restore path now that the LARS target is a separate profile.
+   */
+  originalConnection?: string;
   originalTargetTag?: string;
   /**
    * Set when the station .lss was pointed at LARS. Distinguishes "never overridden"

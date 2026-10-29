@@ -4,7 +4,7 @@ import { join, basename, dirname } from "path";
 import { homedir } from "os";
 import { XMLParser } from "fast-xml-parser";
 import { pingHost } from "./preflight.js";
-import { updateLssConnection, readLssConnection } from "./projectScanner.js";
+import { pointStationAtProfile, updateLssConnection, readLssConnection } from "./projectScanner.js";
 import { SCRATCH } from "./engine.js";
 import type { LarsInstanceInfo } from "../state.js";
 
@@ -919,22 +919,28 @@ export function captureLarsWindow(name: string, outPath: string): { ok: boolean;
 
 // ─── Station targeting ────────────────────────────────────────────────────────
 
+export interface StationTargetResult {
+  previousIp: string;
+  previousPort: string;
+  previousConnection: string;
+}
+
 /**
- * Point a station's .lss TCPIP profile at a local LARS instance (127.0.0.1:<onlinePort>).
- * Returns the previous connection so it can be restored later.
+ * Point a station's .lss at a local LARS instance.
+ *
+ * Adds or updates a dedicated profile and switches the station to it, so the
+ * machine's original profile (and its address) stays in the file untouched.
+ * Returns the previous target so it can be restored.
  */
-export function pointStationAtLars(
-  lssPath: string,
-  onlinePort: number,
-): { previousIp: string; previousPort: string } | { error: string } {
-  const current = readLssConnection(lssPath);
-  if ("error" in current) {
-    // Station has no TCPIP profile yet — insert one pointing at LARS.
-    updateLssConnection(lssPath, { ip: "127.0.0.1", port: String(onlinePort) });
-    return { previousIp: "", previousPort: "" };
-  }
-  updateLssConnection(lssPath, { ip: "127.0.0.1", port: String(onlinePort) });
-  return { previousIp: current.ip, previousPort: current.port };
+export function pointStationAtLars(lssPath: string, onlinePort: number): StationTargetResult | { error: string } {
+  const before = readLssConnection(lssPath);
+  const result = pointStationAtProfile(lssPath, onlinePort);
+  if ("error" in result) return result;
+  return {
+    previousIp: "error" in before ? "" : before.ip,
+    previousPort: "error" in before ? "" : before.port,
+    previousConnection: result.previousConnection,
+  };
 }
 
 export function safeWorkspaceName(projectName: string, stationName: string): string {

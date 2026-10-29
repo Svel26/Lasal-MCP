@@ -851,6 +851,9 @@ export async function larsRuntimeHandler(args: {
       if ("error" in result) return fail(result.error, []);
       // Save the pre-override target exactly once. Older state files predate the
       // stationTargetOverridden flag, so keep honouring a recorded originalIp.
+      if (!inst.stationTargetOverridden && inst.originalConnection === undefined) {
+        inst.originalConnection = result.previousConnection;
+      }
       if (inst.originalIp === undefined && !inst.stationTargetOverridden) {
         inst.originalIp = result.previousIp;
         inst.originalPort = result.previousPort;
@@ -867,6 +870,8 @@ export async function larsRuntimeHandler(args: {
         station: inst.stationName,
         lssPath: inst.stationLssPath,
         nowTargeting: `127.0.0.1:${targetPort} (LARS)`,
+        profile: "LARS",
+        previousProfile: result.previousConnection,
         previousTarget: `${result.previousIp}:${result.previousPort}`,
         ...(alreadyLocal
           ? {
@@ -885,15 +890,32 @@ export async function larsRuntimeHandler(args: {
     if (action === "restore") {
       const inst = req.instance;
       if (!inst?.stationLssPath) return fail("No station .lss known for this workspace.", []);
-      if (!inst.stationTargetOverridden && !inst.originalIp) {
+      if (!inst.stationTargetOverridden && !inst.originalIp && !inst.originalConnection) {
         return fail("No saved original target â€” set_station_target was never called.", []);
       }
       if (!existsSync(inst.stationLssPath)) return fail(`Station .lss not found: ${inst.stationLssPath}`, []);
-      const { updateLssConnection } = await import("../utils/projectScanner.js");
-      updateLssConnection(inst.stationLssPath, { ip: inst.originalIp, port: inst.originalPort });
-      const restored = { ip: inst.originalIp, port: inst.originalPort };
+      const { updateLssConnection, setLssActiveProfile, readLssConnection } =
+        await import("../utils/projectScanner.js");
+      let restored: Record<string, unknown>;
+      if (inst.originalConnection) {
+        // The LARS target is a separate profile, so restoring is a switch back to the
+        // machine's own profile - no address is written and none can be lost.
+        if (!setLssActiveProfile(inst.stationLssPath, inst.originalConnection)) {
+          return fail(`Could not switch ${inst.stationLssPath} back to profile '${inst.originalConnection}'.`, []);
+        }
+        const after = readLssConnection(inst.stationLssPath);
+        restored = {
+          profile: inst.originalConnection,
+          ...("error" in after ? {} : { ip: after.ip, port: after.port }),
+        };
+      } else {
+        // Legacy state: only the IP/port pair was recorded.
+        updateLssConnection(inst.stationLssPath, { ip: inst.originalIp, port: inst.originalPort });
+        restored = { ip: inst.originalIp, port: inst.originalPort };
+      }
       inst.originalIp = undefined;
       inst.originalPort = undefined;
+      inst.originalConnection = undefined;
       inst.stationTargetOverridden = undefined;
 
       // Also restore the .lcp compile target if it was switched to PC
