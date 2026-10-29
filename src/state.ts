@@ -101,6 +101,28 @@ export function setLarsInstance(state: LasalState, info: LarsInstanceInfo): void
   state.larsInstances[info.name] = info;
 }
 
+/**
+ * Merge an instance record instead of replacing it.
+ *
+ * Callers that only know configuration (name, ports, station paths) must not erase
+ * runtime bookkeeping they do not set — pid, effectiveOnlinePort, originalIp/Port,
+ * originalTargetTag, stationTargetOverridden. Replacing the record made the
+ * "never hand a port another running instance owns" guard trust a stale port and
+ * claim the wrong instance's online port.
+ *
+ * Undefined fields in `info` are ignored so a station without a .lss cannot wipe a
+ * previously known path.
+ */
+export function mergeLarsInstance(state: LasalState, info: LarsInstanceInfo): LarsInstanceInfo {
+  const prev = getLarsInstance(state, info.name);
+  const next = { ...(prev ?? {}) } as LarsInstanceInfo;
+  for (const [key, value] of Object.entries(info)) {
+    if (value !== undefined) (next as unknown as Record<string, unknown>)[key] = value;
+  }
+  setLarsInstance(state, next);
+  return next;
+}
+
 export function removeLarsInstance(state: LasalState, name: string): void {
   if (state.larsInstances) {
     delete state.larsInstances[name];
