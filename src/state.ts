@@ -2,6 +2,7 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs"
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { withFileLockSync } from "./utils/fileLock.js";
 import { isPidAlive } from "./utils/pid.js";
 
@@ -89,6 +90,16 @@ const MAX_AGENT_RECORD_MS = 7 * 24 * 60 * 60 * 1000;
 
 let processProject: string | null = normalizeProjectPath(ENV_PROJECT);
 
+/**
+ * Request-scoped project override.
+ *
+ * `processProject` remains the session default, but a catalog action can run
+ * inside `runWithProject()` and every state read/write in that async context
+ * sees the override without mutating the process-wide selection. This is the
+ * foundation for safe project switching and multi-project requests.
+ */
+const projectOverride = new AsyncLocalStorage<string | null>();
+
 function normalizeProjectPath(path: string | null | undefined): string | null {
   const trimmed = path?.trim();
   if (!trimmed) return null;
@@ -98,12 +109,19 @@ function normalizeProjectPath(path: string | null | undefined): string | null {
 /**
  * Resolve the project for this process.
  *
- * The shared hint is inherited only when its writer is gone (a previous session)
- * or when the state file predates ownership tracking. While another agent holds
- * the hint, a fresh process starts unselected instead of silently adopting that
- * agent's project — which is exactly how two agents used to cross-wire.
+ * Resolution order:
+ * 1. an active `runWithProject()` override,
+ * 2. this process's `select_project` selection,
+ * 3. the shared hint, but only when its writer is gone (a previous session)
+ *    or when the state file predates ownership tracking.
+ *
+ * While another agent holds the hint, a fresh process starts unselected instead
+ * of silently adopting that agent's project — which is exactly how two agents
+ * used to cross-wire.
  */
 function effectiveProject(state: Pick<LasalState, "currentProject" | "currentProjectOwnerPid">): string | null {
+  const override = projectOverride.getStore();
+  if (override !== undefined) return override;
   if (processProject) return processProject;
   if (!state.currentProject) return null;
   if (INHERIT_SHARED) return state.currentProject;
@@ -113,12 +131,23 @@ function effectiveProject(state: Pick<LasalState, "currentProject" | "currentPro
 }
 
 /**
- * The project this agent process is currently working on: its own selection, or
- * the shared hint when that hint is inheritable (owner gone / legacy state file).
+ * The project this async context is working on: an explicit override, this
+ * process's selection, or the shared hint when it is inheritable.
  */
 export function getCurrentProject(): string | null {
+  const override = projectOverride.getStore();
+  if (override !== undefined) return override;
   if (processProject) return processProject;
   return effectiveProject(readSharedState());
+}
+
+/**
+ * Run a function with a request-scoped project. Existing handlers that call
+ * `getCurrentProject()` / `readState()` automatically see this project without
+ * changing the process selection. Pass null to explicitly clear the override.
+ */
+export function runWithProject<T>(project: string | null, fn: () => T): T {
+  return projectOverride.run(normalizeProjectPath(project), fn);
 }
 
 /**

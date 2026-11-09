@@ -1,7 +1,8 @@
 import { existsSync } from "fs";
 import { z } from "zod";
 import { getActiveAgents, setCurrentProject, setSharedProjectHint } from "../state.js";
-import { findLsmPath, parseSolution } from "../utils/projectScanner.js";
+import { findLsmPath } from "../utils/projectScanner.js";
+import { resolveProjectContext } from "../core/project/context.js";
 
 export const selectProjectSchema = {
   path: z.string().describe("Full path to the LASAL solution folder (must contain a .lsm file)."),
@@ -30,21 +31,27 @@ export async function selectProjectHandler(args: { path: string }) {
     selectedPath: args.path,
     scope: "this agent session only",
   };
-  try {
-    const solution = parseSolution(lsmPath);
-    summary.stations = solution.stations.map((s) => ({
-      name: s.name,
-      ip: s.ip ?? null,
-      port: s.port ?? "1954",
-      ssltls: s.ssltls === "1",
-      lcpPaths: s.lcpPaths,
-      lvpPaths: s.lvpPaths,
-    }));
-    summary.hint =
-      solution.stations.length > 1
-        ? "Multiple stations found. Pass lcp_path or lvp_path explicitly to tools that need them."
-        : "Single station found. Tools will auto-resolve lcp_path / lvp_path.";
-  } catch {
+  const context = resolveProjectContext(args.path);
+  if (!("error" in context)) {
+    summary = {
+      ...summary,
+      projectId: context.id,
+      capabilities: context.capabilities,
+      recommendedProfile: context.recommendedProfile,
+      stations: context.stations.map((s) => ({
+        name: s.name,
+        ip: s.ip ?? null,
+        port: s.port ?? "1954",
+        ssltls: s.ssltls === "1",
+        lcpPaths: s.lcpPaths,
+        lvpPaths: s.lvpPaths,
+      })),
+      hint:
+        context.stations.length > 1
+          ? "Multiple stations found. Pass lcp_path or lvp_path explicitly to tools that need them."
+          : "Single station found. Tools will auto-resolve lcp_path / lvp_path.",
+    };
+  } else {
     summary.hint = "Could not parse solution file for station discovery.";
   }
 

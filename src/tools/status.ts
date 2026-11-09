@@ -22,15 +22,20 @@ import {
 } from "../utils/lars.js";
 import { respond } from "../utils/respond.js";
 import { checkHttpHealth } from "../core/http.js";
+import { currentProjectContext } from "../core/project/context.js";
 
 export const lasalStatusSchema = {};
 
 export async function lasalStatusHandler() {
   const state = readState();
   const projDir = state.currentProject;
+  const projectContext = currentProjectContext();
 
   const projectInfo = {
     selected: projDir,
+    projectId: projectContext?.id ?? null,
+    capabilities: projectContext?.capabilities ?? null,
+    recommendedProfile: projectContext?.recommendedProfile ?? null,
     lcpPaths: projDir ? findLcpFiles(projDir) : [],
     lvpPaths: projDir ? findLvpFiles(projDir) : [],
     lprPaths: projDir ? findLprFiles(projDir) : [],

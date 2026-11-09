@@ -8,6 +8,7 @@ import {
   writeLarsWorkspaces,
   upsertLarsWorkspace,
   removeLarsWorkspace,
+  patchLarsWorkspace,
   allocateLarsPorts,
   pointStationAtLars,
   gcLarsWorkspaces,
@@ -160,6 +161,42 @@ describe("LARS workspace config", () => {
     expect(workspace.dataLenMb).toBe(80);
     expect(workspace.onlinePort).toBe(1964); // unchanged
     expect(readLarsWorkspaces()).toHaveLength(2);
+  });
+
+  it("patches only an existing workspace", () => {
+    const updated = patchLarsWorkspace("DEFAULT", { onlinePort: 1974, dataLenMb: 64 });
+    expect(updated?.onlinePort).toBe(1974);
+    expect(updated?.dataLenMb).toBe(64);
+
+    const workspaces = readLarsWorkspaces();
+    expect(workspaces[0]?.onlinePort).toBe(1974);
+    expect(workspaces[0]?.dataLenMb).toBe(64);
+    expect(patchLarsWorkspace("missing", { onlinePort: 2000 })).toBeUndefined();
+    expect(readLarsWorkspaces()).toHaveLength(1);
+  });
+
+  it("round-trips additional drive mappings", () => {
+    const dataRoot = join(tempDir, "c-root");
+    const extraRoot = join(tempDir, "d-root");
+    upsertLarsWorkspace("Proj_PLC", {
+      dataRoot,
+      driveMaps: [
+        { drive: "C:", path: dataRoot },
+        { drive: "D:", path: extraRoot },
+      ],
+    });
+
+    const plc = readLarsWorkspaces().find((workspace) => workspace.name === "Proj_PLC");
+    expect(plc?.dataRoot).toBe(dataRoot);
+    expect(plc?.driveMaps).toEqual(
+      expect.arrayContaining([
+        { drive: "C:", path: dataRoot },
+        { drive: "D:", path: extraRoot },
+      ]),
+    );
+    const xml = readFileSync(configPath, "utf-8");
+    expect(xml).toContain("<DRIVE>D:</DRIVE>");
+    expect(xml).toContain(extraRoot);
   });
 
   it("removes a workspace", () => {

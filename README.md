@@ -223,7 +223,41 @@ npm run test:watch   # Tests in watch mode
 npm run lint         # ESLint
 npm run format       # Prettier
 npm run inspector    # MCP Inspector for interactive debugging
+npm run start:catalog -- --profile visu  # Action-catalog preview (see docs/CATALOG_PREVIEW.md)
+npm run docs:actions # Regenerate the action reference (docs/ACTIONS.md)
 ```
+
+### Action catalog preview
+
+The next interface iteration is being developed as a separate entrypoint. It
+exposes `lasal_find_action` / `lasal_execute_action` over a local action
+catalog covering CLASS 2, VISUDesigner, LASAL SCREEN, LARS and shared project
+actions. It does not replace the existing tool set yet.
+
+```bash
+npm run build
+npm run start:catalog -- --profile auto --project "C:\Projects\MySolution"
+```
+
+Dedicated bins are also available:
+
+```bash
+npm run start:class2
+npm run start:visu
+npm run start:screen
+npm run start:lars
+npm run start:solution
+```
+
+Generate an MCP client config for a project:
+
+```bash
+npm run init -- --project "C:\Projects\MySolution"
+npm run init -- --project "C:\Projects\MySolution" --write .mcp.json
+```
+
+See [`docs/CATALOG_PREVIEW.md`](docs/CATALOG_PREVIEW.md) and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for details.
 
 ## Simulating without hardware (LARS)
 

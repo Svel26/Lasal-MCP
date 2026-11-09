@@ -4,6 +4,7 @@ import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { parseLcp, parseStClass } from "../utils/lasalXml.js";
 import { isProcessRunning } from "../utils/engine.js";
 import { respond, fail } from "../utils/respond.js";
+import { assertUnchanged, FileChangedError, stampFile } from "../core/project/locks.js";
 
 export const classSourceSchema = {
   action: z.enum(["read", "write"]).describe("'read' returns the source; 'write' overwrites it."),
@@ -78,6 +79,7 @@ export async function classSourceHandler(args: {
   include_header?: boolean;
   source?: string;
   header_source?: string;
+  expected_stamp?: { mtimeMs: number; size: number };
 }) {
   const resolved = resolveLcpPath(args.lcp_path);
   if ("error" in resolved) {
@@ -95,6 +97,7 @@ export async function classSourceHandler(args: {
       ok: true,
       className: args.class_name,
       stPath,
+      stamp: stampFile(stPath),
       source: readFileSync(stPath, "latin1"),
     };
     if (args.include_header) {
@@ -108,6 +111,17 @@ export async function classSourceHandler(args: {
   }
 
   // write
+  if (args.expected_stamp) {
+    try {
+      assertUnchanged({ path: stPath, ...args.expected_stamp });
+    } catch (error) {
+      if (error instanceof FileChangedError) {
+        return fail(error.message, ["Re-read the class source and pass the new stamp before writing."]);
+      }
+      throw error;
+    }
+  }
+
   if (isProcessRunning("Lasal2.exe")) {
     return fail("CLASS 2 IDE is open.", [
       "Close the CLASS 2 IDE manually or run manage_class2 close before writing to Structured Text class files.",

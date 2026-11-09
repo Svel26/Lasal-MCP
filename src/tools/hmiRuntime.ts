@@ -77,16 +77,17 @@ export async function startHmiRuntime(args: {
   const warnings: string[] = [];
 
   if (args.action === "stop") {
-    stopStaticServer();
     const running = getHmiForProject(state);
     if (running) {
+      stopStaticServer();
       killDataService(running.pid);
       updateState((s) => clearHmiForProject(s));
       return respond({ ok: true, message: `HMI runtime DataService (PID ${running.pid}) stopped.` });
-    } else {
-      killDataService();
-      return respond({ ok: true, message: "No tracked HMI runtime running. Attempted global process kill." });
     }
+    return respond({
+      ok: true,
+      message: "No tracked HMI runtime for this project. Nothing was stopped.",
+    });
   }
 
   if (args.action === "status") {
@@ -116,6 +117,16 @@ export async function startHmiRuntime(args: {
   }
 
   // action === "start"
+  const currentProjectKey = state.currentProject;
+  const foreignRuntime = Object.entries(state.hmiRuntimes ?? {}).find(
+    ([project, runtime]) => project !== currentProjectKey && isPidRunning(runtime.pid),
+  );
+  if (foreignRuntime) {
+    return fail(`HMI runtime is already running for another project: ${foreignRuntime[0]}`, [
+      "Stop that runtime first, or use a separate MCP process/VM for parallel HMI simulations.",
+    ]);
+  }
+
   const resolved = resolveLvpPath(args.lvp_path);
   if ("error" in resolved) {
     return fail(resolved.error, ["Select a project first using select_project or specify lvp_path."]);
@@ -257,12 +268,10 @@ export async function startHmiRuntime(args: {
     return fail(`Failed to set up HMI runtime directory ${dataDir}: ${msg}`, []);
   }
 
-  // 6. Kill any existing instance
+  // 6. Kill the existing runtime for this project, if any
   const existing = getHmiForProject(state);
   if (existing) {
     killDataService(existing.pid);
-  } else {
-    killDataService();
   }
 
   // 7. Spawn DataService detached

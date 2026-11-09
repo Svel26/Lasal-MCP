@@ -1,5 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { readState, getHmiForProject } from "../state.js";
+import { readState, getHmiForProject, getActiveAgents } from "../state.js";
+import { canonicalProjectRoot, projectIdFor } from "../core/project/context.js";
 import { findLsmPath, parseSolution, findLcpFiles } from "../utils/projectScanner.js";
 import { parseLcp, parseStClass } from "../utils/lasalXml.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
@@ -111,7 +112,42 @@ export function registerResources(server: McpServer, guideText: string) {
     },
   );
 
-  // 4. Resource Template for Classes
+  // 4. Dynamic projects/agents resource
+  server.resource(
+    "LASAL Projects",
+    "lasal://projects",
+    {
+      description: "Active agents, their selected projects and project IDs, plus runtime bookkeeping",
+      mimeType: "application/json",
+    },
+    async () => {
+      const state = readState();
+      const agents = getActiveAgents().map((agent) => ({
+        ...agent,
+        projectId: projectIdFor(canonicalProjectRoot(agent.project)),
+      }));
+      return {
+        contents: [
+          {
+            uri: "lasal://projects",
+            mimeType: "application/json",
+            text: JSON.stringify(
+              {
+                currentProject: state.currentProject,
+                agents,
+                hmiRuntimes: state.hmiRuntimes ?? {},
+                larsInstances: state.larsInstances ?? {},
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  // 5. Resource Template for Classes
   const classTemplate = new ResourceTemplate("lasal://classes/{className}", {
     list: async () => {
       const state = readState();

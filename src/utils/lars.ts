@@ -43,6 +43,11 @@ export interface LarsWorkspace {
    * emulated path ("C:\"), while this is a real host path.
    */
   dataRoot?: string;
+  /**
+   * Additional host drive mappings (D:, E:, ...). The C: mapping is represented
+   * by dataRoot and is always kept in sync with the emulated workspace root.
+   */
+  driveMaps?: Array<{ drive: string; path: string }>;
   classProjectPath?: string;
   screenProjectPath?: string;
   dataLenMb: number;
@@ -99,6 +104,19 @@ function readDriveMap(ws: Record<string, unknown>, drive: string): string | unde
   return undefined;
 }
 
+function readDriveMaps(ws: Record<string, unknown>): Array<{ drive: string; path: string }> {
+  const map = (ws.DRIVEMAP ?? {}) as Record<string, unknown>;
+  const elements = asArray(map.DRIVEMAP_ELEMENT as Record<string, unknown> | Record<string, unknown>[] | undefined);
+  const result: Array<{ drive: string; path: string }> = [];
+  for (const el of elements) {
+    if (!el || typeof el !== "object") continue;
+    const drive = strOpt(el.DRIVE);
+    const path = strOpt(el.PATH);
+    if (drive && path) result.push({ drive, path });
+  }
+  return result;
+}
+
 function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -136,6 +154,7 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
         lslWork: str(pathElem.LSLWORK, "C:\\LSLWORK"),
         sramData: str(pathElem.SRAMDAT, "C:\\"),
         dataRoot: readDriveMap(ws, "C:"),
+        driveMaps: readDriveMaps(ws),
         classProjectPath: strOpt(pathElem.CLASS_PRJ_PATH),
         screenProjectPath: strOpt(pathElem.SCREEN_PRJ_PATH),
         dataLenMb: num(memory.DATALEN, 40),
@@ -194,6 +213,63 @@ function insertChildElement(block: string, container: string, tag: string, value
   return block.replace(re, () => child);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeDrive(value: string): string {
+  return `${value.replace(/:$/, "").toUpperCase()}:`;
+}
+
+/** Replace one drive mapping, or append it when the drive is not mapped yet. */
+function setDriveMap(block: string, drive: string, hostPath: string): string {
+  const re = new RegExp(
+    `(<DRIVEMAP_ELEMENT>\\s*<DRIVE>\\s*${escapeRegExp(drive)}\\s*</DRIVE>\\s*<PATH>)([\\s\\S]*?)(</PATH>)`,
+    "i",
+  );
+  if (re.test(block)) {
+    return block.replace(re, (_match, open: string, _old: string, close: string) => `${open}${escapeXml(hostPath)}${close}`);
+  }
+
+  const closeRe = /^([ \t]*)<\/DRIVEMAP>/m;
+  const match = closeRe.exec(block);
+  if (!match) return block;
+  const indent = match[1] ?? "\t\t";
+  const child =
+    `${indent}\t<DRIVEMAP_ELEMENT>\n` +
+    `${indent}\t\t<DRIVE>${escapeXml(drive)}</DRIVE>\n` +
+    `${indent}\t\t<PATH>${escapeXml(hostPath)}</PATH>\n` +
+    `${indent}\t</DRIVEMAP_ELEMENT>\n` +
+    `${indent}</DRIVEMAP>`;
+  return block.replace(closeRe, () => child);
+}
+
+/** Update the C: mapping from dataRoot plus any additional drive maps. */
+function updateDriveMaps(block: string, ws: LarsWorkspace): string {
+  let out = block;
+  if (!/<DRIVEMAP\b/i.test(out)) {
+    const closeRe = /^([ \t]*)<\/WORKSPACE>/m;
+    const match = closeRe.exec(out);
+    if (match) {
+      const indent = match[1] ?? "\t";
+      out = out.replace(
+        closeRe,
+        () => `${indent}\t<DRIVEMAP>\n${indent}\t</DRIVEMAP>\n${match[0]}`,
+      );
+    }
+  }
+
+  const maps = new Map<string, string>();
+  maps.set("C:", ws.dataRoot ?? ws.activeData);
+  for (const map of ws.driveMaps ?? []) {
+    const drive = normalizeDrive(map.drive);
+    if (drive === "C:") continue;
+    maps.set(drive, map.path);
+  }
+  for (const [drive, hostPath] of maps) out = setDriveMap(out, drive, hostPath);
+  return out;
+}
+
 /** Replace the element if present, otherwise insert it into the container. */
 function ensureElementText(block: string, container: string, tag: string, value: string): string {
   const replaced = replaceElementText(block, tag, value);
@@ -223,13 +299,9 @@ function updateWorkspaceBlock(block: string, ws: LarsWorkspace): string {
   // Replace-only (never insert): an absent DATASERVICETCPPORT means the LARS default, so
   // the lossless merge leaves the file's shape untouched.
   out = replaceElementText(out, "DATASERVICETCPPORT", String(ws.dataServiceTcpPort ?? 2402));
-  // Retarget only the C: drive mapping; additional mappings are preserved.
+  // Retarget the C: drive mapping from dataRoot and apply any additional maps.
   // dataRoot is a real host path; activeData is ACTIVEDAT and must not be used here.
-  const driveTarget = ws.dataRoot ?? ws.activeData;
-  return out.replace(
-    /(<DRIVEMAP_ELEMENT>\s*<DRIVE>C:<\/DRIVE>\s*<PATH>)([\s\S]*?)(<\/PATH>)/i,
-    (_m, open: string, _old: string, close: string) => `${open}${escapeXml(driveTarget)}${close}`,
-  );
+  return updateDriveMaps(out, ws);
 }
 
 /** Canonical workspace block — used for brand-new workspaces and first-time files. */
@@ -257,6 +329,18 @@ function buildWorkspaceBlock(ws: LarsWorkspace): string {
     `\t\t\t<ALARM Desc="Alarm-Server port of the LSE-Kernel.">${ws.alarmPort}</ALARM>`,
     `\t\t\t<DATASERVICETCPPORT Desc="Datalink-Server port of the LSE-Kernel.">${ws.dataServiceTcpPort ?? 2402}</DATASERVICETCPPORT>`,
   ].join("\n");
+  const driveEntries = [
+    { drive: "C:", path: ws.dataRoot ?? ws.activeData },
+    ...(ws.driveMaps ?? [])
+      .filter((map) => normalizeDrive(map.drive) !== "C:")
+      .map((map) => ({ drive: normalizeDrive(map.drive), path: map.path })),
+  ];
+  const driveMap = driveEntries
+    .map(
+      (map) =>
+        `\t\t\t<DRIVEMAP_ELEMENT>\n\t\t\t\t<DRIVE>${escapeXml(map.drive)}</DRIVE>\n\t\t\t\t<PATH>${escapeXml(map.path)}</PATH>\n\t\t\t</DRIVEMAP_ELEMENT>`,
+    )
+    .join("\n");
   return [
     `\t<WORKSPACE Name="${escapeXml(ws.name)}">`,
     mem,
@@ -268,10 +352,7 @@ function buildWorkspaceBlock(ws: LarsWorkspace): string {
     `\t\t</COMTCP>`,
     `\t\t<RESOLUTION></RESOLUTION>`,
     `\t\t<DRIVEMAP>`,
-    `\t\t\t<DRIVEMAP_ELEMENT>`,
-    `\t\t\t\t<DRIVE>C:</DRIVE>`,
-    `\t\t\t\t<PATH>${escapeXml(ws.dataRoot ?? ws.activeData)}</PATH>`,
-    `\t\t\t</DRIVEMAP_ELEMENT>`,
+    driveMap,
     `\t\t</DRIVEMAP>`,
     `\t\t<IP_MAP>`,
     `\t\t</IP_MAP>`,
@@ -451,6 +532,28 @@ export function removeLarsWorkspace(name: string): LarsWorkspace[] {
       const workspaces = readLarsWorkspaces().filter((w) => w.name !== name);
       writeLarsWorkspacesUnlocked(workspaces);
       return workspaces;
+    },
+    { label: "lars-config" },
+  );
+}
+
+/**
+ * Patch an existing workspace under the config lock. Unlike `upsert`, this
+ * never creates a workspace: an unknown name returns undefined.
+ */
+export function patchLarsWorkspace(
+  name: string,
+  partial: Partial<Omit<LarsWorkspace, "name">>,
+): LarsWorkspace | undefined {
+  return withFileLockSync(
+    larsConfigLockPath(),
+    () => {
+      const workspaces = readLarsWorkspaces();
+      const workspace = workspaces.find((w) => w.name === name);
+      if (!workspace) return undefined;
+      Object.assign(workspace, partial);
+      writeLarsWorkspacesUnlocked(workspaces);
+      return workspace;
     },
     { label: "lars-config" },
   );
