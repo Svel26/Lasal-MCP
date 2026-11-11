@@ -6,13 +6,33 @@ MCP server wrapping three Sigmatek LASAL headless engines:
 - **LasalVISUDataService.exe** — local HMI web runtime (no scripting, spawned as child process)
 - **Lars.exe** (LARS runtime) — local PC soft-runtime; one program per instance, spawned as a detached window with a unique workspace (`lasalos2.xml`)
 
+## Action Catalog (0.4.0 preview)
+
+The original `lasal-mcp` entrypoint still exposes the 23 static tools. A parallel
+action-catalog interface is available through `lasal_find_action` and
+`lasal_execute_action`:
+
+- Domain profiles: `lasal-class2-mcp`, `lasal-visu-mcp`, `lasal-screen-mcp`,
+  `lasal-lars-mcp`, `lasal-solution-mcp` and the generic `serverCatalog` preview.
+- 90 actions defined in `src/domains/*/actions.ts`, filtered by profile and
+  executed by `src/core/actions/executor.ts`.
+- Request-scoped project context (`src/core/project/`) with a stable project ID,
+  capability detection and a cross-process project write lock.
+- Generated reference in [`docs/ACTIONS.md`](docs/ACTIONS.md), usage in
+  [`docs/CATALOG_PREVIEW.md`](docs/CATALOG_PREVIEW.md), and the delivery plan and
+  current status in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+
 ## Directory Layout
 
 ```
 src/
-  server.ts          — MCP tool/resource registration, entry point
+  server.ts          — static MCP tool/resource registration, default entry point
+  serverCatalog.ts   — backward-compatible action-catalog preview entrypoint
   state.ts           — shared JSON state (LARS/HMI bookkeeping) + per-agent project selection
-  core/              — shared helpers (Phase 2 dedup layer)
+  cli/init.ts        — project scanner / MCP config generator
+  core/              — shared helpers
+    actions/         — catalog types, registry, search, executor, profiles, audit
+    project/         — project context, capability detection, project write locks
     errors.ts        — isTransientError, typed error codes
     envelope.ts      — truncateArray, ToolEnvelope type
     http.ts          — checkHttpHealth (HTTP 200/301/302 probe)
@@ -20,6 +40,9 @@ src/
     response.ts      — batchResultToResponse, batchToStepResult, visuToStepResult
     scratch.ts       — ensureScratch (mkdir SCRATCH)
     staticServer.ts  — embedded HTTP server for local web simulation/assets
+  domains/           — action definitions per domain (class2, visu, screen, lars, deploy, core)
+  servers/           — one thin entrypoint per catalog profile
+  scripts/           — docs/ACTIONS.md generator
   resources/         — MCP resources
     registerResources.ts — lasal://guide, lasal://project/status, lasal://stations, lasal://classes/{className}
   tools/             — one file per MCP tool (schema + handler)
@@ -28,6 +51,8 @@ src/
     hmiRuntime.ts    — start/stop/status of local DataService web runtime
     inspectProject.ts — read-only project scanning
     larsRuntime.ts   — local LARS simulation (setup/start/stop/target/target_pc)
+    larsDoctor.ts    — LARS config/runtime diagnostics and compatibility report
+    larsScenario.ts  — one-connection scenario runner (trace/screenshot/JUnit)
     lasalApps.ts     — open/close CLASS 2 and VISUDesigner GUIs
     plcControl.ts    — compile, download, start/stop/get_state, plc_values
     plcDiagnostics.ts — tracing, file transfer, code analysis
@@ -44,7 +69,7 @@ src/
     crc.ts           — IEEE 802.3 CRC-32 calculation for @CT_ class tables
     editTransaction.ts — filesystem transaction & rollback for project changes
     engine.ts        — exe paths, process management, scratch dir, engine mutex
-    lars.ts          — LARS workspace config (lasalos2.xml, lossless merge), spawn/kill, effective-port probing, station targeting
+    lars.ts          — LARS workspace config (lossless merge, validation, export/import), spawn/kill, effective-port probing, station targeting
     lasalXml.ts      — .lcp/.st/.lcn XML parsing, ST editing, round-trip safe
     lcpManifest.ts   — .lcp XML manipulation & class manifest operations
     mcpProgress.ts   — MCP progress notifications and log reporting
@@ -90,6 +115,15 @@ Writes to `lasalos2.xml` are
 **lossless**: only model-owned fields are updated, everything else — LARSConfigTool's
 `Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings — is preserved,
 so the file stays interchangeable with the official config tool.
+
+The catalog exposes the same model as explicit actions: `lars.workspace.get`,
+`create`, `clone`, `validate`, `export` and `import` operate on the lossless raw
+config; `lars.instance.list`, `status`, `restart` and `logs` cover the runtime side.
+`lars.doctor` reports the detected build, configured vs effective ports, unmodeled
+XML elements and port/data-root conflicts. `lars.scenario.run` keeps one PLC
+connection for all steps and supports named reads, DataAnalyzer trace start/stop,
+LARS window screenshots and JUnit artifacts. See
+[`docs/LARS_COMPATIBILITY.md`](docs/LARS_COMPATIBILITY.md).
 
 Key gotchas handled by the code:
 - **Online port vs table** — a LARS build's actual online port can differ from the

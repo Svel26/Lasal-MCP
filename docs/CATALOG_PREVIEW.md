@@ -1,6 +1,6 @@
 # Action Catalog Preview
 
-This is the first working slice of the action-catalog architecture described in
+This is the 0.4.0 preview of the action-catalog architecture described in
 `docs/IMPLEMENTATION_PLAN.md`.
 
 It is a separate entrypoint so the existing `lasal-mcp` server stays untouched

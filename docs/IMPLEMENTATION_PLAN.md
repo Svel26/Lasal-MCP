@@ -1,9 +1,18 @@
 # LASAL-MCP Implementation Plan
 
-**Status:** Draft for review  
+**Status:** In progress — action-catalog preview shipped in 0.4.0  
 **Date:** 2026-11-09  
+**Updated:** 2026-11-11  
 **Scope:** Architecture and delivery plan for the next major evolution of Lasal-MCP.  
-**Related documents:** `ARCHITECTURE.md`, `README.md`, `docs/LASAL_MCP_SPECIFICATION.md`, `docs/LSE_AUTOMATION_REFERENCE.md`
+**Related documents:** `ARCHITECTURE.md`, `README.md`, `docs/CATALOG_PREVIEW.md`, `docs/ACTIONS.md`, `docs/LARS_COMPATIBILITY.md`, `docs/LASAL_MCP_SPECIFICATION.md`, `docs/LSE_AUTOMATION_REFERENCE.md`
+
+> **0.4.0 progress:** Phases 0–3 are implemented as an opt-in preview: action
+> catalog, five profile entrypoints, project context/pinning/write locks, LARS
+> workspace config parity and the scenario runner. The static 23-tool server
+> remains the default. Still open: Phase 3b LARS daemon, multi-instance HMI
+> isolation (Phase 4), full GUI capability coverage (Phase 5), preflight
+> linter/knowledge graph/telemetry (Phase 6), hardening/release gates (Phase 7)
+> and lab-suite validation on a LASAL workstation.
 
 > **Assumption:** one senior engineer familiar with the codebase, working full-time, with AI assistance for read-only discovery and test generation. Durations are estimates, not commitments. Several discovery workstreams can run in parallel, but engine-bound tests and probes must be serialized on a single Windows workstation.
 
