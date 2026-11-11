@@ -85,7 +85,14 @@ export function resolveConnection(lcpPath: string, explicit?: string): Connectio
     const raw = readFileSync(lssPath, "latin1");
     const xmlParser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: false });
     const doc = xmlParser.parse(raw);
-    const tcpip = doc.SlnStation?.OnlineConnectionInfo?.TCPIP;
+    const rawTcpip = doc.SlnStation?.OnlineConnectionInfo?.TCPIP;
+    // A station can hold several profiles (hardware + LARS). fast-xml-parser
+    // returns an array as soon as there are two <TCPIP> tags, so pick the active
+    // profile instead of reading "@_IP" off the array (which is undefined).
+    const activeProfile = doc.SlnStation?.["@_OnlineConnection"];
+    const tcpip = Array.isArray(rawTcpip)
+      ? (rawTcpip.find((t) => t?.["@_ConfigName"] === activeProfile) ?? rawTcpip[0])
+      : rawTcpip;
     if (tcpip) {
       const ip = tcpip["@_IP"];
       const port = tcpip["@_PORT"] ?? "1954";

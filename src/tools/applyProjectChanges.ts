@@ -3,6 +3,7 @@ import { runBatchOps, type BatchOp } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { shouldAddLoader, parseConnectionTarget } from "../utils/preflight.js";
 import { withEngineLock, killClass2, killVisuDesigner } from "../utils/engine.js";
+import { getCurrentProject } from "../state.js";
 import {
   createClass,
   registerProjectFile,
@@ -647,9 +648,11 @@ export async function applyProjectChangesHandler(
 
     const hasFileOps = ops.some(isFileOperation);
     if (hasFileOps) {
-      // File-level operations rewrite the .lcp; the IDE must not hold the project.
-      killClass2();
-      killVisuDesigner();
+      // File-level operations rewrite the .lcp; our IDE must not hold the project.
+      // Another agent's CLASS 2/VISUDesigner session is left untouched — it has a
+      // different project open, so it cannot lock these files.
+      killClass2({ lcpPath: resolved.path, onConflict: "skip" });
+      killVisuDesigner({ projectDir: getCurrentProject() ?? undefined, onConflict: "skip" });
     }
 
     interface OpOutcome {
@@ -712,8 +715,8 @@ export async function applyProjectChangesHandler(
     let batchResult: Record<string, unknown> | undefined;
     let batchOk = true;
     if (batchOps.length > 0 && !fileFailure) {
-      killClass2();
-      killVisuDesigner();
+      killClass2({ lcpPath: resolved.path });
+      killVisuDesigner({ projectDir: getCurrentProject() ?? undefined, onConflict: "skip" });
       await reporter.report(50, 100, `Executing ${batchOps.length} CLASS 2 batch operations...`);
       const br = await runBatchOps(resolved.path, batchOps);
       batchOk = br.ok;

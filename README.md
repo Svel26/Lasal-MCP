@@ -129,6 +129,32 @@ When running from a local clone, point your MCP client to:
 | `LASAL_MCP_HMI_DIR` | `C:\lslvisu` | Local HMI runtime directory |
 | `LASAL_MCP_SCRATCH_MAX_AGE_H` | `24` | Hours before temp files are cleaned |
 | `LASAL_MCP_STATE_FILE` | `<repo>/lasal-state.json` | Override the MCP state file (unit tests use it to stay off live state) |
+| `LASAL_MCP_PROJECT` | unset | Pin this MCP server process to one project. Overrides `select_project` for the process lifetime — useful when each agent gets its own MCP entry. |
+| `LASAL_MCP_INHERIT_PROJECT` | `0` | Set to `1` to restore the old behaviour where a fresh process always adopts the shared "last used" project hint, even while another agent owns it. |
+
+### Running several agents at once
+
+Every MCP server process has its **own** project selection. `select_project` in
+one agent session no longer redirects another session's next tool call — the
+shared state file only keeps a "last used" hint, and a fresh process inherits it
+only when the process that wrote it has exited.
+
+What is still machine-wide, and therefore coordinated:
+
+- **Engine lock** — compile/download/visu/LSE operations take a cross-process
+  lock, so two agents queue instead of driving `Lasal2.exe` simultaneously.
+- **CLASS 2 / VISUDesigner ownership** — before an engine operation closes an
+  IDE, each running instance is matched to its `.lcp`/`.lvp` from the process
+  command line. Instances belonging to another project are **left running**;
+  engine operations report the conflict instead of destroying another agent's
+  unsaved work. `manage_class2` / `manage_visudesigner` accept `force: true` to
+  override.
+- **State writes** — `lasal-state.json` is written under a lock via
+  temp-file + rename, and handlers merge their changes into the current file
+  instead of overwriting a stale snapshot.
+
+`lasal_status` reports `agents` (live sessions and their projects) and `class2`
+(instances owned by this project vs. other projects).
 
 ## Available Tools
 
@@ -136,7 +162,7 @@ When running from a local clone, point your MCP client to:
 
 | Tool | Description |
 |---|---|
-| `select_project` | Set the active project root directory. |
+| `select_project` | Set this agent session's project root directory (per-process; other agents keep theirs). |
 | `lasal_status` | Check project, stations, engines, processes, HMI health. |
 | `check_job_status` | Poll background jobs started with `async: true` (or list recent jobs). |
 | `inspect_project` | Read-only class/network/object inventory (channels, tasks) from the manifest + class sources. |
@@ -197,7 +223,41 @@ npm run test:watch   # Tests in watch mode
 npm run lint         # ESLint
 npm run format       # Prettier
 npm run inspector    # MCP Inspector for interactive debugging
+npm run start:catalog -- --profile visu  # Action-catalog preview (see docs/CATALOG_PREVIEW.md)
+npm run docs:actions # Regenerate the action reference (docs/ACTIONS.md)
 ```
+
+### Action catalog preview
+
+The next interface iteration is being developed as a separate entrypoint. It
+exposes `lasal_find_action` / `lasal_execute_action` over a local action
+catalog covering CLASS 2, VISUDesigner, LASAL SCREEN, LARS and shared project
+actions. It does not replace the existing tool set yet.
+
+```bash
+npm run build
+npm run start:catalog -- --profile auto --project "C:\Projects\MySolution"
+```
+
+Dedicated bins are also available:
+
+```bash
+npm run start:class2
+npm run start:visu
+npm run start:screen
+npm run start:lars
+npm run start:solution
+```
+
+Generate an MCP client config for a project:
+
+```bash
+npm run init -- --project "C:\Projects\MySolution"
+npm run init -- --project "C:\Projects\MySolution" --write .mcp.json
+```
+
+See [`docs/CATALOG_PREVIEW.md`](docs/CATALOG_PREVIEW.md) and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for details.
 
 ## Simulating without hardware (LARS)
 
@@ -206,9 +266,12 @@ instance runs one program, the MCP creates one workspace per station:
 
 1. `lars_runtime setup` — creates workspaces for every station in the selected solution.
 2. `lars_runtime start <station>` — launches the LARS window for that station and reports the **effective online port** it probed.
-3. `lars_runtime set_station_target <station>` — points the station's `.lss` at that effective port (refuses to target a port that is not answering).
+3. `lars_runtime set_station_target <station>` — adds or switches a dedicated `LARS`
+   profile in the station's `.lss` and points `OnlineConnection` at it (refusing a port
+   that is not answering). The machine's own profile is left untouched.
 4. Now `build_project`, `control_plc`, and `plc_values` work unchanged against the local runtime.
-5. `lars_runtime restore <station>` — reverts the `.lss` to the real hardware target.
+5. `lars_runtime restore <station>` — switches `OnlineConnection` back to the machine
+   profile. Nothing is rewritten, so no address can be lost.
 
 Shortcut: `lars_runtime simulate` does the whole loop in one call — creates the workspace
 if needed (CLASS 2 + LASAL SCREEN), switches ARM targets to PC, compiles, starts the LARS
@@ -226,19 +289,39 @@ on distinct ports whenever the LARS build provides them, and a workspace that an
 nowhere fails loudly instead of pointing a station at a dead port. `lars_runtime list` and
 `lasal_status` report the resolved port as `effectiveOnlinePort`.
 
+LARS **01.03.216 ignores the table entirely**: every instance binds `1954` and a second
+concurrent instance exposes no online port at all, which makes multi-station simulation
+impossible. If you need more than one instance, point `LASAL_LARS_EXE` at a build that
+honours the table (01.03.213 was verified to) — no other change is needed.
+
 Notes:
 - Projects compiled for `Processor="ARM"` (most machine PLCs) need
   `lars_runtime target_pc` first — LARS is an x86 runtime and rejects ARM images.
 - HMI panel / Local stations are already PC-targeted and work directly.
 - Downloads to LARS automatically include the PC loader (`addLoaderAnyway`).
-- `%APPDATA%\lasalos2.xml` is edited **losslessly** — the MCP updates only the fields it
+- `%APPDATA%\lasalos2.xml` is edited **losslessly** - the MCP updates only the fields it
   owns and preserves everything else, so the file stays interchangeable with Sigmatek's
   LARSConfigTool (`Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings).
+  The catalog also exposes explicit create/clone/validate and lossless XML/JSON
+  export/import, so a workspace set can be backed up and restored without losing
+  unmodeled fields. See [`docs/LARS_COMPATIBILITY.md`](docs/LARS_COMPATIBILITY.md).
+- Each workspace gets its **own emulated `C:` data root** (`%LOCALAPPDATA%\lasal-mcp\lars\<workspace>`
+  by default) instead of the host `C:\`, so instances never share `LSLWORK`/SRAM and never
+  write into the real system drive. Files a program expects at a fixed `C:\` path are
+  re-seeded from the host before every start, so the host copy stays authoritative.
+- `stop` closes LARS gracefully first — the runtime writes its SRAM image on a normal
+  shutdown, and a force kill would silently drop retained variables.
 - `hmi_runtime` remaps published stations.json entries to running LARS instances,
   so the web HMI talks to the local simulation.
 - Stations with a LASAL SCREEN project get their `.lpr` wired into the LARS
   workspace (`SCREEN_PRJ_PATH`), so LARS renders the panel screens locally;
   `lars_runtime screenshot` returns a PNG of the window for visual verification.
+- `lars.scenario.run` keeps one PLC connection for all steps and supports named
+  reads, DataAnalyzer trace start/stop, LARS window screenshots and JUnit XML
+  output alongside set/wait/assert/sleep.
+- `lars.instance.list`, `status`, `restart` and `logs` cover the runtime side;
+  `lars.doctor` reports detected build version, configured vs effective ports,
+  unknown config elements and data-root/port conflicts.
 
 ## Contributing
 
@@ -246,7 +329,7 @@ Contributions are welcome! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) f
 
 ## Releasing & CI/CD
 
-Automated releases and publishing to npm are powered by GitHub Actions. Releases can be triggered manually via workflow dispatch with automated version bumping or by pushing version tags (`v*.*.*`).
+Automated releases and publishing to npm are powered by GitHub Actions. Releases can be triggered manually via workflow dispatch with automated version bumping or by pushing version tags (`v*.*.*`). Release notes are maintained in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 

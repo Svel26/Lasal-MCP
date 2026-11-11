@@ -475,12 +475,12 @@ export async function deployAllHandler(
         await reporter.report(95, 100, "Starting HMI web simulation runtime...");
         const startStart = Date.now();
         const hmiRes = await startHmiRuntime({ action: "start", lvp_path: lvpPath });
+        const hmiText =
+          hmiRes.content.map((entry) => (entry.type === "text" ? entry.text : "")).find(Boolean) ?? "HMI runtime step";
         steps.hmi_runtime = {
           ok: !hmiRes.isError,
           durationMs: Date.now() - startStart,
-          ...(hmiRes.isError
-            ? { errors: [hmiRes.content[0]?.text ?? "Unknown error"] }
-            : { logTail: [`HMI started: ${hmiRes.content[0]?.text ?? "started"}`] }),
+          ...(hmiRes.isError ? { errors: [hmiText] } : { logTail: [`HMI started: ${hmiText}`] }),
         };
         if (hmiRes.isError) return failResponse("HMI runtime start step failed.");
       }

@@ -1,4 +1,4 @@
-import { z } from "zod";
+﻿import { z } from "zod";
 import { existsSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import {
@@ -20,13 +20,16 @@ import {
   switchProjectTargetToPC,
   runningInstancePorts,
   resolveEffectiveOnlinePort,
+  prepareLarsDataRoot,
+  defaultSeedFiles,
   type LarsWorkspace,
 } from "../utils/lars.js";
 import {
   readState,
-  writeState,
+  updateState,
   getLarsInstance,
   setLarsInstance,
+  mergeLarsInstance,
   removeLarsInstance,
   type LarsInstanceInfo,
   type LasalState,
@@ -57,12 +60,12 @@ export const larsRuntimeSchema = {
     ])
     .describe(
       "'list' shows all configured LARS workspaces and their state (auto-cleans stale ones, but never the selected project's). " +
-        "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp), wiring both the CLASS 2 project and the LASAL SCREEN (.lpr) project so LARS renders the screen locally. " +
+        "'setup' creates/updates LARS workspaces for the selected project's stations (or one station/lcp), recording the CLASS 2 project in MCP state and wiring the LASAL SCREEN (.lpr) project so LARS renders the screen locally. " +
         "'start' launches a LARS instance (auto-creates the workspace first if the station is known but unconfigured); reports the effective online port it probed (LARS builds differ in which port they serve). 'stop' terminates it, 'remove' deletes its workspace config. " +
         "'gc' runs lazy garbage collection: deletes auto-created workspaces that are not running and no longer referenced by any station .lss or published DataService stations.json, while always keeping workspaces of the selected project. " +
         "'set_station_target' points a station's .lss at the online port its LARS instance actually services (probed; never a port another running instance owns); 'restore' reverts to the saved real target. " +
         "'target_pc' switches an ARM-compiled .lcp to the PC (x86) compile target LARS requires (restore via 'restore'). " +
-        "'simulate' runs the full no-hardware loop in one call: ensure workspace (auto-creates), switch ARM targets to PC, compile, start the local LARS instance (probing its effective online port), then download to it. 'screenshot' captures the LARS window of a running workspace (returns the PNG) — use it to visually verify LASAL SCREEN projects running locally.",
+        "'simulate' runs the full no-hardware loop in one call: ensure workspace (auto-creates), switch ARM targets to PC, compile, start the local LARS instance (probing its effective online port), then download to it. 'screenshot' captures the LARS window of a running workspace (returns the PNG) â€” use it to visually verify LASAL SCREEN projects running locally.",
     ),
   name: z
     .string()
@@ -219,6 +222,8 @@ async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, Lar
     alarmPort: ws.alarmPort,
     classProjectPath: ws.classProjectPath ?? null,
     screenProjectPath: ws.screenProjectPath ?? null,
+    dataRoot: ws.dataRoot ?? null,
+    seedFiles: inst?.seedFiles ?? null,
     running,
     pid: pids[0] ?? inst?.pid ?? null,
     healthy,
@@ -226,7 +231,7 @@ async function workspaceSummary(ws: LarsWorkspace, instances: Record<string, Lar
     lcpPath: inst?.lcpPath ?? null,
     lssPath: inst?.stationLssPath ?? null,
     role: inst?.role ?? null,
-    targetedAtLars: inst?.originalIp ? true : false,
+    targetedAtLars: inst?.stationTargetOverridden ?? Boolean(inst?.originalIp),
   };
 }
 
@@ -242,7 +247,7 @@ function stationLookupError(
 ): string {
   if (lookup.matches.length > 1) {
     return (
-      `Station '${station}' is ambiguous — ${lookup.matches.length} LARS workspaces match in the selected project: ` +
+      `Station '${station}' is ambiguous â€” ${lookup.matches.length} LARS workspaces match in the selected project: ` +
       `${lookup.matches.map((i) => i.name).join(", ")}. Pass name= explicitly.`
     );
   }
@@ -284,7 +289,7 @@ function requireWorkspace(
     const workspace = workspaces.find((w) => w.name === inst.name);
     if (!workspace) {
       return {
-        error: `Workspace '${inst.name}' for station '${args.station}' is no longer configured — run lars_runtime setup again.`,
+        error: `Workspace '${inst.name}' for station '${args.station}' is no longer configured â€” run lars_runtime setup again.`,
       };
     }
     return { workspace, instance: inst };
@@ -303,10 +308,27 @@ function runAutoGc(state: LasalState, projectDir?: string | null, dryRun: boolea
     protectProjects: projectDir ? [projectDir] : [],
   });
   if (!dryRun) {
-    state.larsGc = result.larsGc;
-    writeState(state);
+    updateState((s) => {
+      s.larsGc = result.larsGc;
+    });
   }
   return result;
+}
+
+/**
+ * Prepare the workspace data root before LARS launches. LARS reads its autoexec and
+ * the program its config files at boot, so seeding after start is too late.
+ */
+/**
+ * The web HMI's DataService connects to 2402, so the HMI/visu station must own
+ * that port. PLC workspaces get a unique port from allocateLarsPorts instead.
+ */
+function dataServicePortForRole(role: string | undefined): { dataServiceTcpPort?: number } {
+  return role === "hmi" ? { dataServiceTcpPort: 2402 } : {};
+}
+
+function seedBeforeStart(workspace: LarsWorkspace, inst: LarsInstanceInfo | undefined) {
+  return prepareLarsDataRoot(workspace.dataRoot, inst?.seedFiles ?? defaultSeedFiles(), workspace);
 }
 
 /**
@@ -328,11 +350,12 @@ function ensureWorkspaceForStart(
     if (inst) {
       const { workspace } = upsertLarsWorkspace(args.name, {
         ...(inst.lcpPath ? { classProjectPath: inst.lcpPath } : {}),
+        ...dataServicePortForRole(inst.role),
       });
       return { workspace, instance: inst, autoCreated: true };
     }
     return {
-      error: `No LARS workspace named '${args.name}' found and no instance bookkeeping exists — run lars_runtime setup first.`,
+      error: `No LARS workspace named '${args.name}' found and no instance bookkeeping exists â€” run lars_runtime setup first.`,
     };
   }
 
@@ -348,11 +371,12 @@ function ensureWorkspaceForStart(
       if (existing) return { workspace: existing, instance: inst };
       const { workspace } = upsertLarsWorkspace(inst.name, {
         ...(inst.lcpPath ? { classProjectPath: inst.lcpPath } : {}),
+        ...dataServicePortForRole(inst.role),
       });
       return { workspace, instance: inst, autoCreated: true };
     }
 
-    // No bookkeeping for this project — try to detect the station from the solution and set it up now
+    // No bookkeeping for this project â€” try to detect the station from the solution and set it up now
 
     if (projectDir) {
       const projectName = projectDir.split(/[\\/]/).filter(Boolean).pop() ?? "project";
@@ -361,7 +385,10 @@ function ensureWorkspaceForStart(
       const station = stations.find((s) => s.stationName === args.station);
       if (station) {
         const name = safeWorkspaceName(projectName, station.stationName);
-        const { workspace } = upsertLarsWorkspace(name, { classProjectPath: station.lcpPath });
+        const { workspace } = upsertLarsWorkspace(name, {
+          classProjectPath: station.lcpPath,
+          ...dataServicePortForRole(station.role),
+        });
         const info: LarsInstanceInfo = {
           name: workspace.name,
           onlinePort: workspace.onlinePort,
@@ -372,8 +399,7 @@ function ensureWorkspaceForStart(
           projectDir,
           role: station.role,
         };
-        setLarsInstance(state, info);
-        writeState(state);
+        updateState((s) => setLarsInstance(s, info));
         return { workspace, instance: info, autoCreated: true };
       }
     }
@@ -463,15 +489,16 @@ export async function larsRuntimeHandler(args: {
       const role = detectRole(args.lcp_path);
       const { workspace } = upsertLarsWorkspace(name, {
         classProjectPath: args.lcp_path,
+        ...dataServicePortForRole(role),
       });
-      setLarsInstance(state, {
+      const instance = mergeLarsInstance(state, {
         name: workspace.name,
         onlinePort: workspace.onlinePort,
         lcpPath: args.lcp_path,
         projectDir,
         role,
       });
-      writeState(state);
+      updateState((s) => setLarsInstance(s, instance));
       created.push({ name: workspace.name, onlinePort: workspace.onlinePort, lcpPath: args.lcp_path, role });
     } else if (args.station) {
       const station = stations.find((s) => s.stationName === args.station);
@@ -483,8 +510,9 @@ export async function larsRuntimeHandler(args: {
       const { workspace } = upsertLarsWorkspace(name, {
         classProjectPath: station.lcpPath,
         ...(station.lprPath ? { screenProjectPath: station.lprPath } : {}),
+        ...dataServicePortForRole(station.role),
       });
-      setLarsInstance(state, {
+      const instance = mergeLarsInstance(state, {
         name: workspace.name,
         onlinePort: workspace.onlinePort,
         stationName: station.stationName,
@@ -494,7 +522,7 @@ export async function larsRuntimeHandler(args: {
         projectDir,
         role: station.role,
       });
-      writeState(state);
+      updateState((s) => setLarsInstance(s, instance));
       created.push({
         name: workspace.name,
         onlinePort: workspace.onlinePort,
@@ -504,22 +532,26 @@ export async function larsRuntimeHandler(args: {
         role: station.role,
       });
     } else {
+      const newInstances: LarsInstanceInfo[] = [];
       for (const station of stations) {
         const name = safeWorkspaceName(projectName, station.stationName);
         const { workspace } = upsertLarsWorkspace(name, {
           classProjectPath: station.lcpPath,
           ...(station.lprPath ? { screenProjectPath: station.lprPath } : {}),
+          ...dataServicePortForRole(station.role),
         });
-        setLarsInstance(state, {
-          name: workspace.name,
-          onlinePort: workspace.onlinePort,
-          stationName: station.stationName,
-          stationId: visuStationIds[station.stationName],
-          stationLssPath: station.lssPath,
-          lcpPath: station.lcpPath,
-          projectDir,
-          role: station.role,
-        });
+        newInstances.push(
+          mergeLarsInstance(state, {
+            name: workspace.name,
+            onlinePort: workspace.onlinePort,
+            stationName: station.stationName,
+            stationId: visuStationIds[station.stationName],
+            stationLssPath: station.lssPath,
+            lcpPath: station.lcpPath,
+            projectDir,
+            role: station.role,
+          }),
+        );
         created.push({
           name: workspace.name,
           onlinePort: workspace.onlinePort,
@@ -529,7 +561,9 @@ export async function larsRuntimeHandler(args: {
           role: station.role,
         });
       }
-      writeState(state);
+      updateState((s) => {
+        for (const instance of newInstances) setLarsInstance(s, instance);
+      });
     }
 
     if (created.length === 0) {
@@ -537,6 +571,18 @@ export async function larsRuntimeHandler(args: {
         "Ensure the solution has a .lsm file with station .lss files.",
       ]);
     }
+
+    // Seed files are MCP bookkeeping (lasalos2.xml has no field for them): the files a
+    // program expects at a fixed C:\ path, refreshed into the data root before each start.
+    const createdNames = new Set(created.map((entry) => String(entry.name)));
+    updateState((s) => {
+      for (const name of createdNames) {
+        const inst = getLarsInstance(s, name);
+        if (inst && !inst.seedFiles) {
+          inst.seedFiles = defaultSeedFiles();
+        }
+      }
+    });
 
     return respond({
       ok: true,
@@ -556,8 +602,9 @@ export async function larsRuntimeHandler(args: {
       protectProjects: [state.currentProject].filter((p): p is string => !!p),
     });
     if (!dryRun) {
-      state.larsGc = gcResult.larsGc;
-      writeState(state);
+      updateState((s) => {
+        s.larsGc = gcResult.larsGc;
+      });
     }
     return respond({
       ok: true,
@@ -569,7 +616,7 @@ export async function larsRuntimeHandler(args: {
         candidates: gcResult.candidates,
       },
       hint: dryRun
-        ? "Dry run — nothing deleted. Remove dry_run:false to actually clean up."
+        ? "Dry run â€” nothing deleted. Remove dry_run:false to actually clean up."
         : "Unreferenced auto-created workspaces were removed. 'start' will auto-recreate one on demand if a station needs it again.",
     });
   }
@@ -590,7 +637,7 @@ export async function larsRuntimeHandler(args: {
     const steps: Record<string, unknown> = {};
     const hints: string[] = [];
 
-    // LARS is an x86 runtime — ARM images are rejected.
+    // LARS is an x86 runtime â€” ARM images are rejected.
     const raw = readFileSync(lcpPath, "latin1");
     const targetTag = raw.match(/<Target\s[^>]*?>/);
     if (targetTag && /\bProcessor\s*=\s*"ARM"/.test(targetTag[0])) {
@@ -598,11 +645,10 @@ export async function larsRuntimeHandler(args: {
       if ("error" in switched) return fail(switched.error, []);
       if (inst && inst.originalTargetTag === undefined) {
         inst.originalTargetTag = switched.previousTag;
-        setLarsInstance(state, inst);
-        writeState(state);
+        updateState((s) => setLarsInstance(s, inst));
       }
       steps.target_pc = { ok: true, targetBefore: switched.previousTag, targetNow: switched.newTag };
-      hints.push("Compile target switched ARM → PC for LARS. Use lars_runtime restore to revert it.");
+      hints.push("Compile target switched ARM â†’ PC for LARS. Use lars_runtime restore to revert it.");
     }
 
     if (!args.skip_compile) {
@@ -623,8 +669,10 @@ export async function larsRuntimeHandler(args: {
       }
     }
 
-    // LARS must be up (and answering) before the download — the CLASS 2 online
+    // LARS must be up (and answering) before the download â€” the CLASS 2 online
     // connection needs a live listener, so start + probe come before it.
+    const seeded = seedBeforeStart(workspace, inst);
+    if (seeded) steps.dataRoot = seeded;
     const result = await startLars(workspace);
     if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
 
@@ -638,8 +686,7 @@ export async function larsRuntimeHandler(args: {
       inst.pid = result.pid ?? inst.pid;
       inst.onlinePort = workspace.onlinePort;
       inst.effectiveOnlinePort = effectivePort ?? undefined;
-      setLarsInstance(state, inst);
-      writeState(state);
+      updateState((s) => setLarsInstance(s, inst));
     }
     steps.start = {
       ok: result.running,
@@ -658,7 +705,7 @@ export async function larsRuntimeHandler(args: {
           error:
             `LARS is running but no online port answered among [${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}]` +
             (owned.length ? ` (${owned.join(", ")} already owned by another running instance)` : "") +
-            " — cannot download to it.",
+            " â€” cannot download to it.",
           hints,
         });
       }
@@ -710,29 +757,42 @@ export async function larsRuntimeHandler(args: {
     const autoCreated = (req as { autoCreated?: boolean }).autoCreated ?? false;
 
     if (action === "stop") {
-      killLars(workspace.name);
+      const killed = killLars(workspace.name);
       const inst = req.instance;
       if (inst) {
         inst.pid = undefined;
-        setLarsInstance(state, inst);
-        writeState(state);
+        // The port belonged to that process; a later start may serve another one.
+        inst.effectiveOnlinePort = undefined;
+        updateState((s) => setLarsInstance(s, inst));
       }
-      return respond({ ok: true, message: `LARS workspace '${workspace.name}' stopped.` });
+      return respond({
+        ok: true,
+        message: `LARS workspace '${workspace.name}' stopped.`,
+        graceful: killed.graceful.length > 0,
+        pids: killed.pids,
+        ...(killed.forced.length > 0
+          ? {
+              warning:
+                `Forced shutdown of pid ${killed.forced.join(", ")} — the runtime did not write its SRAM image, ` +
+                "so retained variables (counters, run hours) were lost.",
+            }
+          : { hint: "Closed gracefully — the SRAM image was written, so retained variables survive." }),
+      });
     }
 
     if (action === "remove") {
       killLars(workspace.name);
       removeLarsWorkspace(workspace.name);
-      removeLarsInstance(state, workspace.name);
-      writeState(state);
+      updateState((s) => removeLarsInstance(s, workspace.name));
       return respond({ ok: true, message: `LARS workspace '${workspace.name}' removed (ports freed).` });
     }
 
     if (action === "start") {
+      const seeded = seedBeforeStart(workspace, req.instance ?? getLarsInstance(state, workspace.name));
       const result = await startLars(workspace);
       if (result.error) return fail(result.error, ["Check LASAL_LARS_EXE / the LARS installation."]);
 
-      // Find the port this instance actually services (LARS builds differ — see
+      // Find the port this instance actually services (LARS builds differ â€” see
       // resolveEffectiveOnlinePort in utils/lars.ts). Never take a port another
       // running instance owns: PLC and HMI must stay on distinct ports.
       const owned = runningInstancePorts(state.larsInstances, workspace.name);
@@ -746,8 +806,7 @@ export async function larsRuntimeHandler(args: {
         inst.pid = result.pid ?? inst.pid;
         inst.onlinePort = workspace.onlinePort;
         inst.effectiveOnlinePort = effectivePort ?? undefined;
-        setLarsInstance(state, inst);
-        writeState(state);
+        updateState((s) => setLarsInstance(s, inst));
       }
 
       return respond({
@@ -759,10 +818,11 @@ export async function larsRuntimeHandler(args: {
         healthy,
         pid: result.pid,
         ...(autoCreated ? { autoCreated: true } : {}),
+        ...(seeded ? { dataRoot: seeded } : {}),
         hint: !healthy
           ? `LARS launched but no online port answered among [${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}]` +
             (owned.length ? ` (${owned.join(", ")} already owned by another running instance)` : "") +
-            ". If this is a second parallel instance, note that the field-tested LARS 01.03.216 build exposes no online port for it — check the LARS installation or run one instance at a time."
+            ". If this is a second parallel instance, note that the field-tested LARS 01.03.216 build exposes no online port for it â€” check the LARS installation or run one instance at a time."
           : autoCreated
             ? "Workspace was auto-created on demand (station known but unconfigured), then LARS started. Next: lars_runtime set_station_target to point the station's .lss at it."
             : "LARS is up. Next: lars_runtime set_station_target <workspace> so build_project/control_plc/plc_values target it.",
@@ -780,10 +840,14 @@ export async function larsRuntimeHandler(args: {
         return fail(`Station .lss not found: ${inst.stationLssPath}`, []);
       }
 
-      // Point the station at the port the instance actually services — never blindly at
+      // Point the station at the port the instance actually services â€” never blindly at
       // the configured ONLINE value (that is exactly how stations ended up on dead ports).
-      let port = inst.effectiveOnlinePort;
-      if (port === undefined) {
+      const running = getLarsPids(workspace.name).length > 0;
+      // A recorded effective port is only meaningful while that instance is running:
+      // LARS may serve a different port after a restart, and does across builds.
+      // Trusting a stale value is exactly how a station ended up pointed at a dead 1954.
+      let port = running ? inst.effectiveOnlinePort : undefined;
+      if (port === undefined && running) {
         const owned = runningInstancePorts(state.larsInstances, workspace.name);
         port =
           (await resolveEffectiveOnlinePort(
@@ -794,11 +858,10 @@ export async function larsRuntimeHandler(args: {
           )) ?? undefined;
         if (port !== undefined) inst.effectiveOnlinePort = port;
       }
-      const running = getLarsPids(workspace.name).length > 0;
       if (port === undefined && running) {
         return fail(
           `LARS workspace '${workspace.name}' is running but no online port answered among ` +
-            `[${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}] — refusing to point the station at a dead port.`,
+            `[${workspace.onlinePort}, ${DEFAULT_ONLINE_PORT}] â€” refusing to point the station at a dead port.`,
           [
             "If another LARS instance already owns a port, this workspace has none (parallel-instance issue).",
             "Check the LARS installation/window; a just-updated LARS may not expose the configured online port.",
@@ -809,21 +872,38 @@ export async function larsRuntimeHandler(args: {
 
       const result = pointStationAtLars(inst.stationLssPath, targetPort);
       if ("error" in result) return fail(result.error, []);
-      if (inst.originalIp === undefined) {
+      // Save the pre-override target exactly once. Older state files predate the
+      // stationTargetOverridden flag, so keep honouring a recorded originalIp.
+      if (!inst.stationTargetOverridden && inst.originalConnection === undefined) {
+        inst.originalConnection = result.previousConnection;
+      }
+      if (inst.originalIp === undefined && !inst.stationTargetOverridden) {
         inst.originalIp = result.previousIp;
         inst.originalPort = result.previousPort;
       }
-      setLarsInstance(state, inst);
-      writeState(state);
+      inst.stationTargetOverridden = true;
+      updateState((s) => setLarsInstance(s, inst));
+      // If the station already pointed at localhost there is no hardware target to
+      // return to â€” say so now, not at deploy time.
+      const alreadyLocal = /^127\./.test(result.previousIp ?? "") || result.previousIp === "localhost";
       return respond({
         ok: true,
         workspace: workspace.name,
         station: inst.stationName,
         lssPath: inst.stationLssPath,
         nowTargeting: `127.0.0.1:${targetPort} (LARS)`,
+        profile: "LARS",
+        previousProfile: result.previousConnection,
         previousTarget: `${result.previousIp}:${result.previousPort}`,
+        ...(alreadyLocal
+          ? {
+              warning:
+                `The station already targeted ${result.previousIp}:${result.previousPort} before this call, so ` +
+                "'restore' cannot recover a hardware address. Put the machine's real IP back in the .lss before deploying.",
+            }
+          : {}),
         ...(port === undefined
-          ? { warning: "LARS instance is not running — targeted the configured port; start the instance first." }
+          ? { warning: "LARS instance is not running â€” targeted the configured port; start the instance first." }
           : {}),
         hint: "Now build_project/control_plc/plc_values with no connection argument will hit LARS. Use 'restore' to revert.",
       });
@@ -832,13 +912,33 @@ export async function larsRuntimeHandler(args: {
     if (action === "restore") {
       const inst = req.instance;
       if (!inst?.stationLssPath) return fail("No station .lss known for this workspace.", []);
-      if (!inst.originalIp) return fail("No saved original target — set_station_target was never called.", []);
+      if (!inst.stationTargetOverridden && !inst.originalIp && !inst.originalConnection) {
+        return fail("No saved original target â€” set_station_target was never called.", []);
+      }
       if (!existsSync(inst.stationLssPath)) return fail(`Station .lss not found: ${inst.stationLssPath}`, []);
-      const { updateLssConnection } = await import("../utils/projectScanner.js");
-      updateLssConnection(inst.stationLssPath, { ip: inst.originalIp, port: inst.originalPort });
-      const restored = { ip: inst.originalIp, port: inst.originalPort };
+      const { updateLssConnection, setLssActiveProfile, readLssConnection } =
+        await import("../utils/projectScanner.js");
+      let restored: Record<string, unknown>;
+      if (inst.originalConnection) {
+        // The LARS target is a separate profile, so restoring is a switch back to the
+        // machine's own profile - no address is written and none can be lost.
+        if (!setLssActiveProfile(inst.stationLssPath, inst.originalConnection)) {
+          return fail(`Could not switch ${inst.stationLssPath} back to profile '${inst.originalConnection}'.`, []);
+        }
+        const after = readLssConnection(inst.stationLssPath);
+        restored = {
+          profile: inst.originalConnection,
+          ...("error" in after ? {} : { ip: after.ip, port: after.port }),
+        };
+      } else {
+        // Legacy state: only the IP/port pair was recorded.
+        updateLssConnection(inst.stationLssPath, { ip: inst.originalIp, port: inst.originalPort });
+        restored = { ip: inst.originalIp, port: inst.originalPort };
+      }
       inst.originalIp = undefined;
       inst.originalPort = undefined;
+      inst.originalConnection = undefined;
+      inst.stationTargetOverridden = undefined;
 
       // Also restore the .lcp compile target if it was switched to PC
       let targetRestored: string | null = null;
@@ -850,8 +950,7 @@ export async function larsRuntimeHandler(args: {
         }
       }
 
-      setLarsInstance(state, inst);
-      writeState(state);
+      updateState((s) => setLarsInstance(s, inst));
       return respond({ ok: true, workspace: workspace.name, restored, targetRestored });
     }
 
@@ -864,11 +963,23 @@ export async function larsRuntimeHandler(args: {
       const { switchProjectTargetToPC } = await import("../utils/lars.js");
       const result = switchProjectTargetToPC(inst.lcpPath);
       if ("error" in result) return fail(result.error, []);
+      if (result.alreadyPc) {
+        // Idempotent: the project is already PC-targeted, which is what was asked for.
+        return respond({
+          ok: true,
+          workspace: workspace.name,
+          station: inst.stationName ?? null,
+          lcpPath: inst.lcpPath,
+          targetBefore: result.previousTag,
+          targetNow: result.newTag,
+          alreadyPc: true,
+          hint: "Project already targets the PC (no change). Nothing to restore for this workspace.",
+        });
+      }
       if (inst.originalTargetTag === undefined) {
         inst.originalTargetTag = result.previousTag;
       }
-      setLarsInstance(state, inst);
-      writeState(state);
+      updateState((s) => setLarsInstance(s, inst));
       return respond({
         ok: true,
         workspace: workspace.name,

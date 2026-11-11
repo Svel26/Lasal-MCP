@@ -4,6 +4,7 @@ import { z } from "zod";
 import { buildRawScript, emitPy27String, runScript, validateMbcsEncodable } from "../utils/batchScript.js";
 import { resolveLcpPath } from "../utils/resolvePaths.js";
 import { killClass2, SCRATCH } from "../utils/engine.js";
+import { getCurrentProject } from "../state.js";
 import { TIMEOUTS } from "../utils/config.js";
 import { fail } from "../utils/respond.js";
 import { batchResultToResponse } from "../core/response.js";
@@ -72,7 +73,7 @@ export async function runClass2ScriptHandler(args: { script_body: string; args?:
     expectedSteps,
   );
 
-  killClass2();
+  killClass2({ projectDir: getCurrentProject() ?? undefined });
   const result = await runScript(script, logPath, TIMEOUTS.script, expectedSteps, stepsPath);
   return batchResultToResponse(result);
 }

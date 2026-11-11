@@ -8,6 +8,7 @@ import {
   writeLarsWorkspaces,
   upsertLarsWorkspace,
   removeLarsWorkspace,
+  patchLarsWorkspace,
   allocateLarsPorts,
   pointStationAtLars,
   gcLarsWorkspaces,
@@ -15,9 +16,20 @@ import {
   findLarsInstancesForStation,
   instanceBelongsToProject,
   resolveEffectiveOnlinePort,
+  seedDataRoot,
+  defaultDataRoot,
+  defaultSeedFiles,
+  switchProjectTargetToPC,
+  restoreProjectTarget,
   type LarsInstanceInfo,
 } from "../src/utils/lars.js";
-import { readLssConnection, updateLssConnection } from "../src/utils/projectScanner.js";
+import {
+  readLssConnection,
+  updateLssConnection,
+  setLssActiveProfile,
+  readLssActiveProfile,
+  pointStationAtProfile,
+} from "../src/utils/projectScanner.js";
 
 const FIXTURES = join(dirname(import.meta.filename), "fixtures");
 
@@ -108,6 +120,17 @@ describe("LARS workspace config", () => {
     expect(ports.comlinkServerPort).toBe(1965);
     expect(ports.comlinkBasePort).toBe(1010);
     expect(ports.alarmPort).toBe(1967);
+    // DEFAULT (the HMI/visu owner) keeps 2402; the next instance must not collide.
+    expect(ports.dataServiceTcpPort).toBe(2412);
+  });
+
+  it("never reuses the DataService datalink port", () => {
+    const workspaces = readLarsWorkspaces();
+    const taken = [
+      ...workspaces,
+      { ...workspaces[0]!, name: "PLC", onlinePort: 1964, comlinkBasePort: 1010, dataServiceTcpPort: 2412 },
+    ];
+    expect(allocateLarsPorts(taken).dataServiceTcpPort).toBe(2422);
   });
 
   it("upserts a new workspace and round-trips it", () => {
@@ -123,7 +146,10 @@ describe("LARS workspace config", () => {
     const workspaces = readLarsWorkspaces();
     expect(workspaces).toHaveLength(2);
     const plc = workspaces.find((w) => w.name === "Proj_PLC");
-    expect(plc?.classProjectPath).toBe("C:\\proj\\PLC.lcp");
+    // The CLASS 2 association lives in MCP state: writing CLASS_PRJ_PATH makes
+    // LARS try to open the .lcp as a runtime project ("UNKNOWN PROJECT-FILE").
+    expect(plc?.classProjectPath).toBeUndefined();
+    expect(readFileSync(configPath, "utf-8")).not.toContain("CLASS_PRJ_PATH");
     expect(plc?.comlinkBasePort).toBe(1010);
     // DEFAULT preserved
     expect(workspaces.find((w) => w.name === "DEFAULT")?.onlinePort).toBe(1954);
@@ -135,6 +161,42 @@ describe("LARS workspace config", () => {
     expect(workspace.dataLenMb).toBe(80);
     expect(workspace.onlinePort).toBe(1964); // unchanged
     expect(readLarsWorkspaces()).toHaveLength(2);
+  });
+
+  it("patches only an existing workspace", () => {
+    const updated = patchLarsWorkspace("DEFAULT", { onlinePort: 1974, dataLenMb: 64 });
+    expect(updated?.onlinePort).toBe(1974);
+    expect(updated?.dataLenMb).toBe(64);
+
+    const workspaces = readLarsWorkspaces();
+    expect(workspaces[0]?.onlinePort).toBe(1974);
+    expect(workspaces[0]?.dataLenMb).toBe(64);
+    expect(patchLarsWorkspace("missing", { onlinePort: 2000 })).toBeUndefined();
+    expect(readLarsWorkspaces()).toHaveLength(1);
+  });
+
+  it("round-trips additional drive mappings", () => {
+    const dataRoot = join(tempDir, "c-root");
+    const extraRoot = join(tempDir, "d-root");
+    upsertLarsWorkspace("Proj_PLC", {
+      dataRoot,
+      driveMaps: [
+        { drive: "C:", path: dataRoot },
+        { drive: "D:", path: extraRoot },
+      ],
+    });
+
+    const plc = readLarsWorkspaces().find((workspace) => workspace.name === "Proj_PLC");
+    expect(plc?.dataRoot).toBe(dataRoot);
+    expect(plc?.driveMaps).toEqual(
+      expect.arrayContaining([
+        { drive: "C:", path: dataRoot },
+        { drive: "D:", path: extraRoot },
+      ]),
+    );
+    const xml = readFileSync(configPath, "utf-8");
+    expect(xml).toContain("<DRIVE>D:</DRIVE>");
+    expect(xml).toContain(extraRoot);
   });
 
   it("removes a workspace", () => {
@@ -443,18 +505,45 @@ describe("pointStationAtLars", () => {
     expect(conn).toEqual({ ip: "10.195.0.50", port: "1954" });
   });
 
-  it("points the station at a LARS instance and records the original", () => {
+  it("points the station at a LARS instance by adding a profile, keeping the original", () => {
     const result = pointStationAtLars(lssPath, 1964);
-    expect(result).toEqual({ previousIp: "10.195.0.50", previousPort: "1954" });
-    const conn = readLssConnection(lssPath);
-    expect(conn).toEqual({ ip: "127.0.0.1", port: "1964" });
+    expect(result).toMatchObject({ previousConnection: "PLC50 (Project)", previousIp: "10.195.0.50" });
+
+    const raw = readFileSync(lssPath, "latin1");
+    // Both profiles survive: the machine address is never overwritten.
+    expect(raw).toContain('ConfigName="PLC50"');
+    expect(raw).toContain('IP="10.195.0.50"');
+    expect(raw).toContain('ConfigName="LARS"');
+    expect(raw).toContain('IP="127.0.0.1" PORT="1964"');
+    expect(raw).toContain('OnlineConnection="LARS"');
   });
 
-  it("restores the original target", () => {
+  it("reads the active profile, not merely the first one", () => {
     pointStationAtLars(lssPath, 1964);
-    updateLssConnection(lssPath, { ip: "10.195.0.50", port: "1954" });
-    const conn = readLssConnection(lssPath);
-    expect(conn).toEqual({ ip: "10.195.0.50", port: "1954" });
+    expect(readLssConnection(lssPath)).toEqual({ ip: "127.0.0.1", port: "1964" });
+  });
+
+  it("switches back to the original profile without writing an address", () => {
+    pointStationAtLars(lssPath, 1964);
+    expect(setLssActiveProfile(lssPath, "PLC50 (Project)")).toBe(true);
+    expect(readLssConnection(lssPath)).toEqual({ ip: "10.195.0.50", port: "1954" });
+  });
+
+  it("updates the existing LARS profile instead of adding a second one", () => {
+    pointStationAtLars(lssPath, 1964);
+    pointStationAtLars(lssPath, 1974);
+    const raw = readFileSync(lssPath, "latin1");
+    expect((raw.match(/ConfigName="LARS"/g) ?? []).length).toBe(1);
+    expect(raw).toContain('PORT="1974"');
+  });
+
+  it("adds an OnlineConnectionInfo block when the station has no TCPIP profile", () => {
+    const bare = join(tempDir, "Local.lss");
+    writeFileSync(bare, `<SlnStation Name="Local" Color="0">\n</SlnStation>\n`, "latin1");
+    const result = pointStationAtProfile(bare, 1999);
+    expect("error" in result).toBe(false);
+    expect(readLssConnection(bare)).toEqual({ ip: "127.0.0.1", port: "1999" });
+    expect(readLssActiveProfile(bare)).toBe("LARS");
   });
 });
 
@@ -718,7 +807,7 @@ describe("lossless LARS config writes", () => {
 
     // Modeled fields were updated; attributes on those elements survive.
     expect(after).toContain('<ONLINE Desc="Port for the online comunication.">1994</ONLINE>');
-    expect(after).toContain("<CLASS_PRJ_PATH>C:\\proj\\PLC.lcp</CLASS_PRJ_PATH>");
+    expect(after).not.toContain("CLASS_PRJ_PATH");
     // Foreign content survives.
     expect(after).toContain("<GLOBAL_NOTE>keep me</GLOBAL_NOTE>");
     expect(after).toContain("<!-- keep this comment -->");
@@ -731,7 +820,19 @@ describe("lossless LARS config writes", () => {
     // Re-read sees the new values.
     const ws = readLarsWorkspaces().find((w) => w.name === "Custom_PLC")!;
     expect(ws.onlinePort).toBe(1994);
-    expect(ws.classProjectPath).toBe("C:\\proj\\PLC.lcp");
+    expect(ws.classProjectPath).toBeUndefined();
+  });
+
+  it("strips a stale CLASS_PRJ_PATH from older configs", () => {
+    const withStale = readFileSync(configPath, "utf-8").replace(
+      "</PATH>",
+      "<CLASS_PRJ_PATH>C:\\proj\\Old.lcp</CLASS_PRJ_PATH></PATH>",
+    );
+    writeFileSync(configPath, withStale, "utf-8");
+    expect(withStale).toContain("CLASS_PRJ_PATH");
+
+    upsertLarsWorkspace("DEFAULT", {});
+    expect(readFileSync(configPath, "utf-8")).not.toContain("CLASS_PRJ_PATH");
   });
 
   it("appends new workspaces without touching existing bytes", () => {
@@ -754,5 +855,162 @@ describe("lossless LARS config writes", () => {
     expect(after).not.toContain("Custom_PLC");
     expect(after).toContain("<GLOBAL_NOTE>keep me</GLOBAL_NOTE>");
     expect(blockOf(after, "DEFAULT")).toBe(defaultBlockBefore);
+  });
+});
+
+describe("workspace data root", () => {
+  let configPath: string;
+  let tempDir: string;
+
+  const sample = `<?xml version="1.0" encoding="UTF-8"?>
+<LARSCONFIGURATIONS ConfigVersion="2">
+  <WORKSPACE Name="DEFAULT">
+    <PATH>
+      <ACTIVEDAT>C:\\</ACTIVEDAT>
+      <AUTOEXEC>C:\\Autoexec.lsl</AUTOEXEC>
+      <LSLWORK>C:\\LSLWORK</LSLWORK>
+      <SRAMDAT>C:\\</SRAMDAT>
+    </PATH>
+    <COMTCP>
+      <ONLINE>1954</ONLINE>
+    </COMTCP>
+    <DRIVEMAP>
+      <DRIVEMAP_ELEMENT>
+        <DRIVE>C:</DRIVE>
+        <PATH>C:\\Lars</PATH>
+      </DRIVEMAP_ELEMENT>
+    </DRIVEMAP>
+    <IP_MAP>
+    </IP_MAP>
+  </WORKSPACE>
+</LARSCONFIGURATIONS>
+`;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-root-"));
+    configPath = join(tempDir, "lasalos2.xml");
+    process.env.LASAL_LARS_CONFIG = configPath;
+    writeFileSync(configPath, sample, "utf-8");
+  });
+
+  afterEach(() => {
+    delete process.env.LASAL_LARS_CONFIG;
+    delete process.env.LOCALAPPDATA;
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("reads the C: drive map as dataRoot, separate from ACTIVEDAT", () => {
+    const [ws] = readLarsWorkspaces();
+    expect(ws.dataRoot).toBe("C:\\Lars");
+    expect(ws.activeData).toBe("C:\\");
+  });
+
+  it("writes dataRoot to the drive map without touching ACTIVEDAT", () => {
+    upsertLarsWorkspace("DEFAULT", { dataRoot: "D:\\isolated" });
+    const raw = readFileSync(configPath, "utf-8");
+    expect(raw).toContain("<PATH>D:\\isolated</PATH>");
+    expect(raw).toContain("<ACTIVEDAT>C:\\</ACTIVEDAT>");
+    expect(readLarsWorkspaces()[0].dataRoot).toBe("D:\\isolated");
+  });
+
+  it("defaults a new workspace to an isolated data root under LOCALAPPDATA", () => {
+    process.env.LOCALAPPDATA = join(tempDir, "appdata");
+    const { workspace } = upsertLarsWorkspace("NewWs", {});
+    expect(workspace.dataRoot).toBe(defaultDataRoot("NewWs"));
+    expect(workspace.dataRoot).toContain(join("lasal-mcp", "lars", "NewWs"));
+    expect(readLarsWorkspaces().find((w) => w.name === "NewWs")?.dataRoot).toBe(workspace.dataRoot);
+  });
+
+  it("seeds files into the data root and refreshes them from the source", () => {
+    const srcDir = join(tempDir, "src");
+    mkdirSync(srcDir, { recursive: true });
+    const src = join(srcDir, "MQTT_Client_Iq.xml");
+    writeFileSync(src, "<v1/>", "utf-8");
+    const root = join(tempDir, "root");
+
+    const first = seedDataRoot(root, [src]);
+    expect(first?.seeded).toHaveLength(1);
+    expect(readFileSync(join(root, "MQTT_Client_Iq.xml"), "utf-8")).toBe("<v1/>");
+
+    // The copy tracks its source: editing the source wins on the next start.
+    writeFileSync(src, "<v2/>", "utf-8");
+    seedDataRoot(root, [src]);
+    expect(readFileSync(join(root, "MQTT_Client_Iq.xml"), "utf-8")).toBe("<v2/>");
+  });
+
+  it("reports seed files that do not exist instead of failing", () => {
+    const result = seedDataRoot(join(tempDir, "root"), [join(tempDir, "nope.xml")]);
+    expect(result?.seeded).toHaveLength(0);
+    expect(result?.missing).toHaveLength(1);
+  });
+
+  it("refuses a drive root so the real system drive is never written", () => {
+    const result = seedDataRoot("C:\\", [join(tempDir, "anything")]);
+    expect(result?.skipped).toBeTruthy();
+    expect(result?.seeded).toHaveLength(0);
+  });
+
+  it("returns undefined when no data root is configured", () => {
+    expect(seedDataRoot(undefined, [])).toBeUndefined();
+  });
+
+  it("does not seed into a drive root even with a valid source", () => {
+    const srcDir = join(tempDir, "src2");
+    mkdirSync(srcDir, { recursive: true });
+    const src = join(srcDir, "autoexec.lsl");
+    writeFileSync(src, "x", "utf-8");
+    expect(seedDataRoot("C:/", [src])?.seeded).toHaveLength(0);
+  });
+
+  it("default seed list is overridable via env", () => {
+    process.env.LASAL_MCP_LARS_SEED_FILES = "C:\\a.xml; D:\\b.xml ";
+    expect(defaultSeedFiles()).toEqual(["C:\\a.xml", "D:\\b.xml"]);
+    delete process.env.LASAL_MCP_LARS_SEED_FILES;
+    expect(defaultSeedFiles().length).toBeGreaterThan(0);
+  });
+});
+
+describe("switchProjectTargetToPC", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "lasal-mcp-target-"));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("switches ARM to PC and restores byte-identically", () => {
+    const lcp = join(tempDir, "p.lcp");
+    const original = `<Project>\n\t<Target UseFPU="true" Processor="ARM">\n\t</Target>\n</Project>\n`;
+    writeFileSync(lcp, original, "latin1");
+
+    const r = switchProjectTargetToPC(lcp);
+    expect("error" in r).toBe(false);
+    if ("error" in r) return;
+    expect(r.alreadyPc).toBe(false);
+    expect(readFileSync(lcp, "latin1")).not.toContain('Processor="ARM"');
+
+    expect(restoreProjectTarget(lcp, r.previousTag)).toBe(true);
+    expect(readFileSync(lcp, "latin1")).toBe(original);
+  });
+
+  it("is idempotent on an already-PC project instead of erroring", () => {
+    const lcp = join(tempDir, "pc.lcp");
+    const original = `<Project>\n\t<Target UseFPU="true">\n\t</Target>\n</Project>\n`;
+    writeFileSync(lcp, original, "latin1");
+
+    const r = switchProjectTargetToPC(lcp);
+    expect("error" in r).toBe(false);
+    if ("error" in r) return;
+    expect(r.alreadyPc).toBe(true);
+    expect(readFileSync(lcp, "latin1")).toBe(original);
+  });
+
+  it("errors when the project has no Target element", () => {
+    const lcp = join(tempDir, "bad.lcp");
+    writeFileSync(lcp, "<Project></Project>", "latin1");
+    expect("error" in switchProjectTargetToPC(lcp)).toBe(true);
   });
 });
