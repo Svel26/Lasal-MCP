@@ -1,6 +1,6 @@
 # Lasal-MCP Architecture
 
-MCP server wrapping three Sigmatek LASAL headless engines:
+MCP server wrapping four Sigmatek LASAL components:
 - **Lasal2.exe** (CLASS 2 PLC IDE) — `/script:path.py` with Python 2.7 batch API
 - **VISUDesigner.exe** (HMI IDE) — `--script path.py` with Python scripting API
 - **LasalVISUDataService.exe** — local HMI web runtime (no scripting, spawned as child process)
