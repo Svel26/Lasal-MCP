@@ -229,10 +229,10 @@ npm run docs:actions # Regenerate the action reference (docs/ACTIONS.md)
 
 ### Action catalog preview
 
-The next interface iteration is being developed as a separate entrypoint. It
-exposes `lasal_find_action` / `lasal_execute_action` over a local action
-catalog covering CLASS 2, VISUDesigner, LASAL SCREEN, LARS and shared project
-actions. It does not replace the existing tool set yet.
+The action catalog is available as a separate, opt-in entrypoint. It exposes
+`lasal_find_action` / `lasal_execute_action` over a local catalog of 90 actions
+covering CLASS 2, VISUDesigner, LASAL SCREEN, LARS and shared project actions.
+It does not replace the existing tool set yet.
 
 ```bash
 npm run build
@@ -256,8 +256,11 @@ npm run init -- --project "C:\Projects\MySolution"
 npm run init -- --project "C:\Projects\MySolution" --write .mcp.json
 ```
 
-See [`docs/CATALOG_PREVIEW.md`](docs/CATALOG_PREVIEW.md) and
-[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for details.
+See [`docs/CATALOG_PREVIEW.md`](docs/CATALOG_PREVIEW.md) for usage,
+[`docs/ACTIONS.md`](docs/ACTIONS.md) for the generated action reference,
+[`docs/LARS_COMPATIBILITY.md`](docs/LARS_COMPATIBILITY.md) for the LARS build
+matrix, and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for
+the delivery plan and current status.
 
 ## Simulating without hardware (LARS)
 
