@@ -329,7 +329,7 @@ Contributions are welcome! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) f
 
 ## Releasing & CI/CD
 
-Automated releases and publishing to npm are powered by GitHub Actions. Releases can be triggered manually via workflow dispatch with automated version bumping or by pushing version tags (`v*.*.*`).
+Automated releases and publishing to npm are powered by GitHub Actions. Releases can be triggered manually via workflow dispatch with automated version bumping or by pushing version tags (`v*.*.*`). Release notes are maintained in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License
 

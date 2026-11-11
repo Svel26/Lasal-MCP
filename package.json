@@ -1,6 +1,6 @@
 {
   "name": "lasal-mcp",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "MCP server for LASAL IDE automation",
   "type": "module",
   "main": "dist/server.js",
@@ -16,6 +16,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "author": "Svel26 <sjjansen06@gmail.com>",
