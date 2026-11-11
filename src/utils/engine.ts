@@ -184,9 +184,7 @@ export class Class2ConflictError extends Error {
   readonly conflicts: Class2HandleInfo[];
 
   constructor(conflicts: Class2HandleInfo[]) {
-    const list = conflicts
-      .map((c) => `  PID ${c.pid}: ${c.lcpPath ?? (c.title || "unknown project")}`)
-      .join("\n");
+    const list = conflicts.map((c) => `  PID ${c.pid}: ${c.lcpPath ?? (c.title || "unknown project")}`).join("\n");
     super(
       `A LASAL editor is open for a different project and was left running:\n${list}\n` +
         "Close it first, or call manage_class2 / manage_visudesigner close with force: true to terminate it anyway.",
@@ -212,7 +210,9 @@ function extractProjectFile(commandLine: string, ext: string): string | null {
 
 function isUnderDir(file: string, dir: string): boolean {
   const f = resolve(file).toLowerCase();
-  const d = resolve(dir).toLowerCase().replace(/[\\/]+$/, "");
+  const d = resolve(dir)
+    .toLowerCase()
+    .replace(/[\\/]+$/, "");
   return f === d || f.startsWith(`${d}\\`);
 }
 
@@ -303,11 +303,7 @@ export interface KillClass2Result {
   conflicts: Class2HandleInfo[];
 }
 
-function killApp(
-  imageName: string,
-  ext: string,
-  opts: KillClass2Options = {},
-): KillClass2Result {
+function killApp(imageName: string, ext: string, opts: KillClass2Options = {}): KillClass2Result {
   const handles = getAppHandles(imageName, ext);
   if (handles.length === 0) return { killed: [], conflicts: [] };
 

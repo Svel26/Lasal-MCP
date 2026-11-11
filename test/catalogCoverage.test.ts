@@ -52,6 +52,7 @@ describe("catalog coverage", () => {
       "screen.project.download",
       "screen.editor.close",
       "lars.instance.stop",
+      "lars.instance.restart",
       "lars.workspace.remove",
     ]) {
       const action = registry.get(id);

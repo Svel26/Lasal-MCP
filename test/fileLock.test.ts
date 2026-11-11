@@ -54,9 +54,13 @@ describe("fileLock", () => {
     );
 
     let ran = false;
-    withFileLockSync(lockPath, () => {
-      ran = true;
-    }, { timeoutMs: 1_000 });
+    withFileLockSync(
+      lockPath,
+      () => {
+        ran = true;
+      },
+      { timeoutMs: 1_000 },
+    );
     expect(ran).toBe(true);
     expect(existsSync(lockPath)).toBe(false);
   });

@@ -1,10 +1,19 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, copyFileSync, renameSync } from "fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  readdirSync,
+  unlinkSync,
+  copyFileSync,
+  renameSync,
+} from "fs";
 import { spawn, execSync } from "child_process";
-import { join, basename, dirname } from "path";
+import { join, basename, dirname, isAbsolute, resolve, parse as parsePath } from "path";
 import { homedir } from "os";
 import { XMLParser } from "fast-xml-parser";
 import { pingHost } from "./preflight.js";
-import { pointStationAtProfile, updateLssConnection, readLssConnection } from "./projectScanner.js";
+import { pointStationAtProfile, readLssConnection } from "./projectScanner.js";
 import { SCRATCH } from "./engine.js";
 import { withFileLockSync } from "./fileLock.js";
 import type { LarsInstanceInfo } from "../state.js";
@@ -18,6 +27,29 @@ export const LARS_CONFIG_EXE =
 
 export function larsConfigPath(): string {
   return process.env.LASAL_LARS_CONFIG || join(process.env.APPDATA || homedir(), "lasalos2.xml");
+}
+
+let larsVersionCache: string | null | undefined;
+
+/** File version of the configured LARS executable, best effort and cached. */
+export function getLarsVersion(): string | null {
+  if (process.env.LASAL_LARS_VERSION) return process.env.LASAL_LARS_VERSION;
+  if (larsVersionCache !== undefined) return larsVersionCache;
+  if (!existsSync(LARS_EXE) || process.platform !== "win32") {
+    larsVersionCache = null;
+    return null;
+  }
+  try {
+    const escaped = LARS_EXE.replace(/'/g, "''");
+    const out = execSync(
+      `powershell -NoProfile -Command "(Get-Item -LiteralPath '${escaped}').VersionInfo.FileVersion"`,
+      { encoding: "utf-8", timeout: 5000 },
+    ).trim();
+    larsVersionCache = out || null;
+  } catch {
+    larsVersionCache = null;
+  }
+  return larsVersionCache;
 }
 
 // ─── Workspace model (lasalos2.xml) ───────────────────────────────────────────
@@ -121,22 +153,85 @@ function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-export function readLarsWorkspaces(): LarsWorkspace[] {
-  const path = larsConfigPath();
-  if (!existsSync(path)) return [];
+export interface LarsUnknownElement {
+  workspace: string;
+  element: string;
+}
 
+export interface ParsedLarsConfig {
+  workspaces: LarsWorkspace[];
+  configVersion?: string;
+  workspaceNames: string[];
+  unnamedWorkspaceBlocks: number;
+  unknownElements: LarsUnknownElement[];
+}
+
+export type ParseLarsConfigResult = { ok: true; config: ParsedLarsConfig } | { ok: false; error: string };
+
+const KNOWN_WORKSPACE_ELEMENTS = new Set(["MEMORY", "PATH", "COMTCP", "RESOLUTION", "DRIVEMAP", "IP_MAP"]);
+const KNOWN_PATH_ELEMENTS = new Set([
+  "ACTIVEDAT",
+  "AUTOEXEC",
+  "LSLWORK",
+  "SRAMDAT",
+  "SCREEN_PRJ_PATH",
+  "CLASS_PRJ_PATH",
+]);
+const KNOWN_COMTCP_ELEMENTS = new Set(["ONLINE", "COMLINK_SRVR", "COMLINK", "ALARM", "DATASERVICETCPPORT"]);
+const KNOWN_MEMORY_ELEMENTS = new Set(["DATALEN", "CODELEN"]);
+
+function elementNames(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value as Record<string, unknown>).filter(
+    (key) => !key.startsWith("@_") && !key.startsWith("#") && key !== "?xml",
+  );
+}
+
+function collectUnknown(
+  target: LarsUnknownElement[],
+  workspace: string,
+  container: unknown,
+  containerName: string,
+  known: Set<string>,
+): void {
+  for (const element of elementNames(container)) {
+    if (!known.has(element)) target.push({ workspace, element: `${containerName}.${element}` });
+  }
+}
+
+/** Parse a LARS config document without touching disk. Strict enough for import validation. */
+export function parseLarsConfig(raw: string): ParseLarsConfigResult {
   try {
-    const raw = readFileSync(path, "utf-8");
     const parser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: false });
     const doc = parser.parse(raw);
     const root = doc.LARSCONFIGURATIONS;
-    if (!root) return [];
+    if (!root || typeof root !== "object" || Array.isArray(root)) {
+      return { ok: false, error: "Not a LARS config: missing LARSCONFIGURATIONS root element." };
+    }
 
+    const configVersion = strOpt((root as Record<string, unknown>)["@_ConfigVersion"]);
     const workspaces: LarsWorkspace[] = [];
-    for (const ws of asArray<Record<string, unknown>>(root.WORKSPACE)) {
+    const workspaceNames: string[] = [];
+    const unknownElements: LarsUnknownElement[] = [];
+    let unnamedWorkspaceBlocks = 0;
+
+    for (const ws of asArray(
+      (root as Record<string, unknown>).WORKSPACE as Record<string, unknown> | Record<string, unknown>[] | undefined,
+    )) {
       if (!ws || typeof ws !== "object") continue;
       const name = str(ws["@_Name"], "");
-      if (!name) continue;
+      if (!name) {
+        unnamedWorkspaceBlocks += 1;
+        continue;
+      }
+      workspaceNames.push(name);
+
+      for (const element of elementNames(ws)) {
+        if (!KNOWN_WORKSPACE_ELEMENTS.has(element)) unknownElements.push({ workspace: name, element });
+      }
+      collectUnknown(unknownElements, name, ws.PATH, "PATH", KNOWN_PATH_ELEMENTS);
+      collectUnknown(unknownElements, name, ws.COMTCP, "COMTCP", KNOWN_COMTCP_ELEMENTS);
+      collectUnknown(unknownElements, name, ws.MEMORY, "MEMORY", KNOWN_MEMORY_ELEMENTS);
 
       const memory = (ws.MEMORY ?? {}) as Record<string, unknown>;
       const pathElem = (ws.PATH ?? {}) as Record<string, unknown>;
@@ -161,10 +256,150 @@ export function readLarsWorkspaces(): LarsWorkspace[] {
         codeLenMb: num(memory.CODELEN, 8),
       });
     }
-    return workspaces;
-  } catch {
-    return [];
+
+    return { ok: true, config: { workspaces, configVersion, workspaceNames, unnamedWorkspaceBlocks, unknownElements } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `Could not parse LARS config: ${message}` };
   }
+}
+
+/** Raw config text, or undefined when the file does not exist/cannot be read. */
+export function readLarsConfigRaw(): string | undefined {
+  const path = larsConfigPath();
+  if (!existsSync(path)) return undefined;
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+export function readLarsWorkspaces(): LarsWorkspace[] {
+  const raw = readLarsConfigRaw();
+  if (raw === undefined) return [];
+  const parsed = parseLarsConfig(raw);
+  return parsed.ok ? parsed.config.workspaces : [];
+}
+
+export interface LarsValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+const PORT_FIELDS: Array<[Exclude<keyof LarsWorkspace, "name">, string]> = [
+  ["onlinePort", "onlinePort"],
+  ["comlinkServerPort", "comlinkServerPort"],
+  ["comlinkBasePort", "comlinkBasePort"],
+  ["alarmPort", "alarmPort"],
+  ["dataServiceTcpPort", "dataServiceTcpPort"],
+];
+
+function validPort(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
+}
+
+/**
+ * Validate workspace definitions without touching the engine. Errors block a
+ * write; warnings are surfaced but do not (e.g. a screen project that does not
+ * exist on this workstation yet).
+ */
+export function validateLarsWorkspaces(
+  workspaces: LarsWorkspace[],
+  options: { checkPaths?: boolean } = {},
+): LarsValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const checkPaths = options.checkPaths !== false;
+
+  const names = new Map<string, number>();
+  for (const workspace of workspaces) {
+    if (!workspace.name.trim()) errors.push("A workspace has an empty name.");
+    names.set(workspace.name, (names.get(workspace.name) ?? 0) + 1);
+  }
+  for (const [name, count] of names) {
+    if (count > 1) errors.push(`Duplicate workspace name '${name}' (${count} blocks).`);
+  }
+
+  const portOwners = new Map<number, { workspace: string; label: string }>();
+  const rootOwners = new Map<string, string>();
+
+  for (const workspace of workspaces) {
+    const prefix = `Workspace '${workspace.name}'`;
+    const localPorts = new Map<number, string>();
+
+    for (const [field, label] of PORT_FIELDS) {
+      const value = workspace[field];
+      if (value === undefined) continue;
+      if (!validPort(value)) {
+        errors.push(`${prefix}: ${label} must be an integer between 1 and 65535.`);
+        continue;
+      }
+      const localOwner = localPorts.get(value);
+      if (localOwner) errors.push(`${prefix}: ${label} and ${localOwner} use the same port (${value}).`);
+      else localPorts.set(value, label);
+
+      const owner = portOwners.get(value);
+      if (owner && owner.workspace !== workspace.name) {
+        errors.push(`Port ${value} (${label}) is used by both '${owner.workspace}' and '${workspace.name}'.`);
+      } else {
+        portOwners.set(value, { workspace: workspace.name, label });
+      }
+    }
+
+    if (!workspace.dataRoot) {
+      warnings.push(`${prefix}: no isolated dataRoot configured (legacy shared C: mapping).`);
+    } else if (!isAbsolute(workspace.dataRoot)) {
+      errors.push(`${prefix}: dataRoot must be an absolute host path.`);
+    } else {
+      const resolvedRoot = resolve(workspace.dataRoot);
+      if (resolvedRoot.toLowerCase() === parsePath(resolvedRoot).root.toLowerCase()) {
+        errors.push(`${prefix}: dataRoot is a host drive root; every workspace needs an isolated folder.`);
+      }
+      const key = resolvedRoot.toLowerCase();
+      const owner = rootOwners.get(key);
+      if (owner) errors.push(`dataRoot '${workspace.dataRoot}' is shared by '${owner}' and '${workspace.name}'.`);
+      else rootOwners.set(key, workspace.name);
+    }
+
+    if (workspace.screenProjectPath && checkPaths && !existsSync(workspace.screenProjectPath)) {
+      warnings.push(`${prefix}: screen project not found: ${workspace.screenProjectPath}`);
+    }
+
+    if (!Number.isFinite(workspace.dataLenMb) || workspace.dataLenMb <= 0) {
+      errors.push(`${prefix}: dataLenMb must be positive.`);
+    }
+    if (!Number.isFinite(workspace.codeLenMb) || workspace.codeLenMb <= 0) {
+      errors.push(`${prefix}: codeLenMb must be positive.`);
+    }
+
+    const drives = new Set<string>();
+    for (const map of workspace.driveMaps ?? []) {
+      const drive = normalizeDrive(map.drive);
+      if (!/^[A-Z]:$/.test(drive)) {
+        errors.push(`${prefix}: invalid drive '${map.drive}'. Use a letter such as D:.`);
+        continue;
+      }
+      if (drives.has(drive)) errors.push(`${prefix}: drive ${drive} is listed more than once.`);
+      drives.add(drive);
+      if (!isAbsolute(map.path)) {
+        errors.push(`${prefix}: drive ${drive} path must be absolute.`);
+      } else {
+        const resolved = resolve(map.path);
+        if (resolved.toLowerCase() === parsePath(resolved).root.toLowerCase()) {
+          errors.push(`${prefix}: drive ${drive} cannot map to a host drive root.`);
+        }
+      }
+      if (drive === "C:") {
+        const expected = workspace.dataRoot ? resolve(workspace.dataRoot).toLowerCase() : undefined;
+        if (expected && resolve(map.path).toLowerCase() !== expected) {
+          errors.push(`${prefix}: the C: drive map must match dataRoot.`);
+        }
+      }
+    }
+  }
+
+  return { errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
 }
 
 // ─── Writing (lossless merge) ─────────────────────────────────────────────────
@@ -184,6 +419,85 @@ function unescapeXml(s: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&lt;/g, "<")
     .replace(/&amp;/g, "&");
+}
+
+export interface RawWorkspaceBlock {
+  name: string;
+  xml: string;
+}
+
+/** All workspace blocks in a raw config, preserving their exact bytes. */
+export function listWorkspaceBlocks(raw: string): RawWorkspaceBlock[] {
+  const blocks: RawWorkspaceBlock[] = [];
+  const re = /<WORKSPACE\b[^>]*>[\s\S]*?<\/WORKSPACE>/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    const nameAttr = match[0].match(/<WORKSPACE\b[^>]*\bName\s*=\s*"([^"]*)"/i)?.[1];
+    if (nameAttr === undefined) continue;
+    blocks.push({ name: unescapeXml(nameAttr), xml: match[0] });
+  }
+  return blocks;
+}
+
+export function extractWorkspaceBlock(raw: string, name: string): string | undefined {
+  return listWorkspaceBlocks(raw).find((block) => block.name === name)?.xml;
+}
+
+function wrapWorkspaceBlocks(blocks: string[], configVersion = "2"): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<LARSCONFIGURATIONS ConfigVersion="${escapeXml(configVersion)}">\n` +
+    blocks.join("\n") +
+    `\n</LARSCONFIGURATIONS>\n`
+  );
+}
+
+export interface MergedLarsConfig {
+  xml: string;
+  added: string[];
+  replaced: string[];
+}
+
+/**
+ * Merge raw imported workspace blocks into an existing config. Unrelated
+ * workspaces, global elements and comments stay byte-identical; a workspace
+ * with the same name is replaced as a whole block (including fields this
+ * server does not model).
+ */
+export function mergeLarsConfigRaw(existingRaw: string, importedRaw: string): MergedLarsConfig | { error: string } {
+  if (existingRaw.lastIndexOf("</LARSCONFIGURATIONS>") < 0) {
+    return { error: "The existing LARS config has no closing </LARSCONFIGURATIONS> element." };
+  }
+  const importedBlocks = listWorkspaceBlocks(importedRaw);
+  if (importedBlocks.length === 0) {
+    return { error: "The imported file contains no WORKSPACE blocks." };
+  }
+  const importedNames = new Set<string>();
+  for (const block of importedBlocks) {
+    if (importedNames.has(block.name))
+      return { error: `Imported config contains duplicate workspace '${block.name}'.` };
+    importedNames.add(block.name);
+  }
+
+  let out = existingRaw;
+  const added: string[] = [];
+  const replaced: string[] = [];
+  for (const block of importedBlocks) {
+    const existing = extractWorkspaceBlock(out, block.name);
+    if (existing !== undefined) {
+      out = out.replace(existing, block.xml);
+      replaced.push(block.name);
+      continue;
+    }
+    const idx = out.lastIndexOf("</LARSCONFIGURATIONS>");
+    out = out.slice(0, idx) + block.xml + "\n" + out.slice(idx);
+    added.push(block.name);
+  }
+  return { xml: out, added, replaced };
+}
+
+export function wrapWorkspaceExport(block: string, configVersion = "2"): string {
+  return wrapWorkspaceBlocks([block], configVersion);
 }
 
 /** Replace the text of an element, preserving its attributes. No-op when the element is absent. */
@@ -228,7 +542,10 @@ function setDriveMap(block: string, drive: string, hostPath: string): string {
     "i",
   );
   if (re.test(block)) {
-    return block.replace(re, (_match, open: string, _old: string, close: string) => `${open}${escapeXml(hostPath)}${close}`);
+    return block.replace(
+      re,
+      (_match, open: string, _old: string, close: string) => `${open}${escapeXml(hostPath)}${close}`,
+    );
   }
 
   const closeRe = /^([ \t]*)<\/DRIVEMAP>/m;
@@ -252,10 +569,7 @@ function updateDriveMaps(block: string, ws: LarsWorkspace): string {
     const match = closeRe.exec(out);
     if (match) {
       const indent = match[1] ?? "\t";
-      out = out.replace(
-        closeRe,
-        () => `${indent}\t<DRIVEMAP>\n${indent}\t</DRIVEMAP>\n${match[0]}`,
-      );
+      out = out.replace(closeRe, () => `${indent}\t<DRIVEMAP>\n${indent}\t</DRIVEMAP>\n${match[0]}`);
     }
   }
 
@@ -443,10 +757,43 @@ export function writeLarsWorkspaces(workspaces: LarsWorkspace[]): void {
   withFileLockSync(larsConfigLockPath(), () => writeLarsWorkspacesUnlocked(workspaces), { label: "lars-config" });
 }
 
+/**
+ * Replace the whole config with raw XML atomically. Used by import/restore,
+ * which must preserve fields this server does not model. A `.bak` of the
+ * previous file is written first.
+ */
+export function writeLarsConfigRaw(raw: string): { path: string; backupPath?: string; bytes: number } {
+  return withFileLockSync(
+    larsConfigLockPath(),
+    () => {
+      const path = larsConfigPath();
+      const dir = dirname(path);
+      if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+      let backupPath: string | undefined;
+      if (existsSync(path)) {
+        backupPath = `${path}.bak`;
+        try {
+          copyFileSync(path, backupPath);
+        } catch {
+          backupPath = undefined;
+        }
+      }
+
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, raw, "utf-8");
+      renameSync(tmp, path);
+      return { path, ...(backupPath ? { backupPath } : {}), bytes: Buffer.byteLength(raw, "utf-8") };
+    },
+    { label: "lars-config" },
+  );
+}
+
 /** Allocate a unique set of ports for a new workspace (each LARS instance needs distinct ports). */
 export function allocateLarsPorts(
   existing: LarsWorkspace[],
   baseOnline = DEFAULT_ONLINE_PORT,
+  reservedPorts: Iterable<number> = [],
 ): {
   onlinePort: number;
   comlinkServerPort: number;
@@ -454,28 +801,42 @@ export function allocateLarsPorts(
   alarmPort: number;
   dataServiceTcpPort: number;
 } {
-  const usedOnline = new Set(existing.map((w) => w.onlinePort));
-  const usedComlink = new Set(existing.map((w) => w.comlinkBasePort));
-  const usedDataService = new Set(existing.map((w) => w.dataServiceTcpPort));
+  const used = new Set<number>(reservedPorts);
+  for (const workspace of existing) {
+    for (const field of [
+      "onlinePort",
+      "comlinkServerPort",
+      "comlinkBasePort",
+      "alarmPort",
+      "dataServiceTcpPort",
+    ] as const) {
+      const value = workspace[field];
+      if (typeof value === "number") used.add(value);
+    }
+  }
+  const nextFree = (start: number): number => {
+    let port = start;
+    while (used.has(port)) port += PORT_STEP;
+    used.add(port);
+    return port;
+  };
 
-  let onlinePort = baseOnline;
-  while (usedOnline.has(onlinePort)) onlinePort += PORT_STEP;
-
-  let comlinkBasePort = DEFAULT_COMLINK_BASE;
-  while (usedComlink.has(comlinkBasePort)) comlinkBasePort += PORT_STEP;
+  const onlinePort = nextFree(baseOnline);
+  const comlinkServerPort = nextFree(onlinePort + 1);
+  const comlinkBasePort = nextFree(DEFAULT_COMLINK_BASE);
+  const alarmPort = nextFree(onlinePort + 3);
 
   // The DataService (web HMI) connects to 2402, so that port is reserved for the
   // HMI/visu station's workspace. Every other station starts at 2412; two
   // instances on the same host otherwise fight over 2402 and the web HMI silently
   // reads the wrong runtime (all datapoints stay 0).
-  let dataServiceTcpPort = 2412;
-  while (usedDataService.has(dataServiceTcpPort)) dataServiceTcpPort += PORT_STEP;
+  const dataServiceTcpPort = nextFree(2412);
 
   return {
     onlinePort,
-    comlinkServerPort: onlinePort + 1,
+    comlinkServerPort,
     comlinkBasePort,
-    alarmPort: onlinePort + 3,
+    alarmPort,
     dataServiceTcpPort,
   };
 }
@@ -520,6 +881,119 @@ export function upsertLarsWorkspace(
 
       writeLarsWorkspacesUnlocked(workspaces);
       return { workspaces, workspace };
+    },
+    { label: "lars-config" },
+  );
+}
+
+export interface LarsWorkspaceMutationResult {
+  workspace?: LarsWorkspace;
+  errors: string[];
+  warnings: string[];
+  error?: string;
+}
+
+function workspaceDefaults(
+  name: string,
+  partial: Partial<Omit<LarsWorkspace, "name">>,
+  ports: ReturnType<typeof allocateLarsPorts>,
+): LarsWorkspace {
+  return {
+    name,
+    onlinePort: partial.onlinePort ?? ports.onlinePort,
+    comlinkServerPort: partial.comlinkServerPort ?? ports.comlinkServerPort,
+    comlinkBasePort: partial.comlinkBasePort ?? ports.comlinkBasePort,
+    alarmPort: partial.alarmPort ?? ports.alarmPort,
+    dataServiceTcpPort: partial.dataServiceTcpPort ?? ports.dataServiceTcpPort,
+    activeData: partial.activeData ?? "C:\\",
+    autoexec: partial.autoexec ?? "C:\\Autoexec.lsl",
+    lslWork: partial.lslWork ?? "C:\\LSLWORK",
+    sramData: partial.sramData ?? "C:\\",
+    dataRoot: partial.dataRoot ?? defaultDataRoot(name),
+    ...(partial.driveMaps ? { driveMaps: partial.driveMaps } : {}),
+    ...(partial.screenProjectPath ? { screenProjectPath: partial.screenProjectPath } : {}),
+    dataLenMb: partial.dataLenMb ?? 40,
+    codeLenMb: partial.codeLenMb ?? 8,
+  };
+}
+
+/** Create one workspace explicitly, under the config lock, with allocated ports. */
+export function createLarsWorkspace(
+  name: string,
+  partial: Partial<Omit<LarsWorkspace, "name">> = {},
+): LarsWorkspaceMutationResult {
+  return withFileLockSync(
+    larsConfigLockPath(),
+    () => {
+      const workspaces = readLarsWorkspaces();
+      if (workspaces.some((workspace) => workspace.name === name)) {
+        const error = `Workspace '${name}' already exists. Use lars.workspace.update or lars.workspace.clone.`;
+        return { error, errors: [error], warnings: [] };
+      }
+
+      const reserved = PORT_FIELDS.map(([field]) => partial[field] as unknown).filter(validPort);
+      const candidate = workspaceDefaults(name, partial, allocateLarsPorts(workspaces, DEFAULT_ONLINE_PORT, reserved));
+      const validation = validateLarsWorkspaces([...workspaces, candidate]);
+      if (validation.errors.length > 0) {
+        return { error: validation.errors[0], errors: validation.errors, warnings: validation.warnings };
+      }
+
+      workspaces.push(candidate);
+      writeLarsWorkspacesUnlocked(workspaces);
+      return { workspace: candidate, errors: [], warnings: validation.warnings };
+    },
+    { label: "lars-config" },
+  );
+}
+
+/** Clone a workspace definition. Ports and the data root are always new. */
+export function cloneLarsWorkspace(
+  sourceName: string,
+  newName: string,
+  partial: Partial<Omit<LarsWorkspace, "name">> = {},
+): LarsWorkspaceMutationResult {
+  return withFileLockSync(
+    larsConfigLockPath(),
+    () => {
+      const workspaces = readLarsWorkspaces();
+      const source = workspaces.find((workspace) => workspace.name === sourceName);
+      if (!source) {
+        const error = `No LARS workspace named '${sourceName}'.`;
+        return { error, errors: [error], warnings: [] };
+      }
+      if (workspaces.some((workspace) => workspace.name === newName)) {
+        const error = `Workspace '${newName}' already exists.`;
+        return { error, errors: [error], warnings: [] };
+      }
+
+      const dataRoot = partial.dataRoot ?? defaultDataRoot(newName);
+      const reserved = PORT_FIELDS.map(([field]) => partial[field] as unknown).filter(validPort);
+      const ports = allocateLarsPorts(workspaces, DEFAULT_ONLINE_PORT, reserved);
+      const driveMaps =
+        partial.driveMaps ??
+        source.driveMaps?.map((map) => (normalizeDrive(map.drive) === "C:" ? { drive: "C:", path: dataRoot } : map));
+      const candidate: LarsWorkspace = {
+        ...source,
+        ...partial,
+        name: newName,
+        onlinePort: partial.onlinePort ?? ports.onlinePort,
+        comlinkServerPort: partial.comlinkServerPort ?? ports.comlinkServerPort,
+        comlinkBasePort: partial.comlinkBasePort ?? ports.comlinkBasePort,
+        alarmPort: partial.alarmPort ?? ports.alarmPort,
+        dataServiceTcpPort: partial.dataServiceTcpPort ?? ports.dataServiceTcpPort,
+        dataRoot,
+        ...(driveMaps ? { driveMaps } : {}),
+        classProjectPath: undefined,
+      };
+
+      const validation = validateLarsWorkspaces([...workspaces, candidate]);
+      if (validation.errors.length > 0) {
+        return { error: validation.errors[0], errors: validation.errors, warnings: validation.warnings };
+      }
+
+      workspaces.push(candidate);
+      writeLarsWorkspacesUnlocked(workspaces);
+      return { workspace: candidate, errors: [], warnings: validation.warnings };
     },
     { label: "lars-config" },
   );
@@ -638,7 +1112,10 @@ function patchLarsAutoexec(workspace: LarsWorkspace): void {
 
   const patched = hasSavedProject
     ? content
-    : content.replace(/^([ \t]*)LSLLOAD[ \t]*$/gim, "$1REM LSLLOAD skipped: no saved project in C:\\LSLWORK (program is downloaded online)");
+    : content.replace(
+        /^([ \t]*)LSLLOAD[ \t]*$/gim,
+        "$1REM LSLLOAD skipped: no saved project in C:\\LSLWORK (program is downloaded online)",
+      );
 
   if (patched !== content) {
     try {
@@ -674,7 +1151,11 @@ export function seedDataRoot(dataRoot: string | undefined, seeds: string[]): See
 }
 
 /** Seed files first, then adapt the boot script to the (empty) workspace state. */
-export function prepareLarsDataRoot(dataRoot: string | undefined, seeds: string[], workspace: LarsWorkspace): SeedResult | undefined {
+export function prepareLarsDataRoot(
+  dataRoot: string | undefined,
+  seeds: string[],
+  workspace: LarsWorkspace,
+): SeedResult | undefined {
   const result = seedDataRoot(dataRoot, seeds);
   patchLarsAutoexec(workspace);
   return result;
@@ -1066,6 +1547,44 @@ export async function resolveEffectiveOnlinePort(
 // LARS renders LASAL SCREEN projects (SCREEN_PRJ_PATH workspaces) into its
 // workspace window via GDI4LSE. Capturing that window lets agents visually
 // verify screens without hardware.
+
+/**
+ * Write a parameterized PowerShell screenshot helper. The scenario runner calls
+ * it from inside the CLASS 2 batch process, so a screenshot step does not need
+ * a second PLC connection.
+ */
+export function writeLarsScreenshotScript(scriptPath: string): void {
+  const script = [
+    "param([string]$Workspace, [string]$OutPath)",
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.Drawing",
+    "$sig = 'using System; using System.Runtime.InteropServices;",
+    "public class WinCapScenario {",
+    '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);',
+    '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);',
+    '  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);',
+    "  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }",
+    "}'",
+    "Add-Type -TypeDefinition $sig",
+    '$p = Get-Process -Name Lars -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like "*$Workspace*" } | Select-Object -First 1',
+    "if (-not $p) { throw \"No running LARS instance found for workspace '$Workspace'.\" }",
+    "$h = $p.MainWindowHandle",
+    "if ($h -eq [IntPtr]::Zero) { throw 'LARS window handle not found (window minimized to tray?)' }",
+    "[void][WinCapScenario]::ShowWindow($h, 9)",
+    "[void][WinCapScenario]::SetForegroundWindow($h)",
+    "Start-Sleep -Milliseconds 400",
+    "$r = New-Object -TypeName 'WinCapScenario+RECT'",
+    "[void][WinCapScenario]::GetWindowRect($h, [ref]$r)",
+    "$w = $r.Right - $r.Left; $ht = $r.Bottom - $r.Top",
+    "if ($w -le 0 -or $ht -le 0) { throw 'LARS window has no drawable size' }",
+    "$bmp = New-Object System.Drawing.Bitmap($w, $ht)",
+    "$g = [System.Drawing.Graphics]::FromImage($bmp)",
+    "$g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)",
+    "$bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)",
+    "$g.Dispose(); $bmp.Dispose()",
+  ].join("\n");
+  writeFileSync(scriptPath, `\uFEFF${script}`, "utf-8");
+}
 
 export function captureLarsWindow(name: string, outPath: string): { ok: boolean; error?: string } {
   const pid = getLarsPids(name)[0];

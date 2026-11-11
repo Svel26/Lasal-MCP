@@ -1,12 +1,10 @@
-import { existsSync } from "fs";
-import { isAbsolute, resolve, parse as parsePath } from "path";
 import { z } from "zod";
 import { fromToolResponse } from "../../core/actions/legacy.js";
 import { defineAction } from "../../core/actions/types.js";
 import { larsRuntimeHandler } from "../../tools/larsRuntime.js";
 import { larsDoctorHandler } from "../../tools/larsDoctor.js";
 import { larsScenarioSchema, runLarsScenario } from "../../tools/larsScenario.js";
-import { patchLarsWorkspace, readLarsWorkspaces } from "../../utils/lars.js";
+import { patchLarsWorkspace, readLarsWorkspaces, validateLarsWorkspaces } from "../../utils/lars.js";
 
 const name = z.string().optional().describe("LARS workspace name, e.g. 'MyProject_PLC'.");
 const station = z.string().optional().describe("Station name from the selected solution, e.g. 'PLC' or 'HMI'.");
@@ -26,72 +24,21 @@ function validateWorkspacePatch(
   existing: LarsWorkspace,
   patch: Partial<Omit<LarsWorkspace, "name">>,
   others: LarsWorkspace[],
-): string | undefined {
-  const candidate = { ...existing, ...patch };
-  const ports: Array<[string, number | undefined]> = [
-    ["onlinePort", candidate.onlinePort],
-    ["comlinkServerPort", candidate.comlinkServerPort],
-    ["comlinkBasePort", candidate.comlinkBasePort],
-    ["alarmPort", candidate.alarmPort],
-    ["dataServiceTcpPort", candidate.dataServiceTcpPort],
-  ];
-  const seen = new Map<number, string>();
-  for (const [label, port] of ports) {
-    if (port === undefined) continue;
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return `${label} must be between 1 and 65535.`;
-    const duplicate = seen.get(port);
-    if (duplicate) return `${label} and ${duplicate} cannot use the same port (${port}).`;
-    seen.set(port, label);
-  }
-  for (const other of others) {
-    const otherPorts = new Set(
-      [
-        other.onlinePort,
-        other.comlinkServerPort,
-        other.comlinkBasePort,
-        other.alarmPort,
-        other.dataServiceTcpPort,
-      ].filter((port): port is number => port !== undefined),
-    );
-    for (const [label, port] of ports) {
-      if (port !== undefined && otherPorts.has(port)) {
-        return `${label} port ${port} is already used by workspace '${other.name}'.`;
-      }
-    }
-  }
-
-  if (patch.dataRoot) {
-    if (!isAbsolute(patch.dataRoot)) return "dataRoot must be an absolute host path.";
-    const resolved = resolve(patch.dataRoot);
-    if (resolved.toLowerCase() === parsePath(resolved).root.toLowerCase()) {
-      return "dataRoot cannot be a drive root; every workspace needs an isolated host folder.";
-    }
-    const shared = others.find(
-      (other) => other.dataRoot && resolve(other.dataRoot).toLowerCase() === resolved.toLowerCase(),
-    );
-    if (shared) return `dataRoot is already used by workspace '${shared.name}'.`;
-  }
-  if (patch.screenProjectPath && !existsSync(patch.screenProjectPath)) {
-    return `screenProjectPath not found: ${patch.screenProjectPath}`;
-  }
-  if (patch.driveMaps) {
-    const seenDrives = new Set<string>();
-    for (const map of patch.driveMaps) {
-      const drive = normalizeDrive(map.drive);
-      if (!/^[A-Z]:$/.test(drive)) return `Invalid drive '${map.drive}'. Use a letter such as D:.`;
-      if (drive === "C:") return "Use dataRoot for the C: drive mapping.";
-      if (seenDrives.has(drive)) return `Drive ${drive} is listed more than once.`;
-      if (!isAbsolute(map.path)) return `Drive ${drive} path must be absolute.`;
-      const resolved = resolve(map.path);
-      if (resolved.toLowerCase() === parsePath(resolved).root.toLowerCase()) {
-        return `Drive ${drive} cannot map to a host drive root.`;
-      }
-      seenDrives.add(drive);
-    }
-  }
-  if (patch.dataLenMb !== undefined && patch.dataLenMb <= 0) return "dataLenMb must be positive.";
-  if (patch.codeLenMb !== undefined && patch.codeLenMb <= 0) return "codeLenMb must be positive.";
-  return undefined;
+): { error?: string; warnings: string[] } {
+  const dataRoot = patch.dataRoot ?? existing.dataRoot;
+  const driveMaps = (patch.driveMaps ?? existing.driveMaps)?.map((map) =>
+    normalizeDrive(map.drive) === "C:" && dataRoot ? { drive: "C:", path: dataRoot } : map,
+  );
+  const candidate: LarsWorkspace = {
+    ...existing,
+    ...patch,
+    ...(driveMaps ? { driveMaps } : {}),
+  };
+  const validation = validateLarsWorkspaces([...others, candidate]);
+  const marker = `'${candidate.name}'`;
+  const errors = validation.errors.filter((issue) => issue.includes(marker));
+  const warnings = validation.warnings.filter((issue) => issue.includes(marker));
+  return { ...(errors[0] ? { error: errors[0] } : {}), warnings };
 }
 
 export const larsActions = [
@@ -176,8 +123,12 @@ export const larsActions = [
       }
       const others = workspaces.filter((workspace) => workspace.name !== workspaceName);
       const problem = validateWorkspacePatch(existing, patch, others);
-      if (problem) {
-        return { ok: false, error: { code: "INVALID_PARAMS", message: problem }, hints: ["No changes were written."] };
+      if (problem.error) {
+        return {
+          ok: false,
+          error: { code: "INVALID_PARAMS", message: problem.error },
+          hints: ["No changes were written."],
+        };
       }
       const updated = patchLarsWorkspace(workspaceName, patch);
       if (!updated) {
@@ -189,6 +140,7 @@ export const larsActions = [
       return {
         ok: true,
         data: updated,
+        ...(problem.warnings.length ? { warnings: problem.warnings } : {}),
         hints: ["Restart the LARS instance for port or memory changes to take effect."],
       };
     },

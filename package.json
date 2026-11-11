@@ -53,7 +53,7 @@
     "init": "node dist/cli/init.js",
     "inspector": "npx @modelcontextprotocol/inspector node dist/server.js",
     "test": "vitest run",
-    "test:actions": "vitest run test/actionRegistry.test.ts test/actionExecutor.test.ts test/actionTools.test.ts test/projectOverride.test.ts test/projectLock.test.ts test/projectCapabilities.test.ts test/catalogCoverage.test.ts test/larsScenario.test.ts test/larsDoctor.test.ts test/hmiRuntimeGuard.test.ts test/actionsDoc.test.ts test/init.test.ts test/actionEval.test.ts",
+    "test:actions": "vitest run test/actionRegistry.test.ts test/actionExecutor.test.ts test/actionTools.test.ts test/projectOverride.test.ts test/projectLock.test.ts test/projectCapabilities.test.ts test/catalogCoverage.test.ts test/larsConfigParity.test.ts test/larsScenario.test.ts test/larsDoctor.test.ts test/hmiRuntimeGuard.test.ts test/actionsDoc.test.ts test/init.test.ts test/actionEval.test.ts",
     "test:eval": "vitest run test/actionEval.test.ts",
     "test:lab": "vitest run --config vitest.lab.config.ts",
     "test:watch": "vitest",

@@ -299,9 +299,12 @@ Notes:
   `lars_runtime target_pc` first — LARS is an x86 runtime and rejects ARM images.
 - HMI panel / Local stations are already PC-targeted and work directly.
 - Downloads to LARS automatically include the PC loader (`addLoaderAnyway`).
-- `%APPDATA%\lasalos2.xml` is edited **losslessly** — the MCP updates only the fields it
+- `%APPDATA%\lasalos2.xml` is edited **losslessly** - the MCP updates only the fields it
   owns and preserves everything else, so the file stays interchangeable with Sigmatek's
   LARSConfigTool (`Desc` attributes, `DATASERVICETCPPORT`, comments, extra drive mappings).
+  The catalog also exposes explicit create/clone/validate and lossless XML/JSON
+  export/import, so a workspace set can be backed up and restored without losing
+  unmodeled fields. See [`docs/LARS_COMPATIBILITY.md`](docs/LARS_COMPATIBILITY.md).
 - Each workspace gets its **own emulated `C:` data root** (`%LOCALAPPDATA%\lasal-mcp\lars\<workspace>`
   by default) instead of the host `C:\`, so instances never share `LSLWORK`/SRAM and never
   write into the real system drive. Files a program expects at a fixed `C:\` path are
@@ -313,6 +316,12 @@ Notes:
 - Stations with a LASAL SCREEN project get their `.lpr` wired into the LARS
   workspace (`SCREEN_PRJ_PATH`), so LARS renders the panel screens locally;
   `lars_runtime screenshot` returns a PNG of the window for visual verification.
+- `lars.scenario.run` keeps one PLC connection for all steps and supports named
+  reads, DataAnalyzer trace start/stop, LARS window screenshots and JUnit XML
+  output alongside set/wait/assert/sleep.
+- `lars.instance.list`, `status`, `restart` and `logs` cover the runtime side;
+  `lars.doctor` reports detected build version, configured vs effective ports,
+  unknown config elements and data-root/port conflicts.
 
 ## Contributing
 

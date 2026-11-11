@@ -13,7 +13,7 @@ while the new interface is evaluated.
 - `lasal_find_action` — local, read-only catalog search.
 - `lasal_execute_action` — runs one action with parameter validation,
   profile/domain filtering, confirmation and async-job support.
-- **80 actions**: shared project targeting plus the CLASS 2, VISU, LASAL
+- **90 actions**: shared project targeting plus the CLASS 2, VISU, LASAL
   SCREEN and LARS domains.
 - Request-scoped project overrides in `state.ts` via `runWithProject()`.
 - Project capability detection (`class2` / `visu` / `screen` / `solution`) and
@@ -203,10 +203,21 @@ Resources: `lasal://guide`, `lasal://project/status`, `lasal://stations`,
 **LARS**
 
 - `lars.workspace.list`
+- `lars.workspace.get`
 - `lars.workspace.setup`
+- `lars.workspace.create`
+- `lars.workspace.clone`
 - `lars.workspace.update`
-- `lars.workspace.remove` (destructive, `confirm=true`)- `lars.workspace.gc` (destructive, `confirm=true`)
+- `lars.workspace.validate`
+- `lars.workspace.export`
+- `lars.workspace.import` (replace mode requires `confirm=true`)
+- `lars.workspace.remove` (destructive, `confirm=true`)
+- `lars.workspace.gc` (destructive, `confirm=true`)
+- `lars.instance.list`
 - `lars.instance.start`
+- `lars.instance.status`
+- `lars.instance.restart` (destructive, `confirm=true`)
+- `lars.instance.logs`
 - `lars.instance.stop` (destructive, `confirm=true`)
 - `lars.instance.screenshot`
 - `lars.station.target`
@@ -371,11 +382,14 @@ Generate a multi-station `.lutc` for review:
 
 ## Known limitations
 
-- LARS workspace update covers ports, paths, memory sizes and the screen project.
-  Full LARSConfigTool parity (drive maps, every GUI field, config import/export)
-  is still pending.
-- The LARS scenario runner supports set/read/wait/assert/sleep. Trace capture
-  and screenshot steps in the same scenario are not implemented yet.
+- LARS workspace configuration covers ports, paths, memory sizes, the screen
+  project, drive maps, create/clone/validate and lossless XML/JSON export and
+  import. Fields this server does not model are preserved on write and reported
+  by `lars.doctor`; see [`LARS_COMPATIBILITY.md`](LARS_COMPATIBILITY.md).
+- The LARS scenario runner supports set/read/wait/assert/sleep plus named
+  `saveAs` reads, DataAnalyzer trace start/stop, LARS window screenshots and
+  JUnit XML output. Ephemeral workspaces and scenario-level reset are not
+  implemented yet.
 - Project context detects stations and capabilities, but there is no cached
   project registry yet; capability detection re-reads the solution per action.
 - The HMI runtime is still a singleton. A second project's start is now refused
@@ -383,7 +397,7 @@ Generate a multi-station `.lutc` for review:
   parallel HMI simulations.
 - `stampFile` / `assertUnchanged` exist, but the legacy file-writing handlers
   do not call them yet; the project write lock is the current protection.
-- `--profile` filters execution, but the preview catalog contains all 80
+- `--profile` filters execution, but the preview catalog contains all 90
   actions; unavailable domains are rejected by `lasal_find_action` and
   `lasal_execute_action`.
 - `lasal-mcp init` writes a standalone config; it does not merge into an
@@ -391,10 +405,12 @@ Generate a multi-station `.lutc` for review:
 
 ## Next steps
 
-1. Complete LARSConfigTool parity (config import/export, every GUI field) and
-   add trace capture to scenarios.
+1. Confirm every remaining LARSConfigTool GUI field against the real tool and
+   extend the per-build compatibility matrix.
 2. Wire file stamps into `apply_project_changes` and VISU/LSE file mutations.
 3. Add the full LLM-driven eval harness on top of the deterministic search
    benchmark.
-4. Run the lab suite for the new domains and bins.
-5. Investigate multi-instance HMI DataService support.
+4. Run the lab suite for the new domains and bins, including scenario
+   trace/screenshot steps.
+5. Add ephemeral/reset semantics to the scenario runner.
+6. Investigate multi-instance HMI DataService support.
