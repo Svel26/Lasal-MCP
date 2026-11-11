@@ -23,29 +23,39 @@ Lasal-MCP follows a deliberate design principle:
 
 ```text
 src/
-├── core/             # Core primitives (process management, HTTP server, error envelopes, scratch dir, static server)
-├── resources/        # MCP resources (lasal://guide, status, stations, class template)
-├── tools/            # MCP tool handlers and Zod input schemas
-│   ├── applyProjectChanges.ts  # CLASS 2 batch engine commands & class manifests
-│   ├── deployAll.ts            # Complete compile → download → visu → HMI pipeline
-│   ├── hmiRuntime.ts           # LasalVISUDataService web runtime manager
-│   ├── inspectProject.ts       # Read-only CLASS 2 project scanning
-│   ├── larsRuntime.ts          # Local LARS simulation multi-station manager
-│   ├── lasalApps.ts            # CLASS 2 & VISUDesigner IDE window control
-│   ├── plcControl.ts           # Compile, download, start/stop PLC runtime, live channels
-│   ├── plcDiagnostics.ts       # Tracing, file transfer, static analysis
-│   ├── readClassSource.ts      # Structured Text (.st) reading & latin1-validated writing
-│   ├── runClass2Script.ts      # Python 2.7 batch script escape hatch
-│   ├── selectProject.ts        # Set active project directory
-│   ├── setTargetIp.ts          # Surgical .lss connection IP updating
-│   ├── status.ts               # Overall health & process inspection
-│   ├── validateGuids.ts        # GUID collision auto-resolution and CRC-32 hashing
-│   └── visuControl.ts          # VISUDesigner batch engine operations
-├── utils/            # Helper modules (batch script generators, XML parsing, LARS setup, completions, progress)
-├── server.ts         # MCP Server entrypoint, tool and resource registrations
-└── state.ts          # Global state (active project, target IPs, cached data)
++-- core/             # Shared primitives
+|   +-- actions/      # Action catalog: types, registry, search, executor, profiles, audit
+|   +-- project/      # Project context, capability detection, cross-process write locks
+|   +-- ...           # Process management, HTTP server, error envelopes, scratch dir
++-- domains/          # Catalog action definitions (class2, visu, screen, lars, deploy, core)
++-- servers/          # Thin catalog profile entrypoints
++-- cli/init.ts       # Project scanner / MCP config generator
++-- scripts/          # docs/ACTIONS.md generator
++-- resources/        # MCP resources (lasal://guide, status, stations, class template)
++-- tools/            # Static MCP tool handlers and Zod input schemas
+|   +-- applyProjectChanges.ts  # CLASS 2 batch engine commands & class manifests
+|   +-- deployAll.ts            # Complete compile -> download -> visu -> HMI pipeline
+|   +-- hmiRuntime.ts           # LasalVISUDataService web runtime manager
+|   +-- inspectProject.ts       # Read-only CLASS 2 project scanning
+|   +-- larsRuntime.ts          # Local LARS simulation multi-station manager
+|   +-- larsDoctor.ts           # LARS config/runtime diagnostics and compatibility report
+|   +-- larsScenario.ts         # One-connection scenario runner (trace/screenshot/JUnit)
+|   +-- lasalApps.ts            # CLASS 2 & VISUDesigner IDE window control
+|   +-- plcControl.ts           # Compile, download, start/stop PLC runtime, live channels
+|   +-- plcDiagnostics.ts       # Tracing, file transfer, static analysis
+|   +-- readClassSource.ts      # Structured Text (.st) reading & latin1-validated writing
+|   +-- runClass2Script.ts      # Python 2.7 batch script escape hatch
+|   +-- selectProject.ts        # Set active project directory
+|   +-- setTargetIp.ts          # Surgical .lss connection IP updating
+|   +-- status.ts               # Overall health & process inspection
+|   +-- validateGuids.ts        # GUID collision auto-resolution and CRC-32 hashing
+|   +-- visuControl.ts          # VISUDesigner batch engine operations
++-- utils/            # Helper modules (batch script generators, XML parsing, LARS setup, completions, progress)
++-- server.ts         # Static MCP server entrypoint, tool and resource registrations
++-- serverCatalog.ts  # Backward-compatible action-catalog preview entrypoint
++-- state.ts          # Global state (active project, target IPs, cached data)
 
-test/                 # Vitest test suites (script generators, XML parsers, LARS config, encoding, completions)
+test/                 # Vitest test suites (script generators, XML parsers, LARS config, encoding, actions)
 ```
 
 ---
@@ -125,9 +135,12 @@ This opens the Model Context Protocol Inspector where you can test tool schemas,
 
 ---
 
-## Adding or Modifying Tools
+## Adding Static Tools or Catalog Actions
 
-When adding or updating a tool:
+### Static tools
+
+The original 23-tool server remains the default. When adding or updating a
+static tool:
 
 1. **Keep it focused**: Ensure the operation cannot be done by simply editing a text/XML file directly.
 2. **Define Schema with Zod**: Place tool schemas in `src/tools/<toolName>.ts` using `zod`.
@@ -137,6 +150,26 @@ When adding or updating a tool:
 4. **Engine state**: Many Sigmatek engines (CLASS 2, VISUDesigner) cannot perform batch operations while their GUI is actively locking the project. Use the process helpers to check or close instances when running batch scripts.
 5. **Add tests**: Add unit tests in `test/` verifying script generation, parameter serialization, and error conditions.
 6. **Register the tool**: Register the tool and its description in `src/server.ts`.
+
+### Catalog actions
+
+The opt-in action catalog lives in `src/domains/<domain>/actions.ts` and is
+described in [`docs/CATALOG_PREVIEW.md`](docs/CATALOG_PREVIEW.md) and
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). To add an action:
+
+1. **Pick the domain**: `class2`, `visu`, `screen`, `lars`, `deploy` or `core`.
+2. **Define it** with `defineAction` from `src/core/actions/types.ts`: canonical
+   ID, aliases, summary, Zod schema, handler, risk tier, project requirement,
+   tags and at least one valid example.
+3. **Respect the safety model**: destructive/deploy actions require
+   `confirm=true`; expert actions require `--allow-expert`; mutating actions run
+   under the project write lock.
+4. **Reuse existing handlers** where possible with `fromToolResponse(...)`; new
+   handlers should return an `ActionResult` directly.
+5. **Add tests** in `test/` and include the file in `npm run test:actions` when
+   it covers catalog behavior.
+6. **Regenerate docs** with `npm run build && npm run docs:actions`; do not edit
+   `docs/ACTIONS.md` by hand. Verify with `npm run docs:actions:check`.
 
 ---
 
